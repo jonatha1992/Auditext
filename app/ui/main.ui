@@ -15,7 +15,7 @@
   </property>
   <property name="windowIcon">
    <iconset>
-    <normaloff>../../../Transcriptor/Icons/icono.ico</normaloff>../../../Transcriptor/Icons/icono.ico</iconset>
+    <normaloff>../../icons/icono.ico</normaloff>../../icons/icono.ico</iconset>
   </property>
   <widget class="QWidget" name="centralwidget">
    <widget class="QListView" name="listView_songs">
@@ -283,7 +283,7 @@
       <string>00:00 / 00:00</string>
      </property>
     </widget>
-    <widget class="QWidget" name="">
+    <widget class="QWidget" name="layoutWidget">
      <property name="geometry">
       <rect>
        <x>180</x>
@@ -300,7 +300,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/rewind-button (1).png</normaloff>C:/Users/jonat/Downloads/rewind-button (1).png</iconset>
+          <normaloff>../../icons/rewind-button (1).png</normaloff>../../icons/rewind-button (1).png</iconset>
         </property>
         <property name="iconSize">
          <size>
@@ -317,7 +317,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/rewind-button (2).png</normaloff>C:/Users/jonat/Downloads/rewind-button (2).png</iconset>
+          <normaloff>../../icons/rewind-symbol.png</normaloff>../../icons/rewind-symbol.png</iconset>
         </property>
         <property name="iconSize">
          <size>
@@ -334,7 +334,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/play-button.png</normaloff>C:/Users/jonat/Downloads/play-button.png</iconset>
+          <normaloff>../../icons/play-button.png</normaloff>../../icons/play-button.png</iconset>
         </property>
         <property name="iconSize">
          <size>
@@ -351,7 +351,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/stop-button.png</normaloff>C:/Users/jonat/Downloads/stop-button.png</iconset>
+          <normaloff>../../icons/stop-button.png</normaloff>../../icons/stop-button.png</iconset>
         </property>
         <property name="iconSize">
          <size>
@@ -368,7 +368,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/speed.png</normaloff>C:/Users/jonat/Downloads/speed.png</iconset>
+          <normaloff>../../icons/forward.png</normaloff>../../icons/forward.png</iconset>
         </property>
         <property name="iconSize">
          <size>
@@ -385,7 +385,7 @@
         </property>
         <property name="icon">
          <iconset>
-          <normaloff>C:/Users/jonat/Downloads/foward.png</normaloff>C:/Users/jonat/Downloads/foward.png</iconset>
+          <normaloff>../../icons/foward.png</normaloff>../../icons/foward.png</iconset>
         </property>
         <property name="iconSize">
          <size>
