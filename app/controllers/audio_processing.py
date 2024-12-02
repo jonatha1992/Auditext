@@ -2,7 +2,8 @@ import contextlib
 import wave
 from PyQt6.QtWidgets import QMessageBox
 from click import File
-
+from mutagen import File
+from pydub import AudioSegment
 
 def processing_transcripcion(file_paths, text_area):
     if not file_paths:
@@ -22,10 +23,7 @@ def processing_transcripcion(file_paths, text_area):
         QMessageBox.critical(None, "Error", f"Error al procesar los archivos: {str(e)}")
 
 
-import contextlib
-import wave
-from mutagen import File
-from pydub import AudioSegment
+
 
 def obtener_duracion_audio(ruta_archivo):
     try:
