@@ -172,6 +172,17 @@ files = [
 ]
 
 [[package]]
+name = "pydub"
+version = "0.25.1"
+description = "Manipulate audio with an simple and easy high level interface"
+optional = false
+python-versions = "*"
+files = [
+    {file = "pydub-0.25.1-py2.py3-none-any.whl", hash = "sha256:65617e33033874b59d87db603aa1ed450633288aefead953b30bded59cb599a6"},
+    {file = "pydub-0.25.1.tar.gz", hash = "sha256:980a33ce9949cab2a569606b65674d748ecbca4f0796887fd6f46173a7b0d30f"},
+]
+
+[[package]]
 name = "pyqt6"
 version = "6.4.2"
 description = "Python bindings for the Qt cross platform application toolkit"
@@ -351,4 +362,4 @@ files = [
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.11"
-content-hash = "e6c7d3144e6ce71f1660e288ec177574ec8ebfecc0c877fff1266860d657d809"
+content-hash = "b410c2a96d5ceb65f267a94cac71651f37afbe7708a0ddd05d262aea0cfdaacd"
