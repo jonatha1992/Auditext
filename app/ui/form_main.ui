@@ -109,7 +109,7 @@
      <string>Clear</string>
     </property>
    </widget>
-   <widget class="QGroupBox" name="groupBox">
+   <widget class="QGroupBox" name="groupBox_transcript">
     <property name="geometry">
      <rect>
       <x>10</x>
@@ -160,7 +160,7 @@
       <string>SRT</string>
      </property>
     </widget>
-    <widget class="QPushButton" name="pushButton_4">
+    <widget class="QPushButton" name="pushButton_transcribe">
      <property name="geometry">
       <rect>
        <x>220</x>
@@ -224,20 +224,20 @@
      </property>
      <layout class="QVBoxLayout" name="verticalLayout_2">
       <item>
-       <widget class="QComboBox" name="comboBox_tipe">
+       <widget class="QComboBox" name="comboBox_tipe_model">
         <property name="currentText">
          <string/>
         </property>
        </widget>
       </item>
       <item>
-       <widget class="QComboBox" name="comboBox_2"/>
+       <widget class="QComboBox" name="comboBox_model"/>
       </item>
       <item>
-       <widget class="QComboBox" name="comboBox_4"/>
+       <widget class="QComboBox" name="comboBox_Task"/>
       </item>
       <item>
-       <widget class="QComboBox" name="comboBox_3"/>
+       <widget class="QComboBox" name="comboBox_Lenguaje"/>
       </item>
      </layout>
     </widget>
@@ -258,7 +258,7 @@
      <string>@Copyright 2024 Version 1.2 Prodoced by Correa Jonathan</string>
     </property>
    </widget>
-   <widget class="QGroupBox" name="groupBox_2">
+   <widget class="QGroupBox" name="groupBox_reprodution">
     <property name="geometry">
      <rect>
       <x>330</x>
@@ -398,7 +398,7 @@
      </layout>
     </widget>
    </widget>
-   <widget class="QProgressBar" name="progressBar">
+   <widget class="QProgressBar" name="progressBar_process">
     <property name="geometry">
      <rect>
       <x>20</x>

@@ -16,6 +16,8 @@ mutagen = "^1.47.0"
 pydub = "^0.25.1"
 pygame = "^2.6.1"
 scipy = "^1.14.1"
+googletrans = "^3.0.0"
+darkdetect = "^0.8.0"
 
 [tool.poetry.group.dev.dependencies]
 pyqt6-tools = "^6.4.2.3.3"

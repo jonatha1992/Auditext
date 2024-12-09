@@ -1,4 +1,8 @@
 
+import os
+import threading
+
+
 def iniciar_transcripcion_thread(
     lista_archivos,
     text_area,
@@ -12,7 +16,7 @@ def iniciar_transcripcion_thread(
     combobox_idioma_salida,
 ):
     global transcripcion_activa, transcripcion_en_curso
-    from Reproductor import reproductor
+    from app.controllers.audio_player import reproductor
 
     if reproductor.reproduciendo:
         messagebox.showwarning(

@@ -4,8 +4,9 @@ import time
 import os
 from tkinter import messagebox
 import gc
+from app.controllers.file_operations import convertir_a_wav
 from controllers.audio_processing import obtener_duracion_audio
-
+from app.config import transcripcion_en_curso
 
 class Audio_Player:
     def __init__(self):
