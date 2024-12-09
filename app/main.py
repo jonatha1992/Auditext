@@ -2,6 +2,7 @@ import sys
 from PyQt6.QtWidgets import QApplication, QMainWindow, QMessageBox
 from ui.form_main import Ui_MainWindow  # Importa la clase de la UI
 from controllers import file_operations, audio_processing
+from PyQt6.QtGui import QPalette
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -15,7 +16,7 @@ class MainWindow(QMainWindow):
         self.ui.actionImport_files.triggered.connect(self.select_files)
         self.ui.pushButton_delete_song.clicked.connect(self.delete_file)
         self.ui.pushButton_export.clicked.connect(self.export_transcription)
-        self.ui.pushButton_trancript.clicked.connect(self.process_transcription)
+        self.ui.pushButton_transcribe.clicked.connect(self.process_transcription)
         self.ui.pushButton_clear_text_area.clicked.connect(self.clear_transcription)
 
     def select_files(self):
@@ -55,9 +56,9 @@ def main():
 
     # Aplica el estilo del sistema operativo
     app.setStyle("Fusion")  # Alternativamente, prueba "WindowsVista", "Macintosh", etc.
-    
+
     # Detecta el modo claro/oscuro del sistema (en sistemas compatibles)
-    if app.palette().color(app.palette().Window).value() < 128:
+    if app.palette().color(QPalette.ColorRole.Window).value() < 128:
         app.setStyleSheet("QMainWindow { background-color: #2b2b2b; color: #ffffff; }")
     else:
         app.setStyleSheet("QMainWindow { background-color: #ffffff; color: #000000; }")
@@ -65,7 +66,7 @@ def main():
     window = MainWindow()
     window.show()
     sys.exit(app.exec())
-
-
+    
+    
 if __name__ == "__main__":
     main()

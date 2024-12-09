@@ -6,7 +6,7 @@ from tkinter import filedialog, messagebox
 from venv import logger
 from PyQt6.QtWidgets import QFileDialog, QMessageBox
 from controllers.audio_processing import obtener_duracion_audio
-from app.config import ffmpeg_path
+from config import ffmpeg_path
 
 
 def select_files(list_view, file_paths):
