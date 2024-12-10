@@ -45,7 +45,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Advertencia", "No hay archivos seleccionados para transcribir.")
             return
 
-        audio_processing.process_transcription(
+        audio_processing.process_transcription(                                                  
             self.lista_archivos_paths,
             self.ui.textEdit_Transcipcions
         )

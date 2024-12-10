@@ -323,6 +323,7 @@ import threading
 from PyQt6.QtWidgets import QMessageBox, QApplication, QMainWindow
 from PyQt6.QtCore import QThread, pyqtSignal
 
+
 class TranscriptionThread(QThread):
     progress_signal = pyqtSignal(int)
     result_signal = pyqtSignal(str)
@@ -368,7 +369,7 @@ class TranscriptionWindow(QMainWindow):
         self.transcription_thread = None
 
         # Connect buttons to actions
-        self.ui.pushButton_trancript.clicked.connect(self.start_transcription)
+        self.ui.pushButton_transcribe.clicked.connect(self.start_transcription)
         self.ui.pushButton_clear_text_area.clicked.connect(self.clear_transcription)
 
     def start_transcription(self):
