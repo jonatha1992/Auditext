@@ -1,0 +1,57 @@
+{% extends 'base.html' %}
+
+{% block title %}Eliminar Audio - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row justify-content-center">
+        <div class="col-md-6">
+            <div class="card">
+                <div class="card-header bg-danger text-white">
+                    <h4><i class="fas fa-trash me-2"></i>{{ titulo }}</h4>
+                </div>
+                <div class="card-body">
+                    <div class="alert alert-warning">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>¡Atención!</strong> Esta acción no se puede deshacer.
+                    </div>
+                    
+                    <p>¿Estás seguro de que deseas eliminar el siguiente archivo de audio?</p>
+                    
+                    <div class="card bg-light">
+                        <div class="card-body">
+                            <h6><i class="fas fa-file-audio text-primary me-2"></i>{{ object.title }}</h6>
+                            <small class="text-muted">
+                                Formato: {{ object.file_format|upper }} | 
+                                Duración: {{ object.duration|floatformat:0 }}s |
+                                Tamaño: {{ object.file_size|filesizeformat }}
+                            </small>
+                        </div>
+                    </div>
+                    
+                    {% if object.transcriptions.exists %}
+                    <div class="alert alert-danger mt-3">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        Este archivo tiene <strong>{{ object.transcriptions.count }}</strong> 
+                        transcripción{{ object.transcriptions.count|pluralize:"es" }} asociada{{ object.transcriptions.count|pluralize:"s" }} 
+                        que también será{{ object.transcriptions.count|pluralize:"n" }} eliminada{{ object.transcriptions.count|pluralize:"s" }}.
+                    </div>
+                    {% endif %}
+                    
+                    <form method="post" class="mt-4">
+                        {% csrf_token %}
+                        <div class="d-flex justify-content-between">
+                            <a href="{% url 'core:audio_detail' object.pk %}" class="btn btn-secondary">
+                                <i class="fas fa-arrow-left me-2"></i>Cancelar
+                            </a>
+                            <button type="submit" class="btn btn-danger">
+                                <i class="fas fa-trash me-2"></i>Sí, Eliminar
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

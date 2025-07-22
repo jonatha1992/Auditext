@@ -1,0 +1,265 @@
+{% extends 'base.html' %}
+
+{% block title %}Transcripción - {{ transcription.audio_file.title }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-md-12">
+            <nav aria-label="breadcrumb">
+                <ol class="breadcrumb">
+                    <li class="breadcrumb-item"><a href="{% url 'core:dashboard' %}">Panel</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'core:audio_list' %}">Mis Audios</a></li>
+                    <li class="breadcrumb-item"><a href="{% url 'core:audio_detail' transcription.audio_file.pk %}">{{ transcription.audio_file.title }}</a></li>
+                    <li class="breadcrumb-item active">Transcripción</li>
+                </ol>
+            </nav>
+        </div>
+    </div>
+
+    <div class="row">
+        <div class="col-md-8">
+            <!-- Transcription Status -->
+            <div class="card mb-4">
+                <div class="card-header">
+                    <h4>
+                        <i class="fas fa-file-alt me-2"></i>{{ titulo }}
+                        <span class="badge bg-{% if transcription.status == 'completed' %}success{% elif transcription.status == 'failed' %}danger{% elif transcription.status == 'processing' %}warning{% else %}secondary{% endif %} ms-2">
+                            {{ transcription.get_status_display }}
+                        </span>
+                    </h4>
+                </div>
+                <div class="card-body">
+                    <div class="row mb-3">
+                        <div class="col-md-3">
+                            <strong>Estado:</strong><br>
+                            <span class="badge bg-{% if transcription.status == 'completed' %}success{% elif transcription.status == 'failed' %}danger{% elif transcription.status == 'processing' %}warning{% else %}secondary{% endif %}">
+                                {{ transcription.get_status_display }}
+                            </span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Idioma:</strong><br>
+                            {{ transcription.get_language_display }}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Creada:</strong><br>
+                            {{ transcription.created_at|date:"d/m/Y H:i" }}
+                        </div>
+                        {% if transcription.word_count %}
+                        <div class="col-md-3">
+                            <strong>Palabras:</strong><br>
+                            {{ transcription.word_count }}
+                        </div>
+                        {% endif %}
+                    </div>
+
+                    <!-- Processing Status -->
+                    {% if transcription.status == 'processing' %}
+                    <div class="alert alert-info">
+                        <i class="fas fa-spinner fa-spin me-2"></i>
+                        <strong>Transcripción en proceso...</strong><br>
+                        El proceso puede tardar varios minutos dependiendo de la duración del audio.
+                        Esta página se actualizará automáticamente.
+                    </div>
+                    {% elif transcription.status == 'failed' %}
+                    <div class="alert alert-danger">
+                        <i class="fas fa-exclamation-triangle me-2"></i>
+                        <strong>Error en la transcripción:</strong><br>
+                        {{ transcription.error_message|default:"Error desconocido. Por favor, intenta nuevamente." }}
+                    </div>
+                    {% endif %}
+                </div>
+            </div>
+
+            <!-- Transcription Text -->
+            {% if transcription.status == 'completed' and transcription.text %}
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <h5><i class="fas fa-quote-left me-2"></i>Texto Transcrito</h5>
+                    <div>
+                        <button class="btn btn-outline-secondary btn-sm" onclick="copyText()">
+                            <i class="fas fa-copy me-1"></i>Copiar
+                        </button>
+                        <a href="{% url 'core:transcription_download' transcription.pk %}" class="btn btn-outline-primary btn-sm">
+                            <i class="fas fa-download me-1"></i>Descargar
+                        </a>
+                    </div>
+                </div>
+                <div class="card-body">
+                    <textarea id="transcriptionText" class="form-control" rows="15" readonly>{{ transcription.text }}</textarea>
+                </div>
+            </div>
+            {% endif %}
+
+            <!-- Translations -->
+            {% if translations %}
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-language me-2"></i>Traducciones</h5>
+                </div>
+                <div class="card-body">
+                    {% for translation in translations %}
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <h6 class="card-title mb-0">
+                                    {{ translation.get_source_language_display }} → {{ translation.get_target_language_display }}
+                                </h6>
+                                <a href="{% url 'core:translation_detail' translation.pk %}" class="btn btn-outline-primary btn-sm">
+                                    <i class="fas fa-eye me-1"></i>Ver
+                                </a>
+                            </div>
+                            {% if translation.text %}
+                            <p class="text-muted">{{ translation.text|truncatewords:30 }}</p>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="col-md-4">
+            <!-- Actions -->
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-cog me-2"></i>Acciones</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        {% if transcription.status == 'completed' and transcription.text %}
+                        <a href="{% url 'core:translation_create' transcription.pk %}" class="btn btn-success">
+                            <i class="fas fa-language me-2"></i>Traducir
+                        </a>
+                        
+                        <a href="{% url 'core:transcription_download' transcription.pk %}" class="btn btn-outline-primary">
+                            <i class="fas fa-download me-2"></i>Descargar TXT
+                        </a>
+                        {% endif %}
+                        
+                        <a href="{% url 'core:audio_detail' transcription.audio_file.pk %}" class="btn btn-outline-secondary">
+                            <i class="fas fa-arrow-left me-2"></i>Volver al Audio
+                        </a>
+                        
+                        {% if transcription.status == 'failed' %}
+                        <a href="{% url 'core:transcription_create' transcription.audio_file.pk %}" class="btn btn-warning">
+                            <i class="fas fa-redo me-2"></i>Reintentar
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>
+            </div>
+
+            <!-- Audio Info -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-file-audio me-2"></i>Archivo Original</h5>
+                </div>
+                <div class="card-body">
+                    <h6>{{ transcription.audio_file.title }}</h6>
+                    
+                    <!-- Audio Player -->
+                    {% if transcription.audio_file.file %}
+                    <audio controls class="w-100 mb-3">
+                        <source src="{{ transcription.audio_file.file.url }}" type="audio/{{ transcription.audio_file.file_format }}">
+                        Tu navegador no soporta el elemento audio.
+                    </audio>
+                    {% endif %}
+                    
+                    <table class="table table-sm">
+                        <tr>
+                            <td>Duración:</td>
+                            <td>{{ transcription.audio_file.duration|floatformat:0 }}s</td>
+                        </tr>
+                        <tr>
+                            <td>Formato:</td>
+                            <td>{{ transcription.audio_file.file_format|upper }}</td>
+                        </tr>
+                        <tr>
+                            <td>Tamaño:</td>
+                            <td>{{ transcription.audio_file.file_size|filesizeformat }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+
+            <!-- Transcription Settings -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-cog me-2"></i>Configuración Usada</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <td>Idioma:</td>
+                            <td>{{ transcription.get_language_display }}</td>
+                        </tr>
+                        <tr>
+                            <td>VAD:</td>
+                            <td>
+                                {% if transcription.vad_enabled %}
+                                    <i class="fas fa-check text-success"></i> Activado
+                                {% else %}
+                                    <i class="fas fa-times text-danger"></i> Desactivado
+                                {% endif %}
+                            </td>
+                        </tr>
+                        <tr>
+                            <td>Reducción de ruido:</td>
+                            <td>
+                                {% if transcription.noise_reduction %}
+                                    <i class="fas fa-check text-success"></i> Activado
+                                {% else %}
+                                    <i class="fas fa-times text-danger"></i> Desactivado
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% if transcription.duration %}
+                        <tr>
+                            <td>Tiempo procesado:</td>
+                            <td>{{ transcription.duration|floatformat:1 }}s</td>
+                        </tr>
+                        {% endif %}
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+function copyText() {
+    const textArea = document.getElementById('transcriptionText');
+    textArea.select();
+    textArea.setSelectionRange(0, 99999); // Para móviles
+    
+    try {
+        document.execCommand('copy');
+        // Cambiar el botón temporalmente
+        const btn = event.target.closest('button');
+        const originalHTML = btn.innerHTML;
+        btn.innerHTML = '<i class="fas fa-check me-1"></i>¡Copiado!';
+        btn.classList.remove('btn-outline-secondary');
+        btn.classList.add('btn-success');
+        
+        setTimeout(() => {
+            btn.innerHTML = originalHTML;
+            btn.classList.remove('btn-success');
+            btn.classList.add('btn-outline-secondary');
+        }, 2000);
+    } catch (err) {
+        alert('Error al copiar el texto');
+    }
+}
+
+// Auto-refresh para transcripciones en proceso
+{% if transcription.status == 'processing' %}
+    setTimeout(function() {
+        location.reload();
+    }, 15000); // Recargar cada 15 segundos
+{% endif %}
+</script>
+{% endblock %}
+{% endblock %}

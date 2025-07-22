@@ -13,12 +13,21 @@
                 <p class="lead mb-4">{{ mensaje|default:"Transcribe y traduce audio de manera inteligente y eficiente"
                     }}</p>
                 <div class="d-flex gap-3">
-                    <a href="{% url 'core:sobre_nosotros' %}" class="btn btn-light btn-lg">
-                        <i class="fas fa-microphone-alt me-2"></i>Comenzar Ahora
+                    {% if user.is_authenticated %}
+                    <a href="{% url 'core:dashboard' %}" class="btn btn-light btn-lg">
+                        <i class="fas fa-tachometer-alt me-2"></i>Ir al Panel
+                    </a>
+                    <a href="{% url 'core:audio_upload' %}" class="btn btn-outline-light btn-lg">
+                        <i class="fas fa-upload me-2"></i>Subir Audio
+                    </a>
+                    {% else %}
+                    <a href="{% url 'login' %}" class="btn btn-light btn-lg">
+                        <i class="fas fa-sign-in-alt me-2"></i>Iniciar Sesión
                     </a>
                     <a href="{% url 'core:contacto' %}" class="btn btn-outline-light btn-lg">
                         <i class="fas fa-info-circle me-2"></i>Más Información
                     </a>
+                    {% endif %}
                 </div>
             </div>
             <div class="col-lg-6 text-center">
@@ -198,9 +207,15 @@
             <div class="col-lg-8 mx-auto">
                 <h2 class="display-5 fw-bold mb-3">¿Listo para empezar?</h2>
                 <p class="lead mb-4">Comienza a transcribir tus archivos de audio ahora mismo</p>
-                <a href="{% url 'core:contacto' %}" class="btn btn-light btn-lg">
-                    <i class="fas fa-rocket me-2"></i>Comenzar Ahora
+                {% if user.is_authenticated %}
+                <a href="{% url 'core:audio_upload' %}" class="btn btn-light btn-lg">
+                    <i class="fas fa-upload me-2"></i>Subir Audio
                 </a>
+                {% else %}
+                <a href="{% url 'login' %}" class="btn btn-light btn-lg">
+                    <i class="fas fa-sign-in-alt me-2"></i>Iniciar Sesión
+                </a>
+                {% endif %}
             </div>
         </div>
     </div>

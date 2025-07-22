@@ -1,7 +1,29 @@
 from django import forms
 from django.utils.translation import gettext_lazy as _
+from django.core.exceptions import ValidationError
 
 from .models import AudioFile, Transcription, Translation, UserProfile, Contacto
+
+
+def validate_audio_file(value):
+    """Validador personalizado para archivos de audio"""
+    import os
+    
+    # Validar extensión
+    valid_extensions = ['.mp3', '.wav', '.flac', '.ogg', '.m4a', '.mp4', '.aac', '.opus']
+    ext = os.path.splitext(value.name)[1].lower()
+    
+    if ext not in valid_extensions:
+        raise ValidationError(
+            _('Formato de archivo no soportado. Use: %(extensions)s'),
+            params={'extensions': ', '.join(valid_extensions)},
+        )
+    
+    # Validar tamaño (100MB max)
+    if value.size > 100 * 1024 * 1024:
+        raise ValidationError(
+            _('El archivo es demasiado grande. Tamaño máximo: 100MB')
+        )
 
 
 class AudioFileUploadForm(forms.ModelForm):
@@ -11,12 +33,30 @@ class AudioFileUploadForm(forms.ModelForm):
         model = AudioFile
         fields = ['title', 'file']
         widgets = {
-            'title': forms.TextInput(attrs={'class': 'form-control', 'placeholder': _('Título del archivo')}),
-            'file': forms.FileInput(attrs={'class': 'form-control', 'accept': 'audio/*'}),
+            'title': forms.TextInput(attrs={
+                'class': 'form-control', 
+                'placeholder': _('Título del archivo (ej: Reunión del 15 de enero)')
+            }),
+            'file': forms.FileInput(attrs={
+                'class': 'form-control', 
+                'accept': 'audio/*,.mp3,.wav,.flac,.ogg,.m4a,.mp4,.aac,.opus'
+            }),
         }
         help_texts = {
-            'file': _('Formatos soportados: MP3, WAV, OGG, FLAC, M4A')
+            'file': _('Formatos soportados: MP3, WAV, OGG, FLAC, M4A, MP4, AAC, OPUS (máx. 100MB)')
         }
+    
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.fields['file'].validators.append(validate_audio_file)
+        
+        # Si no se proporciona título, usar el nombre del archivo
+        if 'file' in self.data and not self.data.get('title'):
+            file = self.files.get('file')
+            if file:
+                import os
+                name = os.path.splitext(file.name)[0]
+                self.initial['title'] = name
 
 
 class TranscriptionForm(forms.ModelForm):
