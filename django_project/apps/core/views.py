@@ -143,7 +143,26 @@ class AudioFileUploadView(LoginRequiredMixin, CreateView):
     
     def form_valid(self, form):
         form.instance.user = self.request.user
-        messages.success(self.request, _('Archivo de audio subido correctamente.'))
+        # Extract and save audio metadata after saving the file
+        audio_file = form.save()
+        
+        try:
+            from .audio_processing import extract_audio_metadata
+            file_path = audio_file.file.path
+            metadata = extract_audio_metadata(file_path)
+            
+            # Update the audio file with metadata
+            audio_file.duration = metadata.get('duration', 0)
+            audio_file.file_size = metadata.get('file_size', 0)
+            audio_file.file_format = metadata.get('file_format', '')
+            audio_file.sample_rate = metadata.get('sample_rate', 0)
+            audio_file.channels = metadata.get('channels', 0)
+            audio_file.save()
+            
+            messages.success(self.request, _('Archivo de audio subido y procesado correctamente.'))
+        except Exception as e:
+            messages.warning(self.request, _('Archivo subido, pero no se pudieron extraer todos los metadatos.'))
+            
         return super().form_valid(form)
 
 
