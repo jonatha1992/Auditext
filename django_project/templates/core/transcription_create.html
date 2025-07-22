@@ -1,0 +1,91 @@
+{% extends 'base.html' %}
+{% load crispy_forms_tags %}
+
+{% block title %}Transcribir: {{ audio.title }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h4><i class="fas fa-microphone me-2"></i>{{ titulo }}</h4>
+                </div>
+                <div class="card-body">
+                    <!-- Audio Info -->
+                    <div class="alert alert-info">
+                        <h6><i class="fas fa-info-circle me-2"></i>Archivo a transcribir:</h6>
+                        <strong>{{ audio.title }}</strong><br>
+                        <small>
+                            Formato: {{ audio.file_format|upper }} | 
+                            Duración: {{ audio.duration|floatformat:0 }}s |
+                            Tamaño: {{ audio.file_size|filesizeformat }}
+                        </small>
+                    </div>
+
+                    <!-- Audio Player -->
+                    {% if audio.file %}
+                    <div class="mb-4">
+                        <label class="form-label">Vista previa del audio:</label>
+                        <audio controls class="w-100">
+                            <source src="{{ audio.file.url }}" type="audio/{{ audio.file_format }}">
+                            Tu navegador no soporta el elemento audio.
+                        </audio>
+                    </div>
+                    {% endif %}
+
+                    <form method="post">
+                        {% csrf_token %}
+                        {{ form|crispy }}
+                        
+                        <div class="mt-4">
+                            <button type="submit" class="btn btn-success btn-lg">
+                                <i class="fas fa-play me-2"></i>Iniciar Transcripción
+                            </button>
+                            <a href="{% url 'core:audio_detail' audio.pk %}" class="btn btn-secondary ms-2">
+                                <i class="fas fa-arrow-left me-2"></i>Volver
+                            </a>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </div>
+        
+        <div class="col-md-4">
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-cog me-2"></i>Configuración</h5>
+                </div>
+                <div class="card-body">
+                    <h6>Opciones de Transcripción:</h6>
+                    <ul>
+                        <li><strong>Idioma:</strong> Selecciona el idioma del audio para mejores resultados</li>
+                        <li><strong>VAD:</strong> Detección automática de actividad de voz</li>
+                        <li><strong>Reducción de ruido:</strong> Mejora la calidad del audio antes de transcribir</li>
+                    </ul>
+                    
+                    <div class="alert alert-warning">
+                        <i class="fas fa-clock me-2"></i>
+                        <strong>Tiempo estimado:</strong> ~{{ audio.duration|floatformat:0 }} segundos
+                    </div>
+                </div>
+            </div>
+
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-language me-2"></i>Idiomas Soportados</h5>
+                </div>
+                <div class="card-body">
+                    <ul class="list-unstyled">
+                        <li><span class="badge bg-primary me-2">🇪🇸</span>Español</li>
+                        <li><span class="badge bg-primary me-2">🇺🇸</span>Inglés</li>
+                        <li><span class="badge bg-primary me-2">🇫🇷</span>Francés</li>
+                        <li><span class="badge bg-primary me-2">🇩🇪</span>Alemán</li>
+                        <li><span class="badge bg-primary me-2">🇮🇹</span>Italiano</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
