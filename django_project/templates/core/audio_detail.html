@@ -1,0 +1,227 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ audio.title }} - Detalles - {{ block.super }}{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-md-8">
+            <div class="card">
+                <div class="card-header">
+                    <h4><i class="fas fa-file-audio me-2"></i>{{ audio.title }}</h4>
+                </div>
+                <div class="card-body">
+                    <!-- Audio Player -->
+                    {% if audio.file %}
+                    <div class="mb-4">
+                        <audio controls class="w-100">
+                            <source src="{{ audio.file.url }}" type="audio/{{ audio.file_format }}">
+                            Tu navegador no soporta el elemento audio.
+                        </audio>
+                    </div>
+                    {% endif %}
+
+                    <!-- File Info -->
+                    <div class="row mb-4">
+                        <div class="col-md-3">
+                            <strong>Formato:</strong><br>
+                            <span class="badge bg-primary">{{ audio.file_format|upper }}</span>
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Duración:</strong><br>
+                            {{ audio.duration|floatformat:0 }} segundos
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Tamaño:</strong><br>
+                            {{ audio.file_size|filesizeformat }}
+                        </div>
+                        <div class="col-md-3">
+                            <strong>Subido:</strong><br>
+                            {{ audio.created_at|date:"d/m/Y H:i" }}
+                        </div>
+                    </div>
+
+                    <!-- Technical Details -->
+                    {% if audio.sample_rate or audio.channels %}
+                    <div class="row mb-4">
+                        {% if audio.sample_rate %}
+                        <div class="col-md-6">
+                            <strong>Tasa de muestreo:</strong><br>
+                            {{ audio.sample_rate }} Hz
+                        </div>
+                        {% endif %}
+                        {% if audio.channels %}
+                        <div class="col-md-6">
+                            <strong>Canales:</strong><br>
+                            {{ audio.channels }} {{ audio.channels|pluralize:"canal,canales" }}
+                        </div>
+                        {% endif %}
+                    </div>
+                    {% endif %}
+
+                    <!-- Actions -->
+                    <div class="d-flex gap-2 mb-4">
+                        {% if not transcriptions %}
+                        <a href="{% url 'core:transcription_create' audio.pk %}" class="btn btn-success">
+                            <i class="fas fa-microphone me-2"></i>Transcribir Audio
+                        </a>
+                        {% endif %}
+                        <a href="{% url 'core:audio_list' %}" class="btn btn-outline-primary">
+                            <i class="fas fa-list me-2"></i>Volver a Lista
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Transcriptions -->
+            {% if transcriptions %}
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h5><i class="fas fa-file-alt me-2"></i>Transcripciones</h5>
+                </div>
+                <div class="card-body">
+                    {% for transcription in transcriptions %}
+                    <div class="card mb-3">
+                        <div class="card-body">
+                            <div class="d-flex justify-content-between align-items-start mb-2">
+                                <div>
+                                    <h6 class="card-title">
+                                        Transcripción #{{ transcription.id }}
+                                        <span class="badge bg-{% if transcription.status == 'completed' %}success{% elif transcription.status == 'failed' %}danger{% elif transcription.status == 'processing' %}warning{% else %}secondary{% endif %}">
+                                            {{ transcription.get_status_display }}
+                                        </span>
+                                    </h6>
+                                    <small class="text-muted">
+                                        <i class="fas fa-calendar me-1"></i>{{ transcription.created_at|date:"d/m/Y H:i" }}
+                                        {% if transcription.language %}
+                                        | <i class="fas fa-language me-1"></i>{{ transcription.get_language_display }}
+                                        {% endif %}
+                                    </small>
+                                </div>
+                                <div>
+                                    <a href="{% url 'core:transcription_detail' transcription.pk %}" class="btn btn-outline-primary btn-sm">
+                                        <i class="fas fa-eye me-1"></i>Ver Detalles
+                                    </a>
+                                </div>
+                            </div>
+
+                            {% if transcription.status == 'completed' and transcription.text %}
+                            <div class="border-start border-4 border-success ps-3 mb-2">
+                                <p class="mb-0">{{ transcription.text|truncatewords:50 }}</p>
+                                {% if transcription.word_count %}
+                                <small class="text-muted">{{ transcription.word_count }} palabras</small>
+                                {% endif %}
+                            </div>
+                            {% elif transcription.status == 'failed' %}
+                            <div class="alert alert-danger">
+                                <i class="fas fa-exclamation-triangle me-2"></i>
+                                Error: {{ transcription.error_message|default:"Error desconocido en la transcripción" }}
+                            </div>
+                            {% elif transcription.status == 'processing' %}
+                            <div class="alert alert-info">
+                                <i class="fas fa-spinner fa-spin me-2"></i>
+                                Transcripción en proceso...
+                            </div>
+                            {% endif %}
+                        </div>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            {% endif %}
+        </div>
+        
+        <div class="col-md-4">
+            <!-- Quick Actions -->
+            <div class="card">
+                <div class="card-header">
+                    <h5><i class="fas fa-bolt me-2"></i>Acciones</h5>
+                </div>
+                <div class="card-body">
+                    <div class="d-grid gap-2">
+                        {% if not transcriptions %}
+                        <a href="{% url 'core:transcription_create' audio.pk %}" class="btn btn-success">
+                            <i class="fas fa-microphone me-2"></i>Transcribir
+                        </a>
+                        {% endif %}
+                        
+                        <a href="{% url 'core:audio_list' %}" class="btn btn-outline-primary">
+                            <i class="fas fa-list me-2"></i>Mis Audios
+                        </a>
+                        
+                        <a href="{% url 'core:audio_upload' %}" class="btn btn-outline-success">
+                            <i class="fas fa-upload me-2"></i>Subir Otro
+                        </a>
+                        
+                        <hr>
+                        
+                        <a href="{% url 'core:audio_delete' audio.pk %}" class="btn btn-outline-danger"
+                           onclick="return confirm('¿Estás seguro de eliminar este archivo y todas sus transcripciones?')">
+                            <i class="fas fa-trash me-2"></i>Eliminar Archivo
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <!-- File Details -->
+            <div class="card mt-3">
+                <div class="card-header">
+                    <h5><i class="fas fa-info-circle me-2"></i>Información del Archivo</h5>
+                </div>
+                <div class="card-body">
+                    <table class="table table-sm">
+                        <tr>
+                            <td><strong>Nombre:</strong></td>
+                            <td>{{ audio.title }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Formato:</strong></td>
+                            <td>{{ audio.file_format|upper }}</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Duración:</strong></td>
+                            <td>{{ audio.duration|floatformat:0 }}s</td>
+                        </tr>
+                        <tr>
+                            <td><strong>Tamaño:</strong></td>
+                            <td>{{ audio.file_size|filesizeformat }}</td>
+                        </tr>
+                        {% if audio.sample_rate %}
+                        <tr>
+                            <td><strong>Muestreo:</strong></td>
+                            <td>{{ audio.sample_rate }} Hz</td>
+                        </tr>
+                        {% endif %}
+                        {% if audio.channels %}
+                        <tr>
+                            <td><strong>Canales:</strong></td>
+                            <td>{{ audio.channels }}</td>
+                        </tr>
+                        {% endif %}
+                        <tr>
+                            <td><strong>Subido:</strong></td>
+                            <td>{{ audio.created_at|date:"d/m/Y H:i" }}</td>
+                        </tr>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% block extra_js %}
+<script>
+// Auto-refresh para transcripciones en proceso
+{% if transcriptions %}
+    {% for transcription in transcriptions %}
+        {% if transcription.status == 'processing' %}
+            setTimeout(function() {
+                location.reload();
+            }, 10000); // Recargar cada 10 segundos si hay transcripciones en proceso
+            break;
+        {% endif %}
+    {% endfor %}
+{% endif %}
+</script>
+{% endblock %}
+{% endblock %}
