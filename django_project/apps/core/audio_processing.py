@@ -189,7 +189,7 @@ def transcribe_audio(file_path, language='es', use_vad=True, reduce_noise=True):
         
         # Configurar opciones de Whisper
         whisper_options = {
-            'language': language if language != 'es-ES' else 'es',  # Whisper usa códigos cortos
+            'language': map_language_code(language),  # Usar función para mapear códigos de idioma
             'task': 'transcribe',
             'fp16': torch.cuda.is_available(),  # Usar FP16 si hay GPU disponible
         }
