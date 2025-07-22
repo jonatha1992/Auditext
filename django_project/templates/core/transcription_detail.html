@@ -23,7 +23,7 @@
             <div class="card mb-4">
                 <div class="card-header">
                     <h4>
-                        <i class="fas fa-file-alt me-2"></i>{{ titulo }}
+                        <i class="fas fa-file-alt me-2"></i>{{ transcription.audio_file.title }}
                         <span class="badge bg-{% if transcription.status == 'completed' %}success{% elif transcription.status == 'failed' %}danger{% elif transcription.status == 'processing' %}warning{% else %}secondary{% endif %} ms-2">
                             {{ transcription.get_status_display }}
                         </span>
