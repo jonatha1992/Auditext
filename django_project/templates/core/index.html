@@ -1,0 +1,208 @@
+{% extends 'base.html' %}
+{% load static %}
+
+{% block title %}{{ titulo }} - {{ block.super }}{% endblock %}
+
+{% block content %}
+<!-- Hero Section -->
+<section class="hero-section">
+    <div class="container">
+        <div class="row align-items-center">
+            <div class="col-lg-6">
+                <h1 class="display-4 fw-bold mb-4">{{ titulo|default:"AudioText" }}</h1>
+                <p class="lead mb-4">{{ mensaje|default:"Transcribe y traduce audio de manera inteligente y eficiente"
+                    }}</p>
+                <div class="d-flex gap-3">
+                    <a href="{% url 'core:sobre_nosotros' %}" class="btn btn-light btn-lg">
+                        <i class="fas fa-microphone-alt me-2"></i>Comenzar Ahora
+                    </a>
+                    <a href="{% url 'core:contacto' %}" class="btn btn-outline-light btn-lg">
+                        <i class="fas fa-info-circle me-2"></i>Más Información
+                    </a>
+                </div>
+            </div>
+            <div class="col-lg-6 text-center">
+                <i class="fas fa-headphones-alt fa-10x text-white opacity-25"></i>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Features Section -->
+<section class="py-5">
+    <div class="container">
+        <div class="row text-center mb-5">
+            <div class="col-lg-8 mx-auto">
+                <h2 class="display-5 fw-bold mb-3">Características Principales</h2>
+                <p class="lead">Herramientas avanzadas para procesar tus archivos de audio</p>
+            </div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-headphones fa-3x text-primary mb-3"></i>
+                        <h5 class="card-title">Transcripción de Audio</h5>
+                        <p class="card-text">Convierte archivos de audio a texto utilizando reconocimiento de voz
+                            avanzado.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-language fa-3x text-primary mb-3"></i>
+                        <h5 class="card-title">Traducción Automática</h5>
+                        <p class="card-text">Traduce las transcripciones entre múltiples idiomas de manera instantánea.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card h-100 shadow-sm">
+                    <div class="card-body text-center">
+                        <i class="fas fa-sliders-h fa-3x text-primary mb-3"></i>
+                        <h5 class="card-title">Mejoramiento de Audio</h5>
+                        <p class="card-text">Aplica filtros para mejorar la calidad del audio y los resultados.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- How it Works -->
+<section class="bg-light py-5">
+    <div class="container">
+        <div class="row text-center mb-5">
+            <div class="col-lg-8 mx-auto">
+                <h2 class="display-5 fw-bold mb-3">Cómo Funciona</h2>
+                <p class="lead">Transcribe y traduce audio en tres simples pasos</p>
+            </div>
+        </div>
+
+        <div class="row g-4">
+            <div class="col-md-4">
+                <div class="card border-0 bg-transparent">
+                    <div class="card-body text-center">
+                        <div class="bg-primary rounded-circle text-white d-flex align-items-center justify-content-center mx-auto mb-4"
+                            style="width: 80px; height: 80px;">
+                            <span class="h3 mb-0">1</span>
+                        </div>
+                        <h3 class="h4 mb-3">Sube tu Audio</h3>
+                        <p class="text-muted">Sube archivos de audio en formatos MP3, WAV, OGG, FLAC o M4A.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card border-0 bg-transparent">
+                    <div class="card-body text-center">
+                        <div class="bg-primary rounded-circle text-white d-flex align-items-center justify-content-center mx-auto mb-4"
+                            style="width: 80px; height: 80px;">
+                            <span class="h3 mb-0">2</span>
+                        </div>
+                        <h3 class="h4 mb-3">Configura Opciones</h3>
+                        <p class="text-muted">Selecciona el idioma y activa la reducción de ruido.</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="col-md-4">
+                <div class="card border-0 bg-transparent">
+                    <div class="card-body text-center">
+                        <div class="bg-primary rounded-circle text-white d-flex align-items-center justify-content-center mx-auto mb-4"
+                            style="width: 80px; height: 80px;">
+                            <span class="h3 mb-0">3</span>
+                        </div>
+                        <h3 class="h4 mb-3">Obtén tu Transcripción</h3>
+                        <p class="text-muted">Visualiza, edita, traduce y descarga tus transcripciones.</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Languages Section -->
+<section class="py-5">
+    <div class="container">
+        <div class="row text-center mb-5">
+            <div class="col-lg-8 mx-auto">
+                <h2 class="display-5 fw-bold mb-3">Idiomas Soportados</h2>
+                <p class="lead">Transcribe y traduce en múltiples idiomas</p>
+            </div>
+        </div>
+
+        <div class="row justify-content-center text-center">
+            <div class="col-md-8">
+                <div class="row g-4">
+                    <div class="col-4 col-md-2">
+                        <div class="mb-3">
+                            <div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center"
+                                style="width: 60px; height: 60px;">
+                                <span class="h3 mb-0">🇪🇸</span>
+                            </div>
+                        </div>
+                        <p class="fw-bold">Español</p>
+                    </div>
+                    <div class="col-4 col-md-2">
+                        <div class="mb-3">
+                            <div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center"
+                                style="width: 60px; height: 60px;">
+                                <span class="h3 mb-0">🇺🇸</span>
+                            </div>
+                        </div>
+                        <p class="fw-bold">Inglés</p>
+                    </div>
+                    <div class="col-4 col-md-2">
+                        <div class="mb-3">
+                            <div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center"
+                                style="width: 60px; height: 60px;">
+                                <span class="h3 mb-0">🇫🇷</span>
+                            </div>
+                        </div>
+                        <p class="fw-bold">Francés</p>
+                    </div>
+                    <div class="col-4 col-md-2">
+                        <div class="mb-3">
+                            <div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center"
+                                style="width: 60px; height: 60px;">
+                                <span class="h3 mb-0">🇩🇪</span>
+                            </div>
+                        </div>
+                        <p class="fw-bold">Alemán</p>
+                    </div>
+                    <div class="col-4 col-md-2">
+                        <div class="mb-3">
+                            <div class="bg-light rounded-circle d-inline-flex align-items-center justify-content-center"
+                                style="width: 60px; height: 60px;">
+                                <span class="h3 mb-0">🇮🇹</span>
+                            </div>
+                        </div>
+                        <p class="fw-bold">Italiano</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</section>
+
+<!-- Call to Action -->
+<section class="bg-primary text-white py-5">
+    <div class="container text-center">
+        <div class="row">
+            <div class="col-lg-8 mx-auto">
+                <h2 class="display-5 fw-bold mb-3">¿Listo para empezar?</h2>
+                <p class="lead mb-4">Comienza a transcribir tus archivos de audio ahora mismo</p>
+                <a href="{% url 'core:contacto' %}" class="btn btn-light btn-lg">
+                    <i class="fas fa-rocket me-2"></i>Comenzar Ahora
+                </a>
+            </div>
+        </div>
+    </div>
+</section>
+{% endblock %}
