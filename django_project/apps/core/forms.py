@@ -49,16 +49,19 @@ class AudioFileUploadForm(forms.ModelForm):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.fields['file'].validators.append(validate_audio_file)
+
+    def clean(self):
+        cleaned_data = super().clean()
+        title = cleaned_data.get('title')
+        file = cleaned_data.get('file')
         
         # Si no se proporciona título, usar el nombre del archivo
-        if 'file' in self.data and not self.data.get('title'):
-            file = self.files.get('file')
-            if file:
-                import os
-                name = os.path.splitext(file.name)[0]
-                self.initial['title'] = name
-
-
+        if not title and file:
+            import os
+            name = os.path.splitext(file.name)[0]
+            cleaned_data['title'] = name
+        
+        return cleaned_data
 class TranscriptionForm(forms.ModelForm):
     """Formulario para iniciar una transcripción"""
     
