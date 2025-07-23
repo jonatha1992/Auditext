@@ -46,18 +46,8 @@
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav me-auto">
                     <li class="nav-item">
-                        <a class="nav-link" href="{% url 'core:audio_upload' %}">
-                            <i class="fas fa-upload me-1"></i>Subir Audio
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{% url 'core:audio_list' %}">
-                            <i class="fas fa-file-audio me-1"></i>Archivos de Audio
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{% url 'core:dashboard' %}">
-                            <i class="fas fa-tachometer-alt me-1"></i>Panel
+                        <a class="nav-link" href="{% url 'core:simple_transcribe' %}">
+                            <i class="fas fa-microphone me-1"></i>Transcribir Audio
                         </a>
                     </li>
                     <li class="nav-item">
@@ -65,14 +55,9 @@
                             <i class="fas fa-info-circle me-1"></i>Acerca de
                         </a>
                     </li>
-                    <li class="nav-item">
-                        <a class="nav-link" href="{% url 'core:contacto' %}">
-                            <i class="fas fa-envelope me-1"></i>Contacto
-                        </a>
-                    </li>
                 </ul>
                 
-                <!-- Removed authentication-dependent navigation for testing -->
+                <!-- Simplified navigation for testing without database -->
             </div>
         </div>
     </nav>
