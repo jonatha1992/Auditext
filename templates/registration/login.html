@@ -1,5 +1,4 @@
 {% extends 'base.html' %}
-{% load crispy_forms_tags %}
 
 {% block title %}Iniciar Sesión - {{ block.super }}{% endblock %}
 
@@ -20,7 +19,16 @@
 
                     <form method="post">
                         {% csrf_token %}
-                        {{ form|crispy }}
+                        
+                        <div class="mb-3">
+                            <label for="id_username" class="form-label">Usuario:</label>
+                            <input type="text" class="form-control" name="username" id="id_username" required>
+                        </div>
+                        
+                        <div class="mb-3">
+                            <label for="id_password" class="form-label">Contraseña:</label>
+                            <input type="password" class="form-control" name="password" id="id_password" required>
+                        </div>
                         
                         <div class="d-grid gap-2 mt-3">
                             <button type="submit" class="btn btn-primary">

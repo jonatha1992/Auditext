@@ -2,6 +2,31 @@
 
 **AudioText** es una aplicación web desarrollada con Django que permite transcribir y traducir archivos de audio de manera eficiente y precisa. El sistema utiliza reconocimiento de voz avanzado y tecnologías de procesamiento de audio para convertir contenido hablado en texto.
 
+## ⚠️ MODO DE PRUEBA TEMPORAL
+
+**Esta versión tiene el sistema de inicio de sesión y registro temporalmente deshabilitado para permitir pruebas rápidas del sistema de transcripción.**
+
+### Cambios temporales realizados:
+- ✅ Eliminado el flujo de inicio de sesión y registro
+- ✅ La URL raíz (/) redirige directamente a la página de subir archivos
+- ✅ Todas las funcionalidades de carga, procesamiento y transcripción funcionan sin autenticación
+- ✅ Navegación simplificada para acceso directo a las funciones principales
+- ✅ Se usa un usuario de prueba automáticamente para todas las operaciones
+
+### Navegación disponible:
+- **Subir Audio**: Sube archivos de audio para transcribir
+- **Archivos de Audio**: Ve todos los archivos subidos
+- **Panel**: Estadísticas generales del sistema
+- **Acerca de**: Información sobre la aplicación
+- **Contacto**: Formulario de contacto
+
+### Para restaurar la autenticación:
+1. Descomentar las líneas relacionadas con autenticación en `views.py`
+2. Restaurar `LoginRequiredMixin` y `@login_required` en las vistas
+3. Descomentar las URLs de autenticación en `myproject/urls.py`
+4. Restaurar la configuración de login en `settings.py`
+5. Restaurar el contenido condicional en las plantillas
+
 ## 🚀 Características Principales
 
 - **Transcripción de Audio**: Convierte archivos de audio a texto usando Google Speech Recognition

@@ -233,6 +233,23 @@ def transcribe_audio(file_path, language='es', use_vad=True, reduce_noise=True):
         }
 
 
+def map_language_code(language_code):
+    """Mapea códigos de idioma de Django a códigos de Whisper"""
+    language_mapping = {
+        'es-ES': 'es',  # Español
+        'en-US': 'en',  # Inglés
+        'fr-FR': 'fr',  # Francés
+        'de-DE': 'de',  # Alemán
+        'it-IT': 'it',  # Italiano
+        'es': 'es',
+        'en': 'en', 
+        'fr': 'fr',
+        'de': 'de',
+        'it': 'it',
+    }
+    return language_mapping.get(language_code, 'es')  # Por defecto español
+
+
 def translate_text(text, source_language='es', target_language='en'):
     """Traduce un texto de un idioma a otro (implementación simple)"""
     try:
