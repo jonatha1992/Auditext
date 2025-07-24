@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <title>Transcribir Audio</title>
+</head>
+<body>
+    <h1>Transcribir Audio</h1>
+    <form method="post" enctype="multipart/form-data">
+        {% csrf_token %}
+        {{ form.as_p }}
+        <button type="submit">Subir y Transcribir</button>
+    </form>
+    {% if audio_url %}
+        <h2>Reproducir Audio</h2>
+        <audio controls src="{{ audio_url }}"></audio>
+    {% endif %}
+    {% if transcription %}
+        <h2>Transcripción</h2>
+        <textarea rows="10" cols="80">{{ transcription }}</textarea>
+    {% endif %}
+</body>
+</html> 
