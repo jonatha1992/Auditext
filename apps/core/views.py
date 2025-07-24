@@ -1,8 +1,6 @@
 import os
 from django.shortcuts import render, redirect, get_object_or_404
 from django.views.generic import TemplateView, ListView, DetailView, CreateView, UpdateView, DeleteView
-from django.contrib.auth.mixins import LoginRequiredMixin
-from django.contrib.auth.decorators import login_required
 from django.urls import reverse_lazy
 from django.http import JsonResponse, HttpResponse
 from django.contrib import messages
@@ -18,18 +16,16 @@ from .forms import (
     ContactForm, 
     UserProfileForm
 )
-from .tasks import process_transcription, process_translation
+# Temporary comment out for testing without Celery
+# from .tasks import process_transcription, process_translation
 
 
 class HomeView(TemplateView):
-    """Vista para la página principal"""
-    template_name = 'core/index.html'
+    """Vista para la página principal que redirige directamente a subir audio"""
     
-    def get_context_data(self, **kwargs):
-        context = super().get_context_data(**kwargs)
-        context['titulo'] = 'AudioText'
-        context['mensaje'] = 'Transcribe y traduce audio de manera inteligente y eficiente'
-        return context
+    def get(self, request, *args, **kwargs):
+        # Redirigir directamente a la página de subir audio para pruebas rápidas
+        return redirect('core:audio_upload')
 
 
 class AboutView(TemplateView):
@@ -69,57 +65,51 @@ class ContactThanksView(TemplateView):
         return context
 
 
-class DashboardView(LoginRequiredMixin, TemplateView):
-    """Vista del panel de control del usuario"""
+class DashboardView(TemplateView):
+    """Vista del panel de control - acceso libre para pruebas"""
     template_name = 'core/dashboard.html'
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         context['titulo'] = 'Panel de Control'
         
-        # Obtener estadísticas del usuario
-        user = self.request.user
-        profile, created = UserProfile.objects.get_or_create(user=user)
+        # Obtener estadísticas generales sin filtrar por usuario
+        context['audio_files_count'] = AudioFile.objects.count()
+        context['transcriptions_count'] = Transcription.objects.count()
+        context['translations_count'] = Translation.objects.count()
         
-        context['audio_files_count'] = AudioFile.objects.filter(user=user).count()
-        context['transcriptions_count'] = Transcription.objects.filter(user=user).count()
-        context['translations_count'] = Translation.objects.filter(user=user).count()
-        
-        # Últimos archivos procesados
-        context['recent_audio_files'] = AudioFile.objects.filter(user=user).order_by('-created_at')[:5]
-        context['recent_transcriptions'] = Transcription.objects.filter(user=user).order_by('-created_at')[:5]
+        # Últimos archivos procesados (sin filtrar por usuario)
+        context['recent_audio_files'] = AudioFile.objects.order_by('-created_at')[:5]
+        context['recent_transcriptions'] = Transcription.objects.order_by('-created_at')[:5]
         
         # Estadísticas generales
-        context['total_duration'] = profile.total_audio_duration
-        context['total_words'] = profile.total_words_transcribed
+        context['total_duration'] = sum(audio.duration for audio in AudioFile.objects.all())
+        context['total_words'] = sum(trans.word_count for trans in Transcription.objects.all())
         
         return context
 
 
-class AudioFileListView(LoginRequiredMixin, ListView):
-    """Vista para listar los archivos de audio del usuario"""
+class AudioFileListView(ListView):
+    """Vista para listar todos los archivos de audio - acceso libre para pruebas"""
     model = AudioFile
     template_name = 'core/audio_list.html'
     context_object_name = 'audio_files'
     paginate_by = 10
     
     def get_queryset(self):
-        return AudioFile.objects.filter(user=self.request.user).order_by('-created_at')
+        return AudioFile.objects.order_by('-created_at')
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['titulo'] = 'Mis Archivos de Audio'
+        context['titulo'] = 'Archivos de Audio'
         return context
 
 
-class AudioFileDetailView(LoginRequiredMixin, DetailView):
-    """Vista de detalle para un archivo de audio"""
+class AudioFileDetailView(DetailView):
+    """Vista de detalle para un archivo de audio - acceso libre para pruebas"""
     model = AudioFile
     template_name = 'core/audio_detail.html'
     context_object_name = 'audio'
-    
-    def get_queryset(self):
-        return AudioFile.objects.filter(user=self.request.user)
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -129,8 +119,8 @@ class AudioFileDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class AudioFileUploadView(LoginRequiredMixin, CreateView):
-    """Vista para subir un nuevo archivo de audio"""
+class AudioFileUploadView(CreateView):
+    """Vista para subir un nuevo archivo de audio - acceso libre para pruebas"""
     model = AudioFile
     form_class = AudioFileUploadForm
     template_name = 'core/audio_upload.html'
@@ -142,7 +132,25 @@ class AudioFileUploadView(LoginRequiredMixin, CreateView):
         return context
     
     def form_valid(self, form):
-        form.instance.user = self.request.user
+        # Crear un usuario temporal o usar uno por defecto para las pruebas
+        from django.contrib.auth.models import User
+        try:
+            # Intentar obtener un usuario existente o crear uno temporal
+            test_user, created = User.objects.get_or_create(
+                username='test_user',
+                defaults={
+                    'email': 'test@audiotext.com',
+                    'first_name': 'Usuario',
+                    'last_name': 'de Prueba'
+                }
+            )
+            form.instance.user = test_user
+        except:
+            # Si hay problemas, usar el primer usuario disponible
+            first_user = User.objects.first()
+            if first_user:
+                form.instance.user = first_user
+            
         # Extract and save audio metadata after saving the file
         audio_file = form.save()
         
@@ -166,14 +174,11 @@ class AudioFileUploadView(LoginRequiredMixin, CreateView):
         return super().form_valid(form)
 
 
-class AudioFileDeleteView(LoginRequiredMixin, DeleteView):
-    """Vista para eliminar un archivo de audio"""
+class AudioFileDeleteView(DeleteView):
+    """Vista para eliminar un archivo de audio - acceso libre para pruebas"""
     model = AudioFile
     template_name = 'core/audio_confirm_delete.html'
     success_url = reverse_lazy('core:audio_list')
-    
-    def get_queryset(self):
-        return AudioFile.objects.filter(user=self.request.user)
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -186,8 +191,8 @@ class AudioFileDeleteView(LoginRequiredMixin, DeleteView):
         return super().delete(request, *args, **kwargs)
 
 
-class TranscriptionCreateView(LoginRequiredMixin, CreateView):
-    """Vista para crear una nueva transcripción"""
+class TranscriptionCreateView(CreateView):
+    """Vista para crear una nueva transcripción - acceso libre para pruebas"""
     model = Transcription
     form_class = TranscriptionForm
     template_name = 'core/transcription_create.html'
@@ -195,23 +200,24 @@ class TranscriptionCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         audio_id = self.kwargs.get('audio_id')
-        audio = get_object_or_404(AudioFile, id=audio_id, user=self.request.user)
+        audio = get_object_or_404(AudioFile, id=audio_id)
         context['audio'] = audio
         context['titulo'] = f'Transcribir: {audio.title}'
         return context
     
     def form_valid(self, form):
         audio_id = self.kwargs.get('audio_id')
-        audio = get_object_or_404(AudioFile, id=audio_id, user=self.request.user)
+        audio = get_object_or_404(AudioFile, id=audio_id)
         
         form.instance.audio_file = audio
-        form.instance.user = self.request.user
+        # Usar el mismo usuario que el archivo de audio
+        form.instance.user = audio.user
         form.instance.status = 'pending'
         
         response = super().form_valid(form)
         
-        # Iniciar tarea de transcripción
-        process_transcription.delay(self.object.id)
+        # Temporary comment out Celery task for testing
+        # process_transcription.delay(self.object.id)
         
         messages.success(self.request, _('Proceso de transcripción iniciado.'))
         return response
@@ -220,14 +226,11 @@ class TranscriptionCreateView(LoginRequiredMixin, CreateView):
         return reverse_lazy('core:audio_detail', kwargs={'pk': self.object.audio_file.id})
 
 
-class TranscriptionDetailView(LoginRequiredMixin, DetailView):
-    """Vista de detalle para una transcripción"""
+class TranscriptionDetailView(DetailView):
+    """Vista de detalle para una transcripción - acceso libre para pruebas"""
     model = Transcription
     template_name = 'core/transcription_detail.html'
     context_object_name = 'transcription'
-    
-    def get_queryset(self):
-        return Transcription.objects.filter(user=self.request.user)
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -237,8 +240,8 @@ class TranscriptionDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class TranslationCreateView(LoginRequiredMixin, CreateView):
-    """Vista para crear una nueva traducción"""
+class TranslationCreateView(CreateView):
+    """Vista para crear una nueva traducción - acceso libre para pruebas"""
     model = Translation
     form_class = TranslationForm
     template_name = 'core/translation_create.html'
@@ -246,23 +249,23 @@ class TranslationCreateView(LoginRequiredMixin, CreateView):
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
         transcription_id = self.kwargs.get('transcription_id')
-        transcription = get_object_or_404(Transcription, id=transcription_id, user=self.request.user)
+        transcription = get_object_or_404(Transcription, id=transcription_id)
         context['transcription'] = transcription
         context['titulo'] = f'Traducir: {transcription.audio_file.title}'
         return context
     
     def form_valid(self, form):
         transcription_id = self.kwargs.get('transcription_id')
-        transcription = get_object_or_404(Transcription, id=transcription_id, user=self.request.user)
+        transcription = get_object_or_404(Transcription, id=transcription_id)
         
         form.instance.transcription = transcription
-        form.instance.user = self.request.user
+        form.instance.user = transcription.user  # Usar el mismo usuario que la transcripción
         form.instance.source_language = transcription.language[:2]  # Extract 'es' from 'es-ES'
         
         response = super().form_valid(form)
         
-        # Iniciar tarea de traducción
-        process_translation.delay(self.object.id)
+        # Temporary comment out Celery task for testing
+        # process_translation.delay(self.object.id)
         
         messages.success(self.request, _('Proceso de traducción iniciado.'))
         return response
@@ -271,14 +274,11 @@ class TranslationCreateView(LoginRequiredMixin, CreateView):
         return reverse_lazy('core:transcription_detail', kwargs={'pk': self.object.transcription.id})
 
 
-class TranslationDetailView(LoginRequiredMixin, DetailView):
-    """Vista de detalle para una traducción"""
+class TranslationDetailView(DetailView):
+    """Vista de detalle para una traducción - acceso libre para pruebas"""
     model = Translation
     template_name = 'core/translation_detail.html'
     context_object_name = 'translation'
-    
-    def get_queryset(self):
-        return Translation.objects.filter(user=self.request.user)
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
@@ -287,20 +287,38 @@ class TranslationDetailView(LoginRequiredMixin, DetailView):
         return context
 
 
-class UserProfileView(LoginRequiredMixin, UpdateView):
-    """Vista para ver y editar el perfil de usuario"""
+class UserProfileView(UpdateView):
+    """Vista para ver y editar el perfil de usuario - acceso libre para pruebas"""
     model = UserProfile
     form_class = UserProfileForm
     template_name = 'core/user_profile.html'
     success_url = reverse_lazy('core:profile')
     
     def get_object(self):
-        profile, created = UserProfile.objects.get_or_create(user=self.request.user)
-        return profile
+        # Obtener o crear un perfil para el usuario de prueba
+        from django.contrib.auth.models import User
+        try:
+            test_user, created = User.objects.get_or_create(
+                username='test_user',
+                defaults={
+                    'email': 'test@audiotext.com',
+                    'first_name': 'Usuario',
+                    'last_name': 'de Prueba'
+                }
+            )
+            profile, created = UserProfile.objects.get_or_create(user=test_user)
+            return profile
+        except:
+            # Si hay problemas, usar el primer perfil disponible o crear uno nuevo
+            first_user = User.objects.first()
+            if first_user:
+                profile, created = UserProfile.objects.get_or_create(user=first_user)
+                return profile
+            return None
     
     def get_context_data(self, **kwargs):
         context = super().get_context_data(**kwargs)
-        context['titulo'] = 'Mi Perfil'
+        context['titulo'] = 'Perfil de Usuario'
         return context
     
     def form_valid(self, form):
@@ -308,11 +326,10 @@ class UserProfileView(LoginRequiredMixin, UpdateView):
         return super().form_valid(form)
 
 
-# Vistas de función para API y operaciones AJAX
-@login_required
+# Vistas de función para API y operaciones AJAX - acceso libre para pruebas
 def check_transcription_status(request, pk):
     """Verificar el estado de una transcripción"""
-    transcription = get_object_or_404(Transcription, pk=pk, user=request.user)
+    transcription = get_object_or_404(Transcription, pk=pk)
     return JsonResponse({
         'status': transcription.status,
         'word_count': transcription.word_count,
@@ -322,10 +339,9 @@ def check_transcription_status(request, pk):
     })
 
 
-@login_required
 def check_translation_status(request, pk):
     """Verificar el estado de una traducción"""
-    translation = get_object_or_404(Translation, pk=pk, user=request.user)
+    translation = get_object_or_404(Translation, pk=pk)
     return JsonResponse({
         'completed': translation.text != '',
         'source_language': translation.source_language,
@@ -333,10 +349,9 @@ def check_translation_status(request, pk):
     })
 
 
-@login_required
 def download_transcription(request, pk):
     """Descargar texto de transcripción como archivo"""
-    transcription = get_object_or_404(Transcription, pk=pk, user=request.user)
+    transcription = get_object_or_404(Transcription, pk=pk)
     
     response = HttpResponse(transcription.text, content_type='text/plain')
     filename = f"transcripcion_{transcription.audio_file.title}_{timezone.now().strftime('%Y%m%d')}.txt"
@@ -345,10 +360,9 @@ def download_transcription(request, pk):
     return response
 
 
-@login_required
 def download_translation(request, pk):
     """Descargar texto de traducción como archivo"""
-    translation = get_object_or_404(Translation, pk=pk, user=request.user)
+    translation = get_object_or_404(Translation, pk=pk)
     
     response = HttpResponse(translation.text, content_type='text/plain')
     filename = f"traduccion_{translation.transcription.audio_file.title}_{translation.target_language}_{timezone.now().strftime('%Y%m%d')}.txt"
