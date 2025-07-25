@@ -1,7 +1,9 @@
-from django.http import HttpResponse, JsonResponse
+from django.http import HttpResponse, JsonResponse, StreamingHttpResponse
 import os
 import tempfile
 import shutil
+import json
+import time
 from django.shortcuts import render
 from .forms import AudioUploadForm
 from .whisper_utils import transcribe_audio
@@ -19,9 +21,22 @@ def transcribe_api(request):
             for chunk in audio_file.chunks():
                 temp_file.write(chunk)
             temp_file_path = temp_file.name
-        transcription = transcribe_audio(temp_file_path)
-        os.remove(temp_file_path)
-        return JsonResponse({'transcription': transcription})
+        
+        try:
+            # Simular progreso durante la transcripción
+            transcription_turns = transcribe_audio(temp_file_path)
+            os.remove(temp_file_path)
+            return JsonResponse({
+                'turns': transcription_turns,
+                'status': 'completed',
+                'message': f'Transcripción completada: {len(transcription_turns)} turnos detectados'
+            })
+        except Exception as e:
+            os.remove(temp_file_path)
+            return JsonResponse({
+                'error': f'Error en la transcripción: {str(e)}',
+                'status': 'error'
+            }, status=500)
     return JsonResponse({'error': 'Invalid request'}, status=400)
 
 def transcribe_view(request):
