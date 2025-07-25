@@ -27,7 +27,8 @@
         <!-- Transcripción -->
         <section class="bg-white rounded shadow flex-[2] flex flex-col p-4">
             <h2 class="text-lg font-semibold mb-2">Transcripción</h2>
-            <textarea id="transcription-area" class="flex-1 border rounded p-2 mb-4" placeholder="Aquí aparecerá la transcripción..." readonly></textarea>
+            <div id="turns-container" class="flex-1 border rounded p-2 mb-4 overflow-y-auto bg-gray-50"></div>
+            <textarea id="transcription-area" class="hidden"></textarea>
             <div class="flex gap-2 justify-end">
                 <button id="clear-btn" class="bg-yellow-400 px-3 py-1 rounded">Limpiar</button>
                 <button id="export-btn" class="bg-blue-700 text-white px-3 py-1 rounded">Exportar</button>
@@ -60,9 +61,10 @@
             </select>
         </div>
         <div class="flex items-center gap-2 mb-2">
-            <button class="bg-gray-200 p-2 rounded-full">&#9654;</button>
-            <button class="bg-gray-200 p-2 rounded-full">&#9724;</button>
-            <span>00:00 / 00:00</span>
+            <button id="play-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors">&#9654;</button>
+            <button id="pause-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>&#10074;&#10074;</button>
+            <button id="stop-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>&#9724;</button>
+            <span id="time-display">00:00 / 00:00</span>
         </div>
         <div class="text-xs text-gray-500 mt-2">
             &copy;Copyright 2024 Version 1.1 Produced by Correa Jonathan
@@ -80,8 +82,104 @@
     const transcriptionArea = document.getElementById('transcription-area');
     const transcribeStatus = document.getElementById('transcribe-status');
     const progressBarContainer = document.getElementById('progress-bar-container');
+    
+    // Controles de reproducción
+    const playBtn = document.getElementById('play-btn');
+    const pauseBtn = document.getElementById('pause-btn');
+    const stopBtn = document.getElementById('stop-btn');
+    const timeDisplay = document.getElementById('time-display');
+    
     let files = [];
     let selectedIdx = null;
+    let turns = [];
+    let speakerMap = {};
+    let currentAudio = null;
+    let isPlaying = false;
+    let currentTime = 0;
+    let audioDuration = 0;
+    let audioUrl = null;
+
+    // Funciones del reproductor
+    function formatTime(seconds) {
+        const mins = Math.floor(seconds / 60);
+        const secs = Math.floor(seconds % 60);
+        return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+    }
+
+    function updateTimeDisplay() {
+        timeDisplay.textContent = `${formatTime(currentTime)} / ${formatTime(audioDuration)}`;
+    }
+
+    function playAudio() {
+        if (!currentAudio) return;
+        currentAudio.play();
+        isPlaying = true;
+        playBtn.disabled = true;
+        pauseBtn.disabled = false;
+        stopBtn.disabled = false;
+    }
+
+    function pauseAudio() {
+        if (!currentAudio) return;
+        currentAudio.pause();
+        isPlaying = false;
+        playBtn.disabled = false;
+        pauseBtn.disabled = true;
+    }
+
+    function stopAudio() {
+        if (!currentAudio) return;
+        currentAudio.pause();
+        currentAudio.currentTime = 0;
+        isPlaying = false;
+        currentTime = 0;
+        playBtn.disabled = false;
+        pauseBtn.disabled = true;
+        stopBtn.disabled = true;
+        updateTimeDisplay();
+        highlightCurrentTurn();
+    }
+
+    function seekToTime(time) {
+        if (!currentAudio) return;
+        currentAudio.currentTime = time;
+        currentTime = time;
+        updateTimeDisplay();
+        highlightCurrentTurn();
+    }
+
+    function highlightCurrentTurn() {
+        // Remover highlight anterior
+        document.querySelectorAll('.turn-block').forEach(block => {
+            block.classList.remove('bg-yellow-100', 'border-yellow-400');
+        });
+        
+        // Highlight turno actual
+        turns.forEach((turn, idx) => {
+            if (currentTime >= turn.start && currentTime <= turn.end) {
+                const turnElement = document.querySelector(`[data-turn="${idx}"]`);
+                if (turnElement) {
+                    turnElement.classList.add('bg-yellow-100', 'border-yellow-400');
+                }
+            }
+        });
+    }
+
+    // Event listeners para controles de reproducción
+    playBtn.addEventListener('click', playAudio);
+    pauseBtn.addEventListener('click', pauseAudio);
+    stopBtn.addEventListener('click', stopAudio);
+
+    // Actualizar tiempo durante reproducción
+    function updateTime() {
+        if (currentAudio && isPlaying) {
+            currentTime = currentAudio.currentTime;
+            updateTimeDisplay();
+            highlightCurrentTurn();
+        }
+    }
+
+    setInterval(updateTime, 100);
 
     selectFilesBtn.addEventListener('click', () => fileInput.click());
 
@@ -120,12 +218,17 @@
     });
 
     clearBtn.addEventListener('click', () => {
-        transcriptionArea.value = '';
+        document.getElementById('turns-container').innerHTML = '';
+        turns = [];
+        speakerMap = {};
     });
 
     exportBtn.addEventListener('click', () => {
-        const text = transcriptionArea.value;
-        if (!text) return;
+        if (!turns.length) return;
+        let text = turns.map((turn, idx) => {
+            const speaker = speakerMap[idx] || 'Sin asignar';
+            return `Hablante: ${speaker}\n[${turn.start.toFixed(2)} - ${turn.end.toFixed(2)}] ${turn.text}`;
+        }).join('\n\n');
         const blob = new Blob([text], { type: 'text/plain' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
@@ -137,14 +240,92 @@
         URL.revokeObjectURL(url);
     });
 
+    function renderTurns() {
+        const container = document.getElementById('turns-container');
+        container.innerHTML = '';
+        if (!turns.length) {
+            container.innerHTML = '<div class="text-gray-400">No se pudo transcribir el audio o no se detectó voz.</div>';
+            return;
+        }
+        
+        // Agregar explicación de los botones
+        const explanation = document.createElement('div');
+        explanation.className = 'mb-4 p-3 bg-blue-50 rounded border-l-4 border-blue-400';
+        explanation.innerHTML = `
+            <h3 class="font-semibold text-blue-800 mb-2">¿Cómo usar los botones de hablante?</h3>
+            <p class="text-sm text-blue-700">
+                • <strong>Hablante 1</strong>: Marca este turno como la primera persona<br>
+                • <strong>Hablante 2</strong>: Marca este turno como la segunda persona<br>
+                • Los turnos se separan automáticamente por silencios detectados en el audio<br>
+                • <strong>Click en el tiempo</strong> para reproducir desde ese punto
+            </p>
+        `;
+        container.appendChild(explanation);
+        
+        turns.forEach((turn, idx) => {
+            const div = document.createElement('div');
+            div.className = 'mb-3 p-3 rounded border flex flex-col bg-white shadow-sm hover:shadow-md transition-shadow turn-block';
+            div.setAttribute('data-turn', idx);
+            
+            const time = document.createElement('div');
+            time.className = 'text-xs text-gray-500 mb-1 font-mono cursor-pointer hover:text-blue-600';
+            time.textContent = `[${turn.start.toFixed(2)} - ${turn.end.toFixed(2)}]`;
+            time.onclick = () => seekToTime(turn.start);
+            time.title = 'Click para reproducir desde aquí';
+            
+            const text = document.createElement('div');
+            text.className = 'mb-2 text-gray-800';
+            text.textContent = turn.text;
+            
+            const speakerBtns = document.createElement('div');
+            speakerBtns.className = 'flex gap-2 mb-1';
+            ['Hablante 1', 'Hablante 2'].forEach(speaker => {
+                const btn = document.createElement('button');
+                btn.textContent = speaker;
+                btn.className = 'px-3 py-1 rounded text-sm font-medium transition-colors ' + 
+                    (speakerMap[idx] === speaker ? 'bg-blue-500 text-white' : 'bg-gray-200 hover:bg-gray-300');
+                btn.onclick = () => {
+                    speakerMap[idx] = speaker;
+                    renderTurns();
+                };
+                speakerBtns.appendChild(btn);
+            });
+            
+            const speakerLabel = document.createElement('span');
+            speakerLabel.className = 'text-xs ml-2 text-gray-600';
+            speakerLabel.textContent = speakerMap[idx] ? `✓ ${speakerMap[idx]}` : 'Sin asignar';
+            speakerBtns.appendChild(speakerLabel);
+            
+            div.appendChild(time);
+            div.appendChild(text);
+            div.appendChild(speakerBtns);
+            container.appendChild(div);
+        });
+    }
+
     // Transcribir archivo seleccionado
     transcribeBtn.addEventListener('click', () => {
         if (selectedIdx !== null && files[selectedIdx]) {
             const formData = new FormData();
             formData.append('audio', files[selectedIdx]);
-            transcriptionArea.value = '';
+            document.getElementById('turns-container').innerHTML = '';
+            turns = [];
+            speakerMap = {};
+            
+            // Crear URL para el audio
+            if (audioUrl) URL.revokeObjectURL(audioUrl);
+            audioUrl = URL.createObjectURL(files[selectedIdx]);
+            
+            // Configurar audio
+            currentAudio = new Audio(audioUrl);
+            currentAudio.addEventListener('loadedmetadata', () => {
+                audioDuration = currentAudio.duration;
+                updateTimeDisplay();
+            });
+            
             transcribeStatus.textContent = 'Transcribiendo...';
             progressBarContainer.classList.remove('hidden');
+            
             fetch('/api/transcribe/', {
                 method: 'POST',
                 body: formData,
@@ -154,14 +335,22 @@
             })
             .then(response => response.json())
             .then(data => {
-                transcriptionArea.value = data.transcription || 'Error en la transcripción';
+                if (data.turns && Array.isArray(data.turns) && data.turns.length > 0) {
+                    turns = data.turns;
+                    renderTurns();
+                    transcribeStatus.textContent = data.message || `Transcripción completada: ${turns.length} turnos detectados`;
+                } else {
+                    document.getElementById('turns-container').innerHTML = '<div class="text-gray-400">No se pudo transcribir el audio o no se detectó voz.</div>';
+                    transcribeStatus.textContent = 'No se detectó voz en el audio';
+                }
                 transcribeStatus.textContent = '';
                 progressBarContainer.classList.add('hidden');
             })
-            .catch(() => {
-                transcriptionArea.value = 'Error en la transcripción';
-                transcribeStatus.textContent = '';
+            .catch((error) => {
+                document.getElementById('turns-container').innerHTML = '<div class="text-red-400">Error en la transcripción</div>';
+                transcribeStatus.textContent = 'Error en la transcripción';
                 progressBarContainer.classList.add('hidden');
+                console.error('Error:', error);
             });
         }
     });
