@@ -1,13 +1,28 @@
-from django.http import HttpResponse
+from django.http import HttpResponse, JsonResponse
 import os
 import tempfile
 import shutil
 from django.shortcuts import render
 from .forms import AudioUploadForm
 from .whisper_utils import transcribe_audio
+from django.views.decorators.csrf import csrf_exempt
+
 
 def test_view(request):
     return HttpResponse("¡Django funciona!")
+
+@csrf_exempt
+def transcribe_api(request):
+    if request.method == 'POST' and request.FILES.get('audio'):
+        audio_file = request.FILES['audio']
+        with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
+            for chunk in audio_file.chunks():
+                temp_file.write(chunk)
+            temp_file_path = temp_file.name
+        transcription = transcribe_audio(temp_file_path)
+        os.remove(temp_file_path)
+        return JsonResponse({'transcription': transcription})
+    return JsonResponse({'error': 'Invalid request'}, status=400)
 
 def transcribe_view(request):
     transcription = None
