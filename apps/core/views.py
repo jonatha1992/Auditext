@@ -7,24 +7,25 @@ import time
 from django.shortcuts import render
 from .forms import AudioUploadForm
 from .whisper_utils import transcribe_audio
-from django.views.decorators.csrf import csrf_exempt
 
 
 def test_view(request):
     return HttpResponse("¡Django funciona!")
 
-@csrf_exempt
 def transcribe_api(request):
     if request.method == 'POST' and request.FILES.get('audio'):
         audio_file = request.FILES['audio']
+        input_lang = request.POST.get('input_lang', 'es')
+        output_lang = request.POST.get('output_lang', input_lang)
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
             for chunk in audio_file.chunks():
                 temp_file.write(chunk)
             temp_file_path = temp_file.name
-        
+
         try:
             # Simular progreso durante la transcripción
-            transcription_turns = transcribe_audio(temp_file_path)
+            translate = output_lang == 'en' and input_lang != 'en'
+            transcription_turns = transcribe_audio(temp_file_path, translate=translate, language=input_lang)
             os.remove(temp_file_path)
             return JsonResponse({
                 'turns': transcription_turns,

@@ -29,9 +29,9 @@
 
 ## 🚀 Características Principales
 
-- **Transcripción de Audio**: Convierte archivos de audio a texto usando Google Speech Recognition
-- **Traducción Automática**: Traduce las transcripciones entre múltiples idiomas
-- **Procesamiento Asíncrono**: Utiliza Celery para procesar archivos grandes en segundo plano
+ - **Transcripción de Audio**: Se realiza de forma local con el modelo Whisper
+ - **Traducción a Inglés (opcional)**: Usa la función de traducción integrada en Whisper
+ - **Procesamiento en Segundo Plano**: (opcional) se puede usar Celery para tareas largas
 - **Mejoramiento de Audio**: Aplica filtros de audio para mejorar la calidad de la transcripción
 - **Detección de Actividad de Voz (VAD)**: Segmenta automáticamente el audio basándose en silencios
 - **Interfaz Web Moderna**: Desarrollada con Bootstrap 5 para una experiencia de usuario óptima
@@ -61,7 +61,6 @@ celery
 redis
 speech_recognition
 pydub
-googletrans
 mutagen
 webrtcvad
 ```
@@ -90,6 +89,8 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edita el archivo .env con tus configuraciones
 ```
+En caso de que FFmpeg no esté en una ruta estándar puedes definir la variable
+de entorno `FFMPEG_PATH` apuntando al directorio que contiene el ejecutable.
 
 4. Aplica las migraciones:
 ```bash
@@ -127,24 +128,30 @@ celery -A django_project worker -l info
 1. Accede al panel de administración en `http://localhost:8000/admin`
 2. Gestiona usuarios, archivos de audio, transcripciones y traducciones
 
+### Aplicación de Escritorio
+
+Dentro de la carpeta `app_escritorio/` se encuentra una versión en Tkinter con
+funcionalidades equivalentes. Para ejecutarla solo necesitas:
+
+```bash
+python app_escritorio/Main.py
+```
+
 ## 🛠️ Arquitectura del Sistema
 
 ### Componentes Principales
 
-- **`models.py`**: Definición de modelos para archivos de audio, transcripciones y traducciones
-- **`views.py`**: Vistas para la interfaz de usuario y API
-- **`audio_processing.py`**: Funciones para procesamiento de audio y transcripción
-- **`tasks.py`**: Tareas asíncronas de Celery para procesamiento en segundo plano
+- **`whisper_utils.py`**: Módulo de segmentación y transcripción local con Whisper.
+- **`views.py`**: Endpoints de la aplicación web y lógica de carga de archivos.
+- **`app_escritorio/`**: Carpeta con la versión de escritorio construida en Tkinter.
 
 ### Tecnologías Utilizadas
 
 - **Framework Web**: Django
-- **Reconocimiento de Voz**: Google Speech Recognition API
+- **Reconocimiento de Voz**: Whisper de OpenAI ejecutado de forma local
 - **Procesamiento de Audio**: PyDub con FFmpeg
-- **Filtrado Digital**: SciPy para mejoramiento de calidad
-- **Traducción**: Google Translate API
-- **Frontend**: Bootstrap 5, JavaScript
-- **Tareas Asíncronas**: Celery con Redis
+- **Traducción**: Integrada en Whisper (solo a inglés)
+- **Frontend**: Tailwind CSS y JavaScript
 
 ## ⚙️ Configuración Avanzada
 

@@ -50,20 +50,22 @@
                 <option>large</option>
             </select>
             <label class="ml-4">Idioma Entrada:</label>
-            <select class="border rounded px-2 py-1">
-                <option>Spanish</option>
-                <option>English</option>
+            <select id="input-lang" class="border rounded px-2 py-1">
+                <option value="es">Spanish</option>
+                <option value="en">English</option>
             </select>
             <label class="ml-4">Idioma Salida:</label>
-            <select class="border rounded px-2 py-1">
-                <option>Spanish</option>
-                <option>English</option>
+            <select id="output-lang" class="border rounded px-2 py-1">
+                <option value="es">Spanish</option>
+                <option value="en">English</option>
             </select>
         </div>
         <div class="flex items-center gap-2 mb-2">
             <button id="play-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors">&#9654;</button>
             <button id="pause-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>&#10074;&#10074;</button>
             <button id="stop-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>&#9724;</button>
+            <button id="rewind-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>&#9664; 5s</button>
+            <button id="forward-btn" class="bg-gray-200 p-2 rounded-full hover:bg-gray-300 transition-colors" disabled>5s &#9654;</button>
             <span id="time-display">00:00 / 00:00</span>
         </div>
         <div class="text-xs text-gray-500 mt-2">
@@ -82,11 +84,15 @@
     const transcriptionArea = document.getElementById('transcription-area');
     const transcribeStatus = document.getElementById('transcribe-status');
     const progressBarContainer = document.getElementById('progress-bar-container');
-    
+    const inputLangSelect = document.getElementById('input-lang');
+    const outputLangSelect = document.getElementById('output-lang');
+
     // Controles de reproducción
     const playBtn = document.getElementById('play-btn');
     const pauseBtn = document.getElementById('pause-btn');
     const stopBtn = document.getElementById('stop-btn');
+    const rewindBtn = document.getElementById('rewind-btn');
+    const forwardBtn = document.getElementById('forward-btn');
     const timeDisplay = document.getElementById('time-display');
     
     let files = [];
@@ -98,6 +104,22 @@
     let currentTime = 0;
     let audioDuration = 0;
     let audioUrl = null;
+
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let cookie of cookies) {
+                cookie = cookie.trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+    const csrftoken = getCookie('csrftoken');
 
     // Funciones del reproductor
     function formatTime(seconds) {
@@ -117,6 +139,8 @@
         playBtn.disabled = true;
         pauseBtn.disabled = false;
         stopBtn.disabled = false;
+        rewindBtn.disabled = false;
+        forwardBtn.disabled = false;
     }
 
     function pauseAudio() {
@@ -136,8 +160,20 @@
         playBtn.disabled = false;
         pauseBtn.disabled = true;
         stopBtn.disabled = true;
+        rewindBtn.disabled = true;
+        forwardBtn.disabled = true;
         updateTimeDisplay();
         highlightCurrentTurn();
+    }
+
+    function seekForward() {
+        if (!currentAudio) return;
+        currentAudio.currentTime = Math.min(currentAudio.currentTime + 5, audioDuration);
+    }
+
+    function seekBackward() {
+        if (!currentAudio) return;
+        currentAudio.currentTime = Math.max(currentAudio.currentTime - 5, 0);
     }
 
     function seekToTime(time) {
@@ -169,6 +205,8 @@
     playBtn.addEventListener('click', playAudio);
     pauseBtn.addEventListener('click', pauseAudio);
     stopBtn.addEventListener('click', stopAudio);
+    rewindBtn.addEventListener('click', seekBackward);
+    forwardBtn.addEventListener('click', seekForward);
 
     // Actualizar tiempo durante reproducción
     function updateTime() {
@@ -303,56 +341,53 @@
         });
     }
 
-    // Transcribir archivo seleccionado
-    transcribeBtn.addEventListener('click', () => {
-        if (selectedIdx !== null && files[selectedIdx]) {
+    // Transcribir archivos seleccionados secuencialmente
+    transcribeBtn.addEventListener('click', async () => {
+        if (!files.length) return;
+
+        document.getElementById('turns-container').innerHTML = '';
+        turns = [];
+        speakerMap = {};
+
+        // Usar el primer archivo para la reproducción
+        if (audioUrl) URL.revokeObjectURL(audioUrl);
+        audioUrl = URL.createObjectURL(files[0]);
+        currentAudio = new Audio(audioUrl);
+        currentAudio.addEventListener('loadedmetadata', () => {
+            audioDuration = currentAudio.duration;
+            updateTimeDisplay();
+        });
+
+        transcribeStatus.textContent = 'Transcribiendo...';
+        progressBarContainer.classList.remove('hidden');
+
+        for (const file of files) {
             const formData = new FormData();
-            formData.append('audio', files[selectedIdx]);
-            document.getElementById('turns-container').innerHTML = '';
-            turns = [];
-            speakerMap = {};
-            
-            // Crear URL para el audio
-            if (audioUrl) URL.revokeObjectURL(audioUrl);
-            audioUrl = URL.createObjectURL(files[selectedIdx]);
-            
-            // Configurar audio
-            currentAudio = new Audio(audioUrl);
-            currentAudio.addEventListener('loadedmetadata', () => {
-                audioDuration = currentAudio.duration;
-                updateTimeDisplay();
-            });
-            
-            transcribeStatus.textContent = 'Transcribiendo...';
-            progressBarContainer.classList.remove('hidden');
-            
-            fetch('/api/transcribe/', {
-                method: 'POST',
-                body: formData,
-                headers: {
-                    'X-Requested-With': 'XMLHttpRequest'
+            formData.append('audio', file);
+            formData.append('input_lang', inputLangSelect.value);
+            formData.append('output_lang', outputLangSelect.value);
+
+            try {
+                const response = await fetch('/api/transcribe/', {
+                    method: 'POST',
+                    body: formData,
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest',
+                        'X-CSRFToken': csrftoken
+                    }
+                });
+                const data = await response.json();
+                if (data.turns && Array.isArray(data.turns)) {
+                    turns = turns.concat(data.turns);
                 }
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.turns && Array.isArray(data.turns) && data.turns.length > 0) {
-                    turns = data.turns;
-                    renderTurns();
-                    transcribeStatus.textContent = data.message || `Transcripción completada: ${turns.length} turnos detectados`;
-                } else {
-                    document.getElementById('turns-container').innerHTML = '<div class="text-gray-400">No se pudo transcribir el audio o no se detectó voz.</div>';
-                    transcribeStatus.textContent = 'No se detectó voz en el audio';
-                }
-                transcribeStatus.textContent = '';
-                progressBarContainer.classList.add('hidden');
-            })
-            .catch((error) => {
-                document.getElementById('turns-container').innerHTML = '<div class="text-red-400">Error en la transcripción</div>';
-                transcribeStatus.textContent = 'Error en la transcripción';
-                progressBarContainer.classList.add('hidden');
+            } catch (error) {
                 console.error('Error:', error);
-            });
+            }
         }
+
+        renderTurns();
+        transcribeStatus.textContent = '';
+        progressBarContainer.classList.add('hidden');
     });
     </script>
 </body>

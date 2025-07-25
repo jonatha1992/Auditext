@@ -1,11 +1,15 @@
 import os
 import sys
 
-if sys.platform == "win32":
-    ffmpeg_path = r"D:\Repositorio\jonatha1992\Auditext\ffmpeg\bin"
-else:
-    ffmpeg_path = "/usr/bin"
+# Permitir configurar la ruta de FFmpeg mediante la variable de entorno
+ffmpeg_path = os.environ.get("FFMPEG_PATH")
+if not ffmpeg_path:
+    if sys.platform == "win32":
+        ffmpeg_path = r"D:\Repositorio\jonatha1992\Auditext\ffmpeg\bin"
+    else:
+        ffmpeg_path = "/usr/bin"
 
+# Asegurar que FFmpeg esté en el PATH
 os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
 
 import whisper
@@ -36,9 +40,12 @@ def vad_segmentacion(audio, min_silence_len=1000, silence_thresh=-40, keep_silen
     
     return chunks
 
-def transcribe_audio(file_path, pause_threshold=1.0):
+def transcribe_audio(file_path, pause_threshold=1.0, translate=False, language=None):
     """
-    Transcribe el audio usando VAD de pydub para separar turnos por silencios
+    Transcribe el audio usando VAD de pydub para separar turnos por silencios.
+
+    Si ``translate`` es ``True`` se realiza la traducción a inglés utilizando
+    la propia capacidad del modelo Whisper.
     """
     model = get_model()
     
@@ -62,7 +69,8 @@ def transcribe_audio(file_path, pause_threshold=1.0):
         
         try:
             # Transcribir chunk con Whisper
-            result = model.transcribe(temp_chunk_path)
+            task = 'translate' if translate else 'transcribe'
+            result = model.transcribe(temp_chunk_path, task=task, language=language)
             text = result['text'].strip()
             
             if text and text != "[inaudible]" and text != "[chunk vacío]":
