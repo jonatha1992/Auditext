@@ -27,6 +27,18 @@
         <!-- Transcripción -->
         <section class="bg-white rounded shadow flex-[2] flex flex-col p-4">
             <h2 class="text-lg font-semibold mb-2">Transcripción</h2>
+            <div class="mb-4 p-3 bg-blue-50 rounded border-l-4 border-blue-400">
+                <h3 class="font-semibold text-blue-800 mb-2">Método de separación:</h3>
+                <div class="flex gap-4">
+                    <label class="flex items-center">
+                        <input type="radio" name="separation_method" value="vad" checked class="mr-2" disabled>
+                        <span class="text-sm">VAD (por silencios)</span>
+                    </label>
+                </div>
+                <p class="text-xs text-blue-700 mt-2">
+                    • <strong>VAD</strong>: Separa por pausas y silencios (como la app de escritorio)
+                </p>
+            </div>
             <div id="turns-container" class="flex-1 border rounded p-2 mb-4 overflow-y-auto bg-gray-50"></div>
             <textarea id="transcription-area" class="hidden"></textarea>
             <div class="flex gap-2 justify-end">
@@ -44,10 +56,10 @@
     <footer class="bg-white shadow p-4 flex flex-col items-center">
         <div class="flex items-center gap-4 mb-2">
             <label>Modelo de Transcriptor:</label>
-            <select class="border rounded px-2 py-1">
-                <option>medium</option>
-                <option>small</option>
-                <option>large</option>
+            <select id="whisper-model-select" class="border rounded px-2 py-1">
+                <option value="medium">medium</option>
+                <option value="small">small</option>
+                <option value="large">large</option>
             </select>
             <label class="ml-4">Idioma Entrada:</label>
             <select class="border rounded px-2 py-1">
@@ -277,6 +289,14 @@
             text.className = 'mb-2 text-gray-800';
             text.textContent = turn.text;
             
+            // Mostrar hablante automático si está disponible
+            if (turn.speaker) {
+                const speakerAuto = document.createElement('div');
+                speakerAuto.className = 'text-xs text-green-600 mb-1';
+                speakerAuto.textContent = `Hablante detectado automáticamente: ${turn.speaker}`;
+                div.appendChild(speakerAuto);
+            }
+            
             const speakerBtns = document.createElement('div');
             speakerBtns.className = 'flex gap-2 mb-1';
             ['Hablante 1', 'Hablante 2'].forEach(speaker => {
@@ -308,6 +328,12 @@
         if (selectedIdx !== null && files[selectedIdx]) {
             const formData = new FormData();
             formData.append('audio', files[selectedIdx]);
+            // Enviar modelo seleccionado
+            const whisperModel = document.getElementById('whisper-model-select').value;
+            formData.append('whisper_model', whisperModel);
+            
+            // Ya no se envía use_diarization
+            
             document.getElementById('turns-container').innerHTML = '';
             turns = [];
             speakerMap = {};
@@ -323,7 +349,8 @@
                 updateTimeDisplay();
             });
             
-            transcribeStatus.textContent = 'Transcribiendo...';
+            const methodText = 'VAD (silencios)';
+            transcribeStatus.textContent = `Transcribiendo usando ${methodText}...`;
             progressBarContainer.classList.remove('hidden');
             
             fetch('/api/transcribe/', {

@@ -17,19 +17,22 @@ def test_view(request):
 def transcribe_api(request):
     if request.method == 'POST' and request.FILES.get('audio'):
         audio_file = request.FILES['audio']
+        # Obtener modelo de Whisper desde el frontend
+        whisper_model = request.POST.get('whisper_model', 'medium')
         with tempfile.NamedTemporaryFile(delete=False, suffix='.wav') as temp_file:
             for chunk in audio_file.chunks():
                 temp_file.write(chunk)
             temp_file_path = temp_file.name
-        
         try:
-            # Simular progreso durante la transcripción
-            transcription_turns = transcribe_audio(temp_file_path)
+            # Pasar el modelo seleccionado al backend
+            transcription_turns = transcribe_audio(temp_file_path, whisper_model=whisper_model)
             os.remove(temp_file_path)
+            method_used = "VAD (silencios)"
             return JsonResponse({
                 'turns': transcription_turns,
                 'status': 'completed',
-                'message': f'Transcripción completada: {len(transcription_turns)} turnos detectados'
+                'method': method_used,
+                'message': f'Transcripción completada usando {method_used}: {len(transcription_turns)} turnos detectados'
             })
         except Exception as e:
             os.remove(temp_file_path)
