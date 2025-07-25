@@ -12,15 +12,6 @@ import whisper
 from pydub.silence import detect_nonsilent
 from pydub import AudioSegment
 
-# Importar pyannote.audio para diarización
-try:
-    from pyannote.audio import Pipeline
-    from pyannote.audio.pipelines.utils.hook import ProgressHook
-    DIARIZATION_AVAILABLE = True
-except ImportError:
-    print("pyannote.audio no está disponible. La diarización automática no funcionará.")
-    DIARIZATION_AVAILABLE = False
-
 _model_cache = {}
 
 def get_model(model_name="medium"):
@@ -30,64 +21,6 @@ def get_model(model_name="medium"):
         _model_cache[model_name] = whisper.load_model(model_name)
         print(f'Modelo Whisper {model_name} cargado.')
     return _model_cache[model_name]
-
-def get_diarization_pipeline():
-    """
-    Obtiene el pipeline de diarización de pyannote.audio
-    Requiere token de HuggingFace para descargar el modelo
-    """
-    global _diarization_pipeline
-    
-    if not DIARIZATION_AVAILABLE:
-        return None
-        
-    if _diarization_pipeline is None:
-        try:
-            token = "os.getenv("HUGGINGFACE_TOKEN")"  # Token de HuggingFace del usuario
-            _diarization_pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization@2.1",
-                use_auth_token=token
-            )
-            print("Modelo de diarización cargado.")
-        except Exception as e:
-            print(f"Error cargando modelo de diarización: {e}")
-            print("Para usar diarización automática, necesitas:")
-            print("1. Crear cuenta en https://huggingface.co/join")
-            print("2. Ir a https://huggingface.co/settings/tokens y crear un token")
-            print("3. Usar el token en la función get_diarization_pipeline()")
-            return None
-    
-    return _diarization_pipeline
-
-def diarize_speakers(audio_path):
-    """
-    Detecta automáticamente los hablantes en el audio
-    Retorna una lista de intervalos con el hablante asignado
-    """
-    pipeline = get_diarization_pipeline()
-    if pipeline is None:
-        return []
-    
-    try:
-        print("Analizando hablantes...")
-        diarization = pipeline(audio_path)
-        
-        # Extraer los intervalos de cada hablante
-        speaker_segments = []
-        for turn, _, speaker in diarization.itertracks(yield_label=True):
-            speaker_segments.append({
-                'start': turn.start,
-                'end': turn.end,
-                'speaker': speaker,
-                'duration': turn.end - turn.start
-            })
-        
-        print(f"Diarización completada: {len(speaker_segments)} segmentos de hablantes detectados")
-        return speaker_segments
-        
-    except Exception as e:
-        print(f"Error en diarización: {e}")
-        return []
 
 def vad_segmentacion(audio, min_silence_len=1000, silence_thresh=-40, keep_silence=300):
     """
