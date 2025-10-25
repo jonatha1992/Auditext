@@ -55,8 +55,18 @@ def check_proxy():
 
 
 def detectar_y_configurar_proxy():
+    """
+    Configura el proxy desde variables de entorno si están definidas.
+
+    SECURITY NOTE: El proxy nunca debe estar hardcodeado en el código.
+    Configure HTTP_PROXY y HTTPS_PROXY en el archivo .env si es necesario.
+
+    Returns:
+        bool: True si se configuró un proxy, False si hay conexión directa
+    """
     import urllib.request
 
+    # Primero intentar conexión directa
     proxy_handler = urllib.request.ProxyHandler()
     opener = urllib.request.build_opener(proxy_handler)
     try:
@@ -64,22 +74,39 @@ def detectar_y_configurar_proxy():
         logger.info("Conexión directa exitosa, no se necesita proxy.")
         return False
     except Exception:
-        logger.info("Conexión directa fallida, configurando proxy...")
-        os.environ["http_proxy"] = "http://proxy.psa.gob.ar:3128"
-        os.environ["https_proxy"] = "http://proxy.psa.gob.ar:3128"
-        try:
-            proxy_handler = urllib.request.ProxyHandler(
-                {
-                    "http": "http://proxy.psa.gob.ar:3128",
-                    "https": "http://proxy.psa.gob.ar:3128",
-                }
+        logger.info("Conexión directa fallida, verificando configuración de proxy...")
+
+        # Cargar proxy desde variables de entorno
+        http_proxy = os.getenv("HTTP_PROXY", "")
+        https_proxy = os.getenv("HTTPS_PROXY", "")
+
+        if not http_proxy and not https_proxy:
+            logger.warning(
+                "No se pudo conectar y no hay proxy configurado.\n"
+                "Si está detrás de un proxy, configure HTTP_PROXY y HTTPS_PROXY en el archivo .env"
             )
+            return False
+
+        # Configurar proxy desde variables de entorno
+        if http_proxy:
+            os.environ["http_proxy"] = http_proxy
+        if https_proxy:
+            os.environ["https_proxy"] = https_proxy
+
+        try:
+            proxy_config = {}
+            if http_proxy:
+                proxy_config["http"] = http_proxy
+            if https_proxy:
+                proxy_config["https"] = https_proxy
+
+            proxy_handler = urllib.request.ProxyHandler(proxy_config)
             opener = urllib.request.build_opener(proxy_handler)
             opener.open("http://www.google.com", timeout=5)
-            logger.info("Proxy configurado exitosamente.")
+            logger.info(f"Proxy configurado exitosamente desde variables de entorno.")
             return True
-        except Exception:
-            logger.error("No se pudo establecer conexión incluso con el proxy.")
+        except Exception as e:
+            logger.error(f"No se pudo establecer conexión incluso con el proxy: {e}")
             return False
 
 

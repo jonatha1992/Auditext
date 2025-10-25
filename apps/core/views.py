@@ -13,6 +13,39 @@ from django.views.decorators.csrf import csrf_exempt
 def test_view(request):
     return HttpResponse("¡Django funciona!")
 
+# =============================================================================
+# ⚠️  CRITICAL SECURITY WARNING - CSRF PROTECTION DISABLED ⚠️
+# =============================================================================
+# The @csrf_exempt decorator below DISABLES Cross-Site Request Forgery protection.
+# This creates a SERIOUS SECURITY VULNERABILITY that allows malicious websites
+# to make unauthorized requests to this endpoint on behalf of authenticated users.
+#
+# CURRENT RISK LEVEL: HIGH
+# - Any website can submit requests to this endpoint
+# - No authentication or authorization is implemented
+# - No rate limiting to prevent abuse
+# - File uploads are not properly validated beyond basic checks
+#
+# ❌ THIS IS ONLY ACCEPTABLE FOR:
+#    - Local development and testing
+#    - Proof-of-concept/demo applications
+#    - Internal tools behind a secure network
+#
+# ✅ BEFORE PRODUCTION DEPLOYMENT, YOU MUST:
+#    1. Remove the @csrf_exempt decorator completely
+#    2. Implement proper authentication (Options: JWT tokens, Django Session Auth, API Keys)
+#    3. Re-enable CSRF protection for all POST/PUT/DELETE endpoints
+#    4. Add rate limiting (e.g., django-ratelimit, throttling middleware)
+#    5. Implement file upload validation (file type, size, content verification)
+#    6. Add request logging and monitoring for security events
+#    7. Use HTTPS in production to encrypt data in transit
+#    8. Configure CORS properly if API is accessed from web frontend
+#
+# REFERENCES:
+#    - Django CSRF Protection: https://docs.djangoproject.com/en/stable/ref/csrf/
+#    - OWASP CSRF Prevention: https://cheatsheetseries.owasp.org/cheatsheets/Cross-Site_Request_Forgery_Prevention_Cheat_Sheet.html
+#    - Django REST Framework Authentication: https://www.django-rest-framework.org/api-guide/authentication/
+# =============================================================================
 @csrf_exempt
 def transcribe_api(request):
     if request.method == 'POST' and request.FILES.get('audio'):

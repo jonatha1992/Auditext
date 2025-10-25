@@ -10,18 +10,90 @@ db.sqlite3
 db.sqlite3-journal
 /media
 /staticfiles
+/Audios
 
-# Environment
+# Environment variables - SECURITY CRITICAL
+.env
+.env.*
+.env.local
+.env.*.local
+!.env.example
+# Allow .env.example to be committed as a template
+
+# Virtual environments
 .venv
 venv/
 ENV/
+env/
+*.egg-info/
+
+# Security files - NEVER COMMIT THESE
+*.key
+*.pem
+*.crt
+*.cer
+*.p12
+*.pfx
+*.keystore
+secrets/
+secrets.json
+credentials.json
+*secret*
+*.token
+.credentials/
+
+# Database backups and dumps
+*.sql
+*.backup
+*.dump
+*.sqlite
+*.db
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+*.swp
+*.swo
+*~
+.cache/
 
 # IDE files
 .idea/
 .vscode/
-*.swp
-*.swo
+*.sublime-project
+*.sublime-workspace
+.project
+.pydevproject
+.settings/
 
 # OS files
 .DS_Store
 Thumbs.db
+desktop.ini
+
+# Python distribution / packaging
+dist/
+build/
+*.egg
+.eggs/
+*.whl
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+
+# MyPy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Logs
+logs/
+*.log.*
+.env.example
+CLAUDE.md
+.claude/settings.local.json

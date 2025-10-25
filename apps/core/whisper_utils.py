@@ -1,11 +1,26 @@
 import os
 import sys
+from pathlib import Path
 
+# =============================================================================
+# FFmpeg Path Configuration
+# =============================================================================
+# SECURITY NOTE: Never hardcode absolute paths like "D:\user\project\ffmpeg"
+# Use relative paths from project root or environment variables
+# =============================================================================
+
+# Get project base directory (3 levels up from this file)
+BASE_DIR = Path(__file__).resolve().parent.parent.parent
+
+# Load FFmpeg path from environment variable or use relative path
 if sys.platform == "win32":
-    ffmpeg_path = r"D:\Repositorio\jonatha1992\Auditext\ffmpeg\bin"
+    # Windows: Allow override from environment, otherwise use relative path
+    ffmpeg_path = os.getenv("FFMPEG_PATH", str(BASE_DIR / "ffmpeg" / "bin"))
 else:
-    ffmpeg_path = "/usr/bin"
+    # Linux/Mac: Allow override from environment, otherwise use system path
+    ffmpeg_path = os.getenv("FFMPEG_PATH", "/usr/bin")
 
+# Add FFmpeg to PATH
 os.environ["PATH"] = ffmpeg_path + os.pathsep + os.environ.get("PATH", "")
 
 import whisper

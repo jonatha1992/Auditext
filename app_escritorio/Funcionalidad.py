@@ -124,15 +124,35 @@ def transcribir_archivo(audio_path, idioma_entrada):
 
 
 def traducir_texto(texto, idioma_salida):
+    """
+    Traduce texto al idioma de salida especificado.
+
+    SECURITY NOTE: Usa proxy desde variables de entorno si están configuradas.
+    Configure HTTP_PROXY y HTTPS_PROXY en el archivo .env si es necesario.
+
+    Args:
+        texto (str): Texto a traducir
+        idioma_salida (str): Código del idioma de destino
+
+    Returns:
+        str: Texto traducido o mensaje de error
+    """
     try:
-        if check_proxy() == "Proxy configurado:":
+        # Cargar configuración de proxy desde variables de entorno
+        http_proxy = os.getenv("HTTP_PROXY", "")
+        https_proxy = os.getenv("HTTPS_PROXY", "")
+
+        # Configurar traductor con o sin proxy según disponibilidad
+        if http_proxy and https_proxy:
             proxy_config = {
-                "http": "http://proxy.psa.gob.ar:3128",
-                "https": "http://proxy.psa.gob.ar:3128",
+                "http": http_proxy,
+                "https": https_proxy,
             }
             translator = Translator(proxies=proxy_config)
+            logger.info("Traductor configurado con proxy desde variables de entorno.")
         else:
             translator = Translator()
+            logger.info("Traductor configurado sin proxy (conexión directa).")
 
         traduccion = translator.translate(texto, dest=idioma_salida)
         if traduccion:
