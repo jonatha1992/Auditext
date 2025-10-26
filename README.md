@@ -1,31 +1,43 @@
 # AudioText - Transcriptor y Traductor de Audio
 
-**AudioText** es una aplicación web desarrollada con Django que permite transcribir y traducir archivos de audio de manera eficiente y precisa. El sistema utiliza reconocimiento de voz avanzado y tecnologías de procesamiento de audio para convertir contenido hablado en texto.
+**AudioText** es una aplicación de transcripción de audio que permite convertir archivos de audio a texto de manera eficiente y precisa. El sistema utiliza reconocimiento de voz avanzado y tecnologías de procesamiento de audio para convertir contenido hablado en texto.
 
-## ⚠️ MODO DE PRUEBA TEMPORAL
+## 🔄 Estado del Proyecto: En Migración
 
-**Esta versión tiene el sistema de inicio de sesión y registro temporalmente deshabilitado para permitir pruebas rápidas del sistema de transcripción.**
+**La aplicación web está siendo migrada de Django a una arquitectura SSR (Server-Side Rendering) moderna.**
 
-### Cambios temporales realizados:
-- ✅ Eliminado el flujo de inicio de sesión y registro
-- ✅ La URL raíz (/) redirige directamente a la página de subir archivos
-- ✅ Todas las funcionalidades de carga, procesamiento y transcripción funcionan sin autenticación
-- ✅ Navegación simplificada para acceso directo a las funciones principales
-- ✅ Se usa un usuario de prueba automáticamente para todas las operaciones
+### Versiones Disponibles:
+- **Aplicación de Escritorio**: Versión estable con interfaz gráfica completa (recomendada)
+- **Aplicación Web (Django)**: Versión legacy en modo de prueba
+- **Nueva Web (SSR)**: En desarrollo activo (próximamente)
 
-### Navegación disponible:
-- **Subir Audio**: Sube archivos de audio para transcribir
-- **Archivos de Audio**: Ve todos los archivos subidos
-- **Panel**: Estadísticas generales del sistema
-- **Acerca de**: Información sobre la aplicación
-- **Contacto**: Formulario de contacto
+## 💾 Descargar Aplicación de Escritorio
 
-### Para restaurar la autenticación:
-1. Descomentar las líneas relacionadas con autenticación en `views.py`
-2. Restaurar `LoginRequiredMixin` y `@login_required` en las vistas
-3. Descomentar las URLs de autenticación en `myproject/urls.py`
-4. Restaurar la configuración de login en `settings.py`
-5. Restaurar el contenido condicional en las plantillas
+**¿Prefieres usar AudioText sin instalación?**
+
+Descarga el prototipo de escritorio listo para usar:
+
+**[📥 Descargar Prototipo de Escritorio](https://drive.google.com/drive/folders/1xQjfPNuMF6r0xZRcek96iU9X9TViqP21?usp=sharing)**
+
+Esta versión incluye:
+- ✅ Interfaz gráfica standalone (no requiere instalación de Python)
+- ✅ Todas las dependencias incluidas
+- ✅ Listo para ejecutar en Windows
+- ✅ Procesamiento local de audio
+- ✅ Funcionalidad completa de transcripción
+
+## ⚠️ Versión Web Django (Legacy)
+
+**La versión web Django está en modo de mantenimiento mientras se completa la migración a SSR.**
+
+### Estado actual:
+- ✅ Sistema de autenticación deshabilitado para pruebas
+- ✅ Funcionalidades básicas de transcripción operativas
+- ⚠️ No se recomienda para producción
+- 🔄 Será reemplazada por la nueva arquitectura SSR
+
+### Recomendación:
+Para uso en producción, utiliza la **aplicación de escritorio** mientras se completa la migración web.
 
 ## 🚀 Características Principales
 
@@ -72,60 +84,63 @@ webrtcvad
 
 ## 📦 Instalación
 
-1. Clona este repositorio:
+### Opción 1: Aplicación de Escritorio (Recomendada)
+
+**No requiere instalación de Python ni dependencias.**
+
+1. Descarga el ejecutable desde [Google Drive](https://drive.google.com/drive/folders/1xQjfPNuMF6r0xZRcek96iU9X9TViqP21?usp=sharing)
+2. Extrae el archivo ZIP
+3. Ejecuta `AudioText.exe`
+
+### Opción 2: Desde Código Fuente (Aplicación de Escritorio)
+
+```bash
+git clone https://github.com/jonatha1992/AudioText.git
+cd AudioText/app_escritorio
+python -m venv venv
+source venv/bin/activate  # En Windows: venv\Scripts\activate
+pip install -r ../requirements.txt
+python Main.py
+```
+
+### Opción 3: Versión Web Django (Legacy - Solo para pruebas)
+
+⚠️ **Nota**: Esta versión está en mantenimiento. Se recomienda usar la aplicación de escritorio.
+
 ```bash
 git clone https://github.com/jonatha1992/AudioText.git
 cd AudioText
-```
-
-2. Crea un entorno virtual e instala las dependencias:
-```bash
 python -m venv venv
 source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r requirements.txt
-```
-
-3. Configura las variables de entorno:
-```bash
-cp .env.example .env
-# Edita el archivo .env con tus configuraciones
-```
-
-4. Aplica las migraciones:
-```bash
-python manage.py migrate
-```
-
-5. Crea un superusuario:
-```bash
-python manage.py createsuperuser
-```
-
-6. Inicia el servidor:
-```bash
 python manage.py runserver
 ```
 
-7. En otra terminal, inicia el worker de Celery:
-```bash
-celery -A django_project worker -l info
-```
+Accede en `http://localhost:8000` (no requiere autenticación en modo de prueba)
 
 ## 🎯 Uso
 
-### Interfaz Web
+### Aplicación de Escritorio (Recomendada)
 
-1. Accede a la aplicación en `http://localhost:8000`
-2. Inicia sesión con tu cuenta
-3. Ve a "Subir Audio" y sube un archivo de audio
-4. Configura los parámetros de transcripción
-5. Inicia el proceso de transcripción
-6. Una vez completada, puedes ver, traducir o descargar la transcripción
+1. Ejecuta `AudioText.exe` o `python Main.py`
+2. Haz clic en "Seleccionar Audios" para cargar uno o varios archivos
+3. Los archivos se procesan automáticamente:
+   - Segmentación por VAD (detección de actividad de voz)
+   - Mejoramiento de audio con filtros
+   - Transcripción con Google Speech Recognition
+4. Reproduce los audios y revisa las transcripciones
+5. Exporta los resultados a CSV
 
-### Panel de Administración
+**Formatos soportados**: WAV, MP3, OGG, M4A, AAC, MP4
 
-1. Accede al panel de administración en `http://localhost:8000/admin`
-2. Gestiona usuarios, archivos de audio, transcripciones y traducciones
+### Interfaz Web Django (Legacy)
+
+⚠️ Solo para pruebas de desarrollo
+
+1. Accede a `http://localhost:8000`
+2. Sube archivos de audio (no requiere login)
+3. Selecciona el modelo Whisper (small/medium/large)
+4. Procesa y revisa las transcripciones
 
 ## 🛠️ Arquitectura del Sistema
 
@@ -138,13 +153,23 @@ celery -A django_project worker -l info
 
 ### Tecnologías Utilizadas
 
-- **Framework Web**: Django
+#### Aplicación de Escritorio (Actual)
+- **GUI**: Tkinter
 - **Reconocimiento de Voz**: Google Speech Recognition API
 - **Procesamiento de Audio**: PyDub con FFmpeg
 - **Filtrado Digital**: SciPy para mejoramiento de calidad
-- **Traducción**: Google Translate API
+- **Empaquetado**: PyInstaller
+
+#### Aplicación Web Legacy (Django)
+- **Framework Backend**: Django
 - **Frontend**: Bootstrap 5, JavaScript
 - **Tareas Asíncronas**: Celery con Redis
+- **Estado**: En mantenimiento, será reemplazada
+
+#### Nueva Aplicación Web (SSR - En desarrollo)
+- **Arquitectura**: Server-Side Rendering
+- **Estado**: En desarrollo activo
+- **Detalles**: Por anunciar
 
 ## ⚙️ Configuración Avanzada
 
@@ -160,10 +185,18 @@ celery -A django_project worker -l info
 
 ## 📈 Estado del Proyecto
 
-- **Versión**: 1.0.0
-- **Estado**: Estable
-- **Último Update**: Julio 2025
+- **Versión de Escritorio**: 1.0.0 (Estable - Recomendada)
+- **Versión Web Django**: Legacy (En mantenimiento)
+- **Versión Web SSR**: En desarrollo
+- **Último Update**: Octubre 2025
 - **Desarrollador**: Correa Jonathan
+
+### Roadmap
+- [x] Aplicación de escritorio funcional
+- [x] Versión web Django básica
+- [ ] Migración a arquitectura SSR moderna
+- [ ] API REST unificada
+- [ ] Aplicación móvil (futuro)
 
 ## 🤝 Contribuir
 
