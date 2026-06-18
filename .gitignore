@@ -97,3 +97,5 @@ logs/
 .env.example
 CLAUDE.md
 .claude/settings.local.json
+.atl/.skill-registry.cache.json
+.atl/skill-registry.md
