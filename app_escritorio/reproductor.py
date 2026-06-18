@@ -1,9 +1,9 @@
 import pygame
 import time
 import os
-from Config import *
+from config import *
 from tkinter import messagebox
-from Funcionalidad import obtener_duracion_audio, convertir_a_wav
+from funcionalidad import obtener_duracion_audio, convertir_a_wav
 import gc
 
 

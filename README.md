@@ -100,7 +100,7 @@ cd AudioText/app_escritorio
 python -m venv venv
 source venv/bin/activate  # En Windows: venv\Scripts\activate
 pip install -r ../requirements.txt
-python Main.py
+python main.py
 ```
 
 ### Opción 3: Versión Web Django (Legacy - Solo para pruebas)
@@ -122,7 +122,7 @@ Accede en `http://localhost:8000` (no requiere autenticación en modo de prueba)
 
 ### Aplicación de Escritorio (Recomendada)
 
-1. Ejecuta `AudioText.exe` o `python Main.py`
+1. Ejecuta `AudioText.exe` o `python main.py`
 2. Haz clic en "Seleccionar Audios" para cargar uno o varios archivos
 3. Los archivos se procesan automáticamente:
    - Segmentación por VAD (detección de actividad de voz)

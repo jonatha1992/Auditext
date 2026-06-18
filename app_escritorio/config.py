@@ -1,7 +1,6 @@
 import os
 import logging
 from logging.handlers import RotatingFileHandler
-from googletrans import LANGUAGES
 import datetime
 
 # Configuración básica de logging
@@ -39,10 +38,38 @@ ffprobe_path = os.path.join(script_dir, "ffmpeg", "bin", "ffprobe.exe")
 ffmpeg_bin_path = os.path.join(script_dir, "ffmpeg", "bin")
 os.environ["PATH"] = ffmpeg_bin_path + os.pathsep + os.environ["PATH"]
 
+def report_error(context, exc, user_msg=None):
+    """Log the full traceback to the bitacora and return a short user message.
+
+    Use this instead of dumping raw exceptions into the UI: development gets the
+    full detail in logs/error_log.txt, the user gets a clean message.
+    """
+    # exc_info=exc logs the passed exception's traceback even when called
+    # outside an active except block.
+    logger.error("%s: %s", context, exc, exc_info=exc)
+    return user_msg or "Ocurrio un error. Revisa la bitacora (logs/error_log.txt)."
+
+
 # Variables globales
 transcripcion_activa = False
 transcripcion_en_curso = False
-idiomas = {v.capitalize(): k for k, v in LANGUAGES.items()}
+
+# Idiomas soportados (offline, faster-whisper). Nombre -> codigo ISO.
+# "Auto" deja que el modelo detecte el idioma automaticamente.
+idiomas = {
+    "Auto": None,
+    "Spanish": "es",
+    "English": "en",
+    "Portuguese": "pt",
+    "French": "fr",
+    "German": "de",
+    "Italian": "it",
+    "Catalan": "ca",
+    "Dutch": "nl",
+    "Russian": "ru",
+    "Chinese": "zh",
+    "Japanese": "ja",
+}
 
 
 def check_proxy():
