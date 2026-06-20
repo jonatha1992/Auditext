@@ -10,6 +10,7 @@ Embeddable as a ttk.Frame inside the main app's notebook. Fully offline.
 import queue
 import threading
 import datetime as dt
+import wave
 from pathlib import Path
 
 import numpy as np
@@ -21,6 +22,7 @@ from tkinter import ttk, scrolledtext, filedialog, messagebox
 import transcriber
 import summarizer
 from config import logger
+from spinner import Spinner
 
 SAMPLE_RATE = transcriber.SAMPLE_RATE
 
@@ -85,21 +87,24 @@ class Transcriber:
         self._stop = threading.Event()
         self._thread = None
         self._log_file = None
+        self._wav_file = None
         self._language = None
         self._locked_language = None
         self._out_dir = DEFAULT_DIR
-        self._device_name = None
-        self._pid = None
+        self._source_type = "loopback"
+        self._source_val = None
+        self._translate = False
         self._audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
 
-    def start(self, language=None, out_dir: Path = DEFAULT_DIR, device_name=None, pid=None):
+    def start(self, language=None, out_dir: Path = DEFAULT_DIR, source_type="loopback", source_val=None, translate=False):
         if self._thread and self._thread.is_alive():
             return
         self._language = language
         self._locked_language = None
         self._out_dir = out_dir
-        self._device_name = device_name
-        self._pid = pid
+        self._source_type = source_type
+        self._source_val = source_val
+        self._translate = translate
         self._stop.clear()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -118,6 +123,12 @@ class Transcriber:
         self._log_file = open(
             self._out_dir / f"transcript_{stamp}.txt", "a", encoding="utf-8"
         )
+        self._wav_file = wave.open(
+            str(self._out_dir / f"audio_{stamp}.wav"), "wb"
+        )
+        self._wav_file.setnchannels(1)
+        self._wav_file.setsampwidth(2)  # 16-bit PCM
+        self._wav_file.setframerate(SAMPLE_RATE)
 
     def _emit(self, text: str):
         self._text_queue.put(text)
@@ -128,50 +139,82 @@ class Transcriber:
     def _producer(self):
         """Record continuously in small blocks so the buffer never overflows.
 
-        Captures either a single application (process loopback) or the whole
-        system (device loopback), depending on whether a PID was selected.
+        Captures either a single application (process loopback), the whole system
+        (device loopback), or a physical microphone, depending on the selected source.
         """
         block = int(SAMPLE_RATE * CAPTURE_BLOCK_SECONDS)
-        if self._pid:
+        if self._source_type == "app":
             try:
                 self._capture_process(block)
                 return
             except Exception as exc:
                 logger.exception("Process loopback failed: %s", exc)
                 self._status_queue.put(
-                    "No se pudo capturar la app; capturando todo el sistema."
+                    "No se pudo capturar la app; capturando micrófono por defecto."
                 )
-        self._capture_system(block)
+                self._source_type = "mic"
+                self._source_val = None
+        
+        if self._source_type == "mic":
+            self._capture_mic(block)
+        else:
+            self._capture_system(block)
 
     def _push(self, mono):
         try:
             self._audio_q.put_nowait(mono)
+            if self._wav_file:
+                # Convert float32 array to int16 PCM
+                pcm_data = (mono * 32767).clip(-32768, 32767).astype(np.int16)
+                self._wav_file.writeframes(pcm_data.tobytes())
         except queue.Full:
             pass  # drop instead of growing memory if transcription lags
 
     def _capture_system(self, block):
         """Device loopback: whatever plays on the chosen output device."""
-        speaker = sc.default_speaker()
-        if self._device_name:
-            speaker = next(
-                (s for s in sc.all_speakers() if s.name == self._device_name), speaker
-            )
-        loopback = sc.get_microphone(id=str(speaker.name), include_loopback=True)
-        self._status_queue.put(f"Escuchando: {speaker.name}")
-        with loopback.recorder(samplerate=SAMPLE_RATE) as rec:
-            while not self._stop.is_set():
-                self._push(to_mono(rec.record(numframes=block)))
+        try:
+            speaker = sc.default_speaker()
+            if self._source_val and self._source_type == "loopback":
+                speaker = next(
+                    (s for s in sc.all_speakers() if s.name == self._source_val), speaker
+                )
+            loopback = sc.get_microphone(id=str(speaker.name), include_loopback=True)
+            self._status_queue.put(f"Escuchando sistema: {speaker.name}")
+            with loopback.recorder(samplerate=SAMPLE_RATE) as rec:
+                while not self._stop.is_set():
+                    self._push(to_mono(rec.record(numframes=block)))
+        except Exception as exc:
+            logger.exception("System loopback capture failed: %s", exc)
+            self._status_queue.put(f"Error sistema: {exc}")
+
+    def _capture_mic(self, block):
+        """Physical microphone capture."""
+        try:
+            mic = sc.default_microphone()
+            if self._source_val and self._source_type == "mic":
+                mic = next(
+                    (m for m in sc.all_microphones() if m.name == self._source_val), mic
+                )
+            self._status_queue.put(f"Escuchando micrófono: {mic.name}")
+            with mic.recorder(samplerate=SAMPLE_RATE) as rec:
+                while not self._stop.is_set():
+                    self._push(to_mono(rec.record(numframes=block)))
+        except Exception as exc:
+            logger.exception("Microphone capture failed: %s", exc)
+            self._status_queue.put(f"Error micrófono: {exc}")
 
     def _capture_process(self, block):
         """Process loopback: audio of one application only (Windows 10 2004+)."""
         import process_loopback
 
-        self._status_queue.put(f"Escuchando app (pid {self._pid})...")
+        self._status_queue.put(f"Escuchando app (pid {self._source_val})...")
         with process_loopback.ProcessLoopbackRecorder(
-            self._pid, samplerate=SAMPLE_RATE
+            self._source_val, samplerate=SAMPLE_RATE
         ) as rec:
             while not self._stop.is_set():
-                self._push(to_mono(rec.record(block)))
+                audio_data = rec.record(block, stop_event=self._stop)
+                if len(audio_data) > 0:
+                    self._push(to_mono(audio_data))
 
     def _consumer(self):
         """Batch ~CHUNK_SECONDS of audio, transcribe, emit text."""
@@ -196,7 +239,7 @@ class Transcriber:
             # chunk makes Whisper flip languages and hallucinate (Arabic/Hindi
             # gibberish on a Spanish call).
             lang = self._language if self._language is not None else self._locked_language
-            texts, detected = transcriber.transcribe_array(audio, language=lang)
+            texts, detected = transcriber.transcribe_array(audio, language=lang, translate=self._translate)
             if self._language is None and self._locked_language is None and detected:
                 self._locked_language = detected
                 self._status_queue.put(f"Idioma detectado: {detected}")
@@ -224,6 +267,12 @@ class Transcriber:
             if self._log_file:
                 self._log_file.close()
                 self._log_file = None
+            if self._wav_file:
+                try:
+                    self._wav_file.close()
+                except Exception:
+                    pass
+                self._wav_file = None
 
 
 # Visual palette.
@@ -247,6 +296,7 @@ class LiveFrame(ttk.Frame):
 
         self.text_queue: "queue.Queue[str]" = queue.Queue()
         self.status_queue: "queue.Queue[str]" = queue.Queue()
+        self.translate_var = tk.BooleanVar(value=False)
         self.worker = Transcriber(self.text_queue, self.status_queue)
         self.out_dir = DEFAULT_DIR
 
@@ -260,8 +310,16 @@ class LiveFrame(ttk.Frame):
             header, text="Transcripcion en vivo", style="LiveTitle.TLabel"
         ).pack(side=tk.LEFT)
 
-        self.status = ttk.Label(header, text="●  Inactivo", style="LiveStatus.TLabel")
-        self.status.pack(side=tk.RIGHT)
+        status_frame = tk.Frame(header, bg=COLOR_BG)
+        status_frame.pack(side=tk.RIGHT)
+
+        self.spinner = Spinner(
+            status_frame, size=20, bg=COLOR_BG,
+            accent_color=COLOR_ACCENT, muted_color=COLOR_PANEL
+        )
+
+        self.status = ttk.Label(status_frame, text="●  Inactivo", style="LiveStatus.TLabel")
+        self.status.pack(side=tk.LEFT)
 
         # Toolbar: primary action + utilities.
         toolbar = ttk.Frame(self, style="Live.TFrame", padding=(16, 0, 16, 6))
@@ -288,6 +346,15 @@ class LiveFrame(ttk.Frame):
             toolbar, textvariable=self.lang_var, values=list(LANGUAGES.keys()),
             state="readonly", width=12,
         ).pack(side=tk.LEFT)
+
+        self.translate_check = tk.Checkbutton(
+            toolbar, text="Traducir a Inglés", variable=self.translate_var,
+            bg=COLOR_BG, fg=COLOR_TEXT_FG, selectcolor=COLOR_PANEL,
+            activebackground=COLOR_BG, activeforeground=COLOR_TEXT_FG,
+            font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
+            cursor="hand2",
+        )
+        self.translate_check.pack(side=tk.LEFT, padx=(10, 0))
 
         # Source row: capture the whole system or a single application.
         source_row = ttk.Frame(self, style="Live.TFrame", padding=(16, 0, 16, 6))
@@ -377,18 +444,19 @@ class LiveFrame(ttk.Frame):
     def _toggle(self):
         if self.worker.is_running():
             self.worker.stop()
-            self.toggle_btn.config(text="▶  Iniciar")
         else:
+            source_info = self._source_map.get(self.source_var.get(), ("loopback", None))
             self.worker.start(
                 language=LANGUAGES[self.lang_var.get()],
                 out_dir=self.out_dir,
-                device_name=self._device_name,
-                pid=self._source_map.get(self.source_var.get()),
+                source_type=source_info[0],
+                source_val=source_info[1],
+                translate=self.translate_var.get(),
             )
             self.toggle_btn.config(text="⏹  Detener")
 
     def _refresh_sources(self):
-        """Reload the source list: whole-system option + apps emitting audio.
+        """Reload the source list: whole-system option, physical microphones + apps emitting audio.
 
         Apps only show up once they have an active audio session, so this is
         wired to a refresh button the user can hit after starting playback.
@@ -398,9 +466,21 @@ class LiveFrame(ttk.Frame):
             apps = process_loopback.list_audio_apps()
         except Exception:
             apps = []
-        self._source_map = {WHOLE_SYSTEM_LABEL: None}
+        
+        self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
+        
+        # Add physical microphones
+        try:
+            mics = sc.all_microphones()
+            for mic in mics:
+                label = f"🎤 Micrófono: {mic.name}"
+                self._source_map[label] = ("mic", mic.name)
+        except Exception as exc:
+            logger.exception("Failed to list microphones: %s", exc)
+
         for name, pid in apps:
-            self._source_map[f"{name} (pid {pid})"] = pid
+            self._source_map[f"💻 App: {name} (pid {pid})"] = ("app", pid)
+            
         labels = list(self._source_map.keys())
         self.source_combo.config(values=labels)
         if self.source_var.get() not in self._source_map:
@@ -516,6 +596,25 @@ class LiveFrame(ttk.Frame):
             self._set_status(self.status_queue.get_nowait())
         while not self.text_queue.empty():
             self._append(self.text_queue.get_nowait())
+
+        # Reactive sync of toggle button and spinner based on worker state
+        if self.worker.is_running():
+            if self.worker._stop.is_set():
+                if self.spinner.is_spinning:
+                    self.spinner.stop()
+                    self.spinner.pack_forget()
+                self.toggle_btn.config(text="⌛ Deteniendo...", state="disabled")
+            else:
+                if not self.spinner.is_spinning:
+                    self.spinner.start()
+                    self.spinner.pack(side=tk.LEFT, padx=(0, 6))
+                self.toggle_btn.config(text="⏹  Detener", state="normal")
+        else:
+            if self.spinner.is_spinning:
+                self.spinner.stop()
+                self.spinner.pack_forget()
+            self.toggle_btn.config(text="▶  Iniciar", state="normal")
+
         self.after(100, self._drain_queues)
 
     def stop_worker(self):

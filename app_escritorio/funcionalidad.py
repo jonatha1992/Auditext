@@ -13,13 +13,13 @@ from mutagen import File
 
 import transcriber
 import diarizer
+import config
+import db
 from config import (
     logger,
     report_error,
     idiomas,
     ffmpeg_path,
-    transcripcion_activa,
-    transcripcion_en_curso,
 )
 
 
@@ -89,23 +89,45 @@ def seleccionar_archivos(lista_archivos, lista_archivos_paths):
         ],
         title="Seleccionar archivos de audio",
     )
+    logger.info(f"Archivos seleccionados por el diálogo: {file_paths} (tipo: {type(file_paths)})")
+    
+    if not file_paths:
+        return
+
+    # Si por alguna razón Tcl/Tk devuelve un string en vez de una lista/tupla,
+    # lo convertimos de forma segura usando shlex.
+    if isinstance(file_paths, str):
+        import shlex
+        try:
+            file_paths = shlex.split(file_paths)
+        except Exception:
+            file_paths = [file_paths]
+
     archivos_no_agregados = []
-    if file_paths:
-        for file_path in file_paths:
-            file_name = os.path.basename(file_path)
-            duracion = obtener_duracion_audio(file_path)
-            duracion_str = time.strftime("%M:%S", time.gmtime(duracion))
-            item = f"{file_name} ({duracion_str})"
-            if item not in lista_archivos.get(0, tk.END):
-                lista_archivos.insert(tk.END, item)
-                lista_archivos_paths[file_path] = item
-            else:
-                archivos_no_agregados.append(file_name)
-        if archivos_no_agregados:
-            messagebox.showwarning(
-                "Archivos Duplicados",
-                f"Los siguientes archivos ya estaban en la lista y no se anadieron nuevamente:\n{', '.join(archivos_no_agregados)}",
-            )
+    for file_path in file_paths:
+        # Limpiar llaves de Tcl {} que a veces envuelven rutas con espacios en Windows
+        file_path = file_path.strip("{}").strip()
+        if not file_path:
+            continue
+            
+        file_name = os.path.basename(file_path)
+        duracion = obtener_duracion_audio(file_path)
+        duracion_str = time.strftime("%M:%S", time.gmtime(duracion))
+        item = f"{file_name} ({duracion_str})"
+        
+        logger.info(f"Procesando archivo para lista: path={file_path}, name={file_name}, duration={duracion_str}")
+        
+        if item not in lista_archivos.get(0, tk.END):
+            lista_archivos.insert(tk.END, item)
+            lista_archivos_paths[file_path] = item
+        else:
+            archivos_no_agregados.append(file_name)
+            
+    if archivos_no_agregados:
+        messagebox.showwarning(
+            "Archivos Duplicados",
+            f"Los siguientes archivos ya estaban en la lista y no se añadieron nuevamente:\n{', '.join(archivos_no_agregados)}",
+        )
 
 
 def limpiar(text_area):
@@ -212,8 +234,9 @@ def iniciar_transcripcion_thread(
     combobox_idioma_entrada,
     combobox_idioma_salida,
     diarizar_var=None,
+    spinner=None,
+    frame_progress=None,
 ):
-    global transcripcion_activa, transcripcion_en_curso
     from reproductor import reproductor
 
     if reproductor.reproduciendo:
@@ -228,21 +251,31 @@ def iniciar_transcripcion_thread(
         messagebox.showwarning(
             "Advertencia", "Seleccione un archivo de audio para transcribir."
         )
-        transcripcion_en_curso = False
+        config.transcripcion_en_curso = False
         return
 
-    if transcripcion_activa:
-        transcripcion_activa = False
-        transcripcion_en_curso = False
+    if config.transcripcion_activa:
+        config.transcripcion_activa = False
+        config.transcripcion_en_curso = False
         boton_transcribir.config(text="Transcribir")
         progress_bar["value"] = 0
         progress_bar.pack_forget()
+        if spinner:
+            spinner.stop()
+            spinner.pack_forget()
+        if frame_progress:
+            frame_progress.pack_forget()
     else:
-        transcripcion_activa = True
-        transcripcion_en_curso = True
+        config.transcripcion_activa = True
+        config.transcripcion_en_curso = True
         boton_transcribir.config(text="Detener Transcripcion")
         progress_bar["value"] = 0
+        if frame_progress:
+            frame_progress.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
         progress_bar.pack(pady=5, padx=60, fill=tk.X)
+        if spinner:
+            spinner.start()
+            spinner.pack(side=tk.LEFT, padx=5)
         threading.Thread(
             target=iniciar_transcripcion,
             args=(
@@ -258,6 +291,7 @@ def iniciar_transcripcion_thread(
                 combobox_idioma_salida,
                 diarizar_var,
             ),
+            kwargs={"spinner": spinner, "frame_progress": frame_progress},
             daemon=True,
         ).start()
 
@@ -278,7 +312,7 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
         ventana.update_idletasks()
 
     def should_continue():
-        return transcripcion_activa
+        return config.transcripcion_activa
 
     if diarizar:
         transcripcion_final = diarizer.diarize_file(
@@ -318,8 +352,9 @@ def iniciar_transcripcion(
     combobox_idioma_entrada,
     combobox_idioma_salida,
     diarizar_var=None,
+    spinner=None,
+    frame_progress=None,
 ):
-    global transcripcion_activa, transcripcion_en_curso
 
     seleccion = lista_archivos.curselection()
     if not seleccion:
@@ -360,17 +395,52 @@ def iniciar_transcripcion(
             "El audio se transcribira en su idioma original.",
         )
 
-    transcripcion_activa = True
-    transcripcion_en_curso = True
+    config.transcripcion_activa = True
+    config.transcripcion_en_curso = True
     boton_transcribir.config(text="Detener Transcripcion")
 
+    # Pre-cargar el modelo si no está en memoria y avisar al usuario
+    if transcriber._model is None:
+        archivo_procesando.set("Cargando modelo de transcripcion (solo la primera vez)...")
+        try:
+            transcriber.get_model()
+        except Exception as e:
+            logger.error(f"Error al cargar el modelo: {str(e)}")
+
     for index, archivo in enumerate(archivos_seleccionados):
-        if not transcripcion_activa:
+        if not config.transcripcion_activa:
             break
 
         audio_file = next(
             key for key, value in lista_archivos_paths.items() if value == archivo
         )
+
+        # Consultar si el archivo ya fue transcrito
+        transcripcion_guardada = db.get_transcription(audio_file)
+        if transcripcion_guardada:
+            # Preguntar si desea cargar la transcripción existente o volver a procesar
+            respuesta = messagebox.askyesnocancel(
+                "Transcripción Guardada",
+                f"El archivo '{archivo}' ya tiene una transcripción en el historial.\n\n"
+                "¿Querés cargar la transcripción guardada?\n"
+                "- Seleccioná SÍ para cargarla al instante.\n"
+                "- Seleccioná NO para volver a transcribirla desde cero.\n"
+                "- Seleccioná CANCELAR para abortar el proceso.",
+                parent=ventana,
+            )
+            if respuesta is True:
+                texto_transcrito = ajustar_texto_sencillo(transcripcion_guardada["transcription"])
+                nuevo_texto = (
+                    f"Transcripcion de {archivo} (Historial guardado): \n{texto_transcrito} \n\n"
+                )
+                text_area.insert(tk.END, nuevo_texto)
+                text_area.see(tk.END)
+                progress_bar["value"] = ((index + 1) / total_archivos) * 100
+                ventana.update_idletasks()
+                continue
+            elif respuesta is None:
+                # Cancelar toda la cola
+                break
 
         archivo_procesando.set(f"Procesando: {archivo} ({index + 1}/{total_archivos})")
         logger.info(f"Procesando archivo: {audio_file}")
@@ -380,7 +450,7 @@ def iniciar_transcripcion(
                 audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar
             )
 
-            if transcripcion_activa:
+            if config.transcripcion_activa:
                 texto_transcrito = ajustar_texto_sencillo(resultado["transcripcion"])
                 nuevo_texto = (
                     f"Transcripcion de {archivo}: \n{texto_transcrito} \n\n"
@@ -388,6 +458,16 @@ def iniciar_transcripcion(
                 )
                 text_area.insert(tk.END, nuevo_texto)
                 text_area.see(tk.END)
+                
+                # Guardar en base de datos
+                db.save_transcription(
+                    audio_file,
+                    resultado["filename"],
+                    archivo.split("(")[-1].replace(")", "").strip(),
+                    resultado["transcripcion"],
+                    summary="",
+                    language=idioma_entrada
+                )
 
             progress_bar["value"] = ((index + 1) / total_archivos) * 100
             ventana.update_idletasks()
@@ -405,18 +485,23 @@ def iniciar_transcripcion(
                 ),
             )
 
-        if not transcripcion_activa:
+        if not config.transcripcion_activa:
             break
 
     archivo_procesando.set("")
 
-    if transcripcion_activa:
+    if config.transcripcion_activa:
         messagebox.showinfo(
             "Informacion", f"Transcripcion completa para {total_archivos} archivo(s)."
         )
 
     boton_transcribir.config(text="Transcribir")
-    transcripcion_activa = False
+    config.transcripcion_activa = False
     progress_bar.pack_forget()
     progress_bar["value"] = 0
-    transcripcion_en_curso = False
+    config.transcripcion_en_curso = False
+    if spinner:
+        spinner.stop()
+        spinner.pack_forget()
+    if frame_progress:
+        frame_progress.pack_forget()

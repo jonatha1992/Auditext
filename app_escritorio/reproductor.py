@@ -1,7 +1,7 @@
 import pygame
 import time
 import os
-from config import *
+import config
 from tkinter import messagebox
 from funcionalidad import obtener_duracion_audio, convertir_a_wav
 import gc
@@ -82,10 +82,40 @@ class ReproductorAudio:
 reproductor = ReproductorAudio()
 
 
-def actualizar_tiempo(label):
+_after_id = None
+
+
+def actualizar_tiempo(label, boton_pausar_reanudar, label_reproduccion, boton_adelantar, boton_retroceder, slider_progreso=None, slider_arrastrando=None, frame_slider=None):
+    global _after_id
+    if _after_id is not None:
+        try:
+            label.after_cancel(_after_id)
+        except Exception:
+            pass
+
     def actualizar():
+        global _after_id
+        # Detectar fin natural de la reproducción de audio
+        if reproductor.reproduciendo and not pygame.mixer.music.get_busy():
+            detener_reproduccion(
+                boton_pausar_reanudar,
+                label_reproduccion,
+                label,
+                boton_adelantar,
+                boton_retroceder,
+                slider_progreso,
+                frame_slider=frame_slider,
+            )
+            return
+
         label.config(text=reproductor.obtener_tiempo_formateado())
-        label.after(100, actualizar)
+        
+        if slider_progreso and not (slider_arrastrando and slider_arrastrando[0]):
+            slider_progreso.config(to=reproductor.duracion_total)
+            slider_progreso.set(reproductor.obtener_tiempo_actual())
+
+        if reproductor.reproduciendo:
+            _after_id = label.after(100, actualizar)
 
     actualizar()
 
@@ -107,8 +137,11 @@ def reproducir(
     label_tiempo,
     boton_adelantar,
     boton_retroceder,
+    slider_progreso=None,
+    slider_arrastrando=None,
+    frame_slider=None,
 ):
-    if transcripcion_en_curso:
+    if config.transcripcion_en_curso:
         messagebox.showwarning(
             "Advertencia",
             "Hay una transcripción en curso. Por favor, espere a que termine.",
@@ -145,21 +178,54 @@ def reproducir(
             )
             return
 
-    boton_pausar_reanudar.config(text="Pausar", state="active")
-    boton_retroceder.config(state="active")
-    boton_adelantar.config(state="active")
-    actualizar_tiempo(label_tiempo)
+    boton_pausar_reanudar.config(text="Pausar", state="normal")
+    boton_retroceder.config(state="normal")
+    boton_adelantar.config(state="normal")
     actualizar_label_reproduccion(label_reproduccion)
+    if frame_slider:
+        import tkinter as tk
+        frame_slider.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
+    if slider_progreso:
+        # Se empaqueta para mostrarse solo al reproducir
+        import tkinter as tk
+        slider_progreso.pack(fill=tk.X, expand=True)
+    actualizar_tiempo(
+        label_tiempo,
+        boton_pausar_reanudar,
+        label_reproduccion,
+        boton_adelantar,
+        boton_retroceder,
+        slider_progreso,
+        slider_arrastrando,
+        frame_slider=frame_slider,
+    )
 
 
-def pausar_reanudar(boton_pausar_reanudar, label_reproduccion, label_tiempo):
+def pausar_reanudar(
+    boton_pausar_reanudar,
+    label_reproduccion,
+    label_tiempo,
+    boton_adelantar,
+    boton_retroceder,
+    slider_progreso=None,
+    slider_arrastrando=None,
+):
     if reproductor.reproduciendo:
         reproductor.pausar()
         boton_pausar_reanudar.config(text="Reanudar")
+        label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
     else:
         reproductor.reanudar()
         boton_pausar_reanudar.config(text="Pausar")
-    actualizar_tiempo(label_tiempo)
+        actualizar_tiempo(
+            label_tiempo,
+            boton_pausar_reanudar,
+            label_reproduccion,
+            boton_adelantar,
+            boton_retroceder,
+            slider_progreso,
+            slider_arrastrando,
+        )
 
 
 def detener_reproduccion(
@@ -168,24 +234,37 @@ def detener_reproduccion(
     label_tiempo,
     boton_adelantar,
     boton_retroceder,
+    slider_progreso=None,
+    frame_slider=None,
 ):
+    global _after_id
+    if _after_id is not None:
+        try:
+            label_tiempo.after_cancel(_after_id)
+        except Exception:
+            pass
+        _after_id = None
+
     reproductor.detener()
     boton_pausar_reanudar.config(text="Pausar", state="disabled")
     boton_adelantar.config(state="disabled")
     boton_retroceder.config(state="disabled")
     actualizar_label_reproduccion(label_reproduccion)
     label_tiempo.config(text="00:00 / 00:00")
+    if slider_progreso:
+        slider_progreso.set(0)
+        slider_progreso.pack_forget() # Se oculta al detener la reproducción
+    if frame_slider:
+        frame_slider.pack_forget()
     pygame.mixer.music.unload()
-    del reproductor.audio_actual
-    reproductor.audio_actual = None
     gc.collect()
 
 
 def retroceder(label_tiempo):
     reproductor.retroceder(5)
-    actualizar_tiempo(label_tiempo)
+    label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
 
 
 def adelantar(label_tiempo):
     reproductor.adelantar(5)
-    actualizar_tiempo(label_tiempo)
+    label_tiempo.config(text=reproductor.obtener_tiempo_formateado())

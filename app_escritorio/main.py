@@ -1,10 +1,11 @@
 import tkinter as tk
 from tkinter import messagebox
 from interfaz import crear_interfaz, centrar_ventana
-from config import detectar_y_configurar_proxy, check_dependencies, logger
+from config import check_dependencies, logger
 from reproductor import pygame
 import os
 import sys
+import db
 
 
 def resource_path(relative_path):
@@ -18,8 +19,8 @@ def resource_path(relative_path):
 
 def main():
     try:
-        # Configurar el proxy automáticamente al inicio
-        detectar_y_configurar_proxy()
+        # Inicializar la base de datos SQLite
+        db.init_db()
 
         # Inicializar pygame mixer
         pygame.mixer.init()
@@ -32,10 +33,26 @@ def main():
             ventana.iconbitmap(resource_path("icons/icono.ico"))
         except Exception:
             logger.warning("Icono no encontrado, se usa el icono por defecto.")
-        crear_interfaz(ventana)
+        widgets = crear_interfaz(ventana)
 
         # Centrar la ventana en la pantalla
         centrar_ventana(ventana)
+
+        # Protocolo para cierre limpio de la ventana
+        def on_closing():
+            try:
+                from reproductor import reproductor
+                reproductor.detener()
+            except Exception:
+                pass
+            try:
+                if widgets and "live_frame" in widgets:
+                    widgets["live_frame"].stop_worker()
+            except Exception:
+                pass
+            ventana.destroy()
+
+        ventana.protocol("WM_DELETE_WINDOW", on_closing)
 
         # Ejecutar la aplicación
         ventana.mainloop()

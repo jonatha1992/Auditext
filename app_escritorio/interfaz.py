@@ -13,6 +13,8 @@ from live_frame import (
     COLOR_ACCENT_ACTIVE,
     COLOR_MUTED,
 )
+from spinner import Spinner
+
 
 
 def _accent_btn(parent, text, command, **kw):
@@ -174,8 +176,47 @@ def crear_interfaz(ventana):
     scrollbar_text.pack(side=tk.RIGHT, fill=tk.Y)
     scrollbar_text.config(command=text_area.yview)
 
-    frame_botones = tk.Frame(bottom, bg=COLOR_BG)
-    frame_botones.pack(side=tk.TOP, pady=8, padx=16, fill=tk.X)
+    # ----------------------------------------------------
+    # CARD A: PANEL DE TRANSCRIPCIÓN
+    # ----------------------------------------------------
+    card_transcripcion = tk.Frame(bottom, bg=COLOR_PANEL, padx=16, pady=12)
+    card_transcripcion.pack(side=tk.TOP, fill=tk.X, padx=16, pady=6)
+
+    # 1. Fila de Opciones (Idioma, diarización)
+    frame_opciones = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
+    frame_opciones.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+
+    tk.Label(
+        frame_opciones, text="Idioma de entrada",
+        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    ).pack(side=tk.LEFT, padx=(0, 6))
+    combobox_idioma_entrada = ttk.Combobox(
+        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
+    )
+    combobox_idioma_entrada.set("Spanish")
+    combobox_idioma_entrada.pack(side=tk.LEFT, padx=(0, 20))
+
+    tk.Label(
+        frame_opciones, text="Idioma de salida",
+        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    ).pack(side=tk.LEFT, padx=(0, 6))
+    combobox_idioma_salida = ttk.Combobox(
+        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
+    )
+    combobox_idioma_salida.set("Spanish")
+    combobox_idioma_salida.pack(side=tk.LEFT)
+
+    tk.Checkbutton(
+        frame_opciones, text="Diferenciar hablantes", variable=diarizar_var,
+        bg=COLOR_PANEL, fg=COLOR_TEXT_FG, selectcolor=COLOR_TEXT_BG,
+        activebackground=COLOR_PANEL, activeforeground=COLOR_TEXT_FG,
+        font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
+        cursor="hand2",
+    ).pack(side=tk.LEFT, padx=(20, 0))
+
+    # 2. Fila de Botones (Seleccionar, Borrar, Transcribir, Limpiar, Exportar)
+    frame_botones = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
+    frame_botones.pack(side=tk.TOP, fill=tk.X)
 
     boton_seleccionar = _flat_btn(
         frame_botones, "\U0001F4C2  Seleccionar",
@@ -190,6 +231,32 @@ def crear_interfaz(ventana):
     )
     boton_borrar.pack(side=tk.LEFT, padx=(8, 0))
 
+    # 3. Fila del Indicador de Progreso
+    frame_progress = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
+
+    frame_status_info = tk.Frame(frame_progress, bg=COLOR_PANEL)
+    frame_status_info.pack(pady=4)
+
+    spinner = Spinner(
+        frame_status_info, size=20, bg=COLOR_PANEL,
+        accent_color=COLOR_ACCENT, muted_color=COLOR_MUTED
+    )
+
+    progress_label = tk.Label(
+        frame_status_info, textvariable=archivo_procesando,
+        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    )
+    progress_label.pack(side=tk.LEFT)
+
+    progress_bar = ttk.Progressbar(
+        frame_progress,
+        orient="horizontal",
+        mode="determinate",
+        style="Archivos.Horizontal.TProgressbar",
+    )
+    progress_bar.pack_forget()
+
+    # Botón transcribir va después de declarar el spinner y progress_bar
     boton_transcribir = _accent_btn(
         frame_botones, "\U0001F4DD  Transcribir",
         lambda: iniciar_transcripcion_thread(
@@ -204,6 +271,8 @@ def crear_interfaz(ventana):
             combobox_idioma_entrada,
             combobox_idioma_salida,
             diarizar_var,
+            spinner=spinner,
+            frame_progress=frame_progress,
         ),
     )
     boton_transcribir.pack(side=tk.LEFT, padx=(8, 0))
@@ -220,56 +289,38 @@ def crear_interfaz(ventana):
     )
     boton_limpiar.pack(side=tk.RIGHT, padx=(0, 8))
 
-    frame_progress = tk.Frame(bottom, bg=COLOR_BG)
-    frame_progress.pack(side=tk.TOP, fill=tk.X, padx=16, pady=0)
 
-    progress_label = tk.Label(
-        frame_progress, textvariable=archivo_procesando,
-        bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    # ----------------------------------------------------
+    # CARD B: PANEL DE REPRODUCCIÓN
+    # ----------------------------------------------------
+    card_reproductor = tk.Frame(bottom, bg=COLOR_PANEL, padx=16, pady=12)
+    card_reproductor.pack(side=tk.TOP, fill=tk.X, padx=16, pady=6)
+
+    # 1. Fila de la barra de progreso (Scale)
+    frame_slider = tk.Frame(card_reproductor, bg=COLOR_PANEL)
+
+    style = ttk.Style(ventana)
+    style.configure(
+        "ProgressScale.Horizontal.TScale",
+        background=COLOR_PANEL,
+        troughcolor=COLOR_TEXT_BG,
+        slidercolor=COLOR_ACCENT,
+        borderwidth=0,
     )
-    progress_label.pack(pady=4)
 
-    progress_bar = ttk.Progressbar(
-        frame_progress,
-        orient="horizontal",
-        mode="determinate",
-        style="Archivos.Horizontal.TProgressbar",
+    slider_progreso = ttk.Scale(
+        frame_slider,
+        from_=0,
+        to=100,
+        orient=tk.HORIZONTAL,
+        style="ProgressScale.Horizontal.TScale",
     )
-    progress_bar.pack_forget()
+    # Se empaqueta dinámicamente al reproducir audio
+    slider_arrastrando = [False]
 
-    frame_opciones = tk.Frame(bottom, bg=COLOR_BG)
-    frame_opciones.pack(side=tk.TOP, pady=6, padx=16, fill=tk.X)
-
-    tk.Label(
-        frame_opciones, text="Idioma de entrada",
-        bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10),
-    ).pack(side=tk.LEFT, padx=(0, 6))
-    combobox_idioma_entrada = ttk.Combobox(
-        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
-    )
-    combobox_idioma_entrada.set("Spanish")
-    combobox_idioma_entrada.pack(side=tk.LEFT, padx=(0, 20))
-
-    tk.Label(
-        frame_opciones, text="Idioma de salida",
-        bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10),
-    ).pack(side=tk.LEFT, padx=(0, 6))
-    combobox_idioma_salida = ttk.Combobox(
-        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
-    )
-    combobox_idioma_salida.set("Spanish")
-    combobox_idioma_salida.pack(side=tk.LEFT)
-
-    tk.Checkbutton(
-        frame_opciones, text="Diferenciar hablantes", variable=diarizar_var,
-        bg=COLOR_BG, fg=COLOR_TEXT_FG, selectcolor=COLOR_PANEL,
-        activebackground=COLOR_BG, activeforeground=COLOR_TEXT_FG,
-        font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
-        cursor="hand2",
-    ).pack(side=tk.LEFT, padx=(20, 0))
-
-    frame_reproduccion = tk.Frame(bottom, bg=COLOR_BG)
-    frame_reproduccion.pack(side=tk.TOP, pady=8, padx=16, fill=tk.X)
+    # 2. Fila de controles de reproducción
+    frame_reproduccion = tk.Frame(card_reproductor, bg=COLOR_PANEL)
+    frame_reproduccion.pack(side=tk.TOP, fill=tk.X)
 
     boton_reproducir = _flat_btn(
         frame_reproduccion, "▶  Reproducir",
@@ -281,6 +332,9 @@ def crear_interfaz(ventana):
             label_tiempo,
             boton_adelantar,
             boton_retroceder,
+            slider_progreso=slider_progreso,
+            slider_arrastrando=slider_arrastrando,
+            frame_slider=frame_slider,
         ),
     )
     boton_reproducir.pack(side=tk.LEFT)
@@ -296,7 +350,15 @@ def crear_interfaz(ventana):
     )
     boton_pausar_reanudar = _flat_btn(
         frame_reproduccion, "⏸  Pausar",
-        lambda: pausar_reanudar(boton_pausar_reanudar, label_reproduccion, label_tiempo),
+        lambda: pausar_reanudar(
+            boton_pausar_reanudar,
+            label_reproduccion,
+            label_tiempo,
+            boton_adelantar,
+            boton_retroceder,
+            slider_progreso=slider_progreso,
+            slider_arrastrando=slider_arrastrando,
+        ),
         state="disabled",
     )
     boton_pausar_reanudar.pack(side=tk.LEFT, padx=(8, 0))
@@ -315,29 +377,82 @@ def crear_interfaz(ventana):
             label_tiempo,
             boton_adelantar,
             boton_retroceder,
+            slider_progreso=slider_progreso,
+            frame_slider=frame_slider,
         ),
     )
     boton_detener.pack(side=tk.LEFT, padx=(8, 0))
 
     label_reproduccion = tk.Label(
-        frame_reproduccion, text="", bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10)
+        frame_reproduccion, text="", bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10)
     )
     label_reproduccion.pack(side=tk.LEFT, padx=(16, 6))
 
     label_tiempo = tk.Label(
         frame_reproduccion, text="00:00 / 00:00",
-        bg=COLOR_BG, fg=COLOR_TEXT_FG, font=("Segoe UI", 10),
+        bg=COLOR_PANEL, fg=COLOR_TEXT_FG, font=("Segoe UI", 10),
     )
     label_tiempo.pack(side=tk.LEFT)
+
+    def iniciar_arrastre(event):
+        slider_arrastrando[0] = True
+
+    def finalizar_arrastre(event):
+        slider_arrastrando[0] = False
+        if reproductor.audio_actual:
+            nuevo_tiempo = slider_progreso.get()
+            reproductor.posicion_actual = nuevo_tiempo
+            if reproductor.reproduciendo:
+                pygame.mixer.music.play(start=nuevo_tiempo)
+                reproductor.tiempo_inicio = time.time() - nuevo_tiempo
+            else:
+                label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
+
+    slider_progreso.bind("<ButtonPress-1>", iniciar_arrastre)
+    slider_progreso.bind("<ButtonRelease-1>", finalizar_arrastre)
+
+    # Atajos de teclado (Hotkeys)
+    def hotkey_play_pause(event=None):
+        if boton_pausar_reanudar["state"] == "normal":
+            boton_pausar_reanudar.invoke()
+        elif boton_reproducir["state"] == "normal":
+            boton_reproducir.invoke()
+
+    def hotkey_retroceder(event=None):
+        if boton_retroceder["state"] == "normal":
+            boton_retroceder.invoke()
+
+    def hotkey_adelantar(event=None):
+        if boton_adelantar["state"] == "normal":
+            boton_adelantar.invoke()
+
+    # Vincular atajos globales en la ventana
+    ventana.bind("<Alt-p>", hotkey_play_pause)
+    ventana.bind("<Alt-P>", hotkey_play_pause)
+    ventana.bind("<Alt-Left>", hotkey_retroceder)
+    ventana.bind("<Alt-Right>", hotkey_adelantar)
+
 
     frame_creditos = tk.Frame(bottom, bg=COLOR_BG)
     frame_creditos.pack(side=tk.TOP, pady=6)
 
+    import webbrowser
+
+    def abrir_web(event=None):
+        try:
+            webbrowser.open_new("https://tecnofuision-it.web.app/")
+        except Exception:
+            pass
+
     label_creditos = tk.Label(
         frame_creditos,
-        text="@Copyright 2024 Version 1.0 Produced by Correa Jonathan",
-        font=("Segoe UI", 9), bg=COLOR_BG, fg=COLOR_MUTED,
+        text="@Copyright 2026 Version 2.0 Produced by tecnofusion.it",
+        font=("Segoe UI", 9, "underline"), bg=COLOR_BG, fg=COLOR_MUTED,
+        cursor="hand2"
     )
+    label_creditos.bind("<Button-1>", abrir_web)
+    label_creditos.bind("<Enter>", lambda e: label_creditos.config(fg=COLOR_ACCENT))
+    label_creditos.bind("<Leave>", lambda e: label_creditos.config(fg=COLOR_MUTED))
     label_creditos.pack()
 
     return {
@@ -355,6 +470,10 @@ def crear_interfaz(ventana):
         "boton_detener": boton_detener,
         "label_reproduccion": label_reproduccion,
         "label_tiempo": label_tiempo,
+        "live_frame": live_frame,
+        "spinner": spinner,
+        "frame_progress": frame_progress,
+        "frame_slider": frame_slider,
     }
 
 

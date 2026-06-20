@@ -392,7 +392,7 @@ class ProcessLoopbackRecorder:
             return np.concatenate(chunks, axis=0)
         return np.empty((0, self._channels), dtype=np.float32)
 
-    def record(self, numframes: int) -> np.ndarray:
+    def record(self, numframes: int, stop_event=None) -> np.ndarray:
         """Block until ``numframes`` frames are available, return them.
 
         Matches the ``soundcard`` recorder contract used by the producer.
@@ -400,6 +400,8 @@ class ProcessLoopbackRecorder:
         buf = [self._leftover]
         have = self._leftover.shape[0]
         while have < numframes:
+            if stop_event is not None and stop_event.is_set():
+                break
             pulled = self._pull()
             if pulled.shape[0]:
                 buf.append(pulled)
