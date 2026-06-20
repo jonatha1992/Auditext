@@ -41,9 +41,8 @@ class ReproductorAudio:
     def detener(self):
         pygame.mixer.music.stop()
         pygame.mixer.music.unload()
-        del self.audio_actual
+        self.audio_actual = None  # was: del self.audio_actual (caused AttributeError on next check)
         self.reproduciendo = False
-        self.audio_actual = None
         self.tiempo_inicio = 0
         self.tiempo_pausa = 0
         self.duracion_total = 0
@@ -95,7 +94,6 @@ def actualizar_tiempo(label, boton_pausar_reanudar, label_reproduccion, boton_ad
 
     def actualizar():
         global _after_id
-        # Detectar fin natural de la reproducción de audio
         if reproductor.reproduciendo and not pygame.mixer.music.get_busy():
             detener_reproduccion(
                 boton_pausar_reanudar,
@@ -108,8 +106,9 @@ def actualizar_tiempo(label, boton_pausar_reanudar, label_reproduccion, boton_ad
             )
             return
 
-        label.config(text=reproductor.obtener_tiempo_formateado())
-        
+        # CTkLabel uses .configure(), not .config()
+        label.configure(text=reproductor.obtener_tiempo_formateado())
+
         if slider_progreso and not (slider_arrastrando and slider_arrastrando[0]):
             slider_progreso.config(to=reproductor.duracion_total)
             slider_progreso.set(reproductor.obtener_tiempo_actual())
@@ -122,11 +121,9 @@ def actualizar_tiempo(label, boton_pausar_reanudar, label_reproduccion, boton_ad
 
 def actualizar_label_reproduccion(label):
     if reproductor.reproduciendo and reproductor.audio_actual:
-        label.config(
-            text=f"Reproduciendo: {os.path.basename(reproductor.audio_actual)}"
-        )
+        label.configure(text=f"Reproduciendo: {os.path.basename(reproductor.audio_actual)}")
     else:
-        label.config(text="")
+        label.configure(text="")
 
 
 def reproducir(
@@ -178,15 +175,15 @@ def reproducir(
             )
             return
 
-    boton_pausar_reanudar.config(text="Pausar", state="normal")
-    boton_retroceder.config(state="normal")
-    boton_adelantar.config(state="normal")
+    # CTkButton uses .configure(), not .config()
+    boton_pausar_reanudar.configure(text="⏸", state="normal")
+    boton_retroceder.configure(state="normal")
+    boton_adelantar.configure(state="normal")
     actualizar_label_reproduccion(label_reproduccion)
     if frame_slider:
         import tkinter as tk
         frame_slider.pack(side=tk.TOP, fill=tk.X, pady=(0, 8))
     if slider_progreso:
-        # Se empaqueta para mostrarse solo al reproducir
         import tkinter as tk
         slider_progreso.pack(fill=tk.X, expand=True)
     actualizar_tiempo(
@@ -212,11 +209,11 @@ def pausar_reanudar(
 ):
     if reproductor.reproduciendo:
         reproductor.pausar()
-        boton_pausar_reanudar.config(text="Reanudar")
-        label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
+        boton_pausar_reanudar.configure(text="▶")
+        label_tiempo.configure(text=reproductor.obtener_tiempo_formateado())
     else:
         reproductor.reanudar()
-        boton_pausar_reanudar.config(text="Pausar")
+        boton_pausar_reanudar.configure(text="⏸")
         actualizar_tiempo(
             label_tiempo,
             boton_pausar_reanudar,
@@ -246,14 +243,14 @@ def detener_reproduccion(
         _after_id = None
 
     reproductor.detener()
-    boton_pausar_reanudar.config(text="Pausar", state="disabled")
-    boton_adelantar.config(state="disabled")
-    boton_retroceder.config(state="disabled")
+    boton_pausar_reanudar.configure(text="⏸", state="disabled")
+    boton_adelantar.configure(state="disabled")
+    boton_retroceder.configure(state="disabled")
     actualizar_label_reproduccion(label_reproduccion)
-    label_tiempo.config(text="00:00 / 00:00")
+    label_tiempo.configure(text="00:00 / 00:00")
     if slider_progreso:
         slider_progreso.set(0)
-        slider_progreso.pack_forget() # Se oculta al detener la reproducción
+        slider_progreso.pack_forget()
     if frame_slider:
         frame_slider.pack_forget()
     pygame.mixer.music.unload()
@@ -262,9 +259,9 @@ def detener_reproduccion(
 
 def retroceder(label_tiempo):
     reproductor.retroceder(5)
-    label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
+    label_tiempo.configure(text=reproductor.obtener_tiempo_formateado())
 
 
 def adelantar(label_tiempo):
     reproductor.adelantar(5)
-    label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
+    label_tiempo.configure(text=reproductor.obtener_tiempo_formateado())

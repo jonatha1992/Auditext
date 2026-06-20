@@ -10,6 +10,7 @@ from live_frame import LiveFrame
 from spinner import Spinner
 from ajustes_frame import AjustesFrame
 from historial_frame import HistorialFrame
+from tooltip import Tooltip
 
 # Design System Colors matching the mockup
 COLOR_BG = "#0B0C10"          # Deep dark window background
@@ -126,6 +127,11 @@ def crear_interfaz(ventana):
     )
     btn_ajustes.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=20)
 
+    Tooltip(btn_archivos, "Transcribí archivos de audio (MP3, WAV, M4A, FLAC) a texto de forma offline.")
+    Tooltip(btn_envivo, "Transcribí en tiempo real lo que reproduce el sistema o el micrófono.")
+    Tooltip(btn_historial, "Revisá, buscá y exportá transcripciones guardadas anteriormente.")
+    Tooltip(btn_ajustes, "Configuración de la app: base de datos, modelo, carpetas.")
+
     # Right Content Frame
     right_content = ctk.CTkFrame(ventana, corner_radius=0, fg_color=COLOR_BG, border_width=0)
     right_content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -156,9 +162,10 @@ def crear_interfaz(ventana):
     columns_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
     columns_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
 
-    # Left Column: Listbox
-    left_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
-    left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+    # Left Column: Listbox — fixed width so transcript area gets the space
+    left_col = ctk.CTkFrame(columns_frame, fg_color="transparent", width=340)
+    left_col.pack_propagate(False)
+    left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
 
     label_left_title = ctk.CTkLabel(
         left_col, text="LISTA DE ARCHIVOS", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
@@ -169,7 +176,10 @@ def crear_interfaz(ventana):
     card_listbox.pack(fill=tk.BOTH, expand=True)
 
     # Clickable Upload Zone
-    dnd_frame = ctk.CTkFrame(card_listbox, fg_color=COLOR_PANEL_LIGHT, corner_radius=8, cursor="hand2")
+    dnd_frame = ctk.CTkFrame(
+        card_listbox, fg_color=COLOR_PANEL_LIGHT, corner_radius=10,
+        border_width=1, border_color=COLOR_BORDER, cursor="hand2"
+    )
     dnd_frame.pack(fill=tk.X, padx=12, pady=12)
 
     seleccionar_lock = [False]
@@ -200,24 +210,23 @@ def crear_interfaz(ventana):
     dnd_text3.pack(pady=(2, 12))
     dnd_text3.bind("<Button-1>", on_dnd_click)
 
-    # Files Listbox
-    scrollbar_listbox = tk.Scrollbar(
-        card_listbox, orient=tk.VERTICAL,
-        bg=COLOR_PANEL, troughcolor=COLOR_PANEL, activebackground=COLOR_ACCENT,
-        borderwidth=0, highlightthickness=0,
-    )
+    # Files Listbox & Scrollbar
     lista_archivos = tk.Listbox(
         card_listbox,
         selectmode=tk.EXTENDED,
-        yscrollcommand=scrollbar_listbox.set,
         bg="#11121A", fg=COLOR_TEXT_FG,
         selectbackground=COLOR_ACCENT, selectforeground="#ffffff",
         relief=tk.FLAT, borderwidth=0, highlightthickness=0,
         font=("Segoe UI", 10), activestyle="none",
     )
+    scrollbar_listbox = ctk.CTkScrollbar(
+        card_listbox, orientation="vertical",
+        command=lista_archivos.yview
+    )
+    lista_archivos.config(yscrollcommand=scrollbar_listbox.set)
+    
     lista_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 12))
     scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=(0, 12))
-    scrollbar_listbox.config(command=lista_archivos.yview)
 
     # Right Column: Transcript area
     right_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
@@ -241,24 +250,27 @@ def crear_interfaz(ventana):
 
     text_area = ctk.CTkTextbox(
         card_text, fg_color="#11121A", text_color=COLOR_TEXT_FG,
-        font=("Segoe UI", 12),
+        font=("Segoe UI", 12), wrap="word",
         corner_radius=8, border_width=0,
     )
     text_area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-    # Update word count automatically on typing
+    # Update word count on any text change (keyboard or programmatic insert)
     def update_word_count(event=None):
         try:
             content = text_area.get("1.0", "end-1c").strip()
-            if content:
-                words = len(content.split())
-                label_palabras.configure(text=f"{words} palabras")
-            else:
-                label_palabras.configure(text="0 palabras")
+            words = len(content.split()) if content else 0
+            label_palabras.configure(text=f"{words} palabras")
+            if event:
+                text_area._textbox.edit_modified(False)
         except Exception:
             pass
 
     text_area.bind("<KeyRelease>", update_word_count)
+    try:
+        text_area._textbox.bind("<<Modified>>", update_word_count)
+    except Exception:
+        pass
 
     # Options Card
     card_options = ctk.CTkFrame(view_archivos, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
@@ -365,9 +377,10 @@ def crear_interfaz(ventana):
         def run():
             try:
                 resumen = summarizer.summarize(texto)
-                ventana.after(0, lambda: mostrar_resumen_modal(resumen))
+                ventana.after(0, lambda r=resumen: mostrar_resumen_modal(r))
             except Exception as e:
-                ventana.after(0, lambda: messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{e}"))
+                err_msg = str(e)
+                ventana.after(0, lambda msg=err_msg: messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{msg}"))
             finally:
                 ventana.after(0, clean_up_resumir)
                 
@@ -475,6 +488,14 @@ def crear_interfaz(ventana):
     )
     boton_limpiar.pack(side=tk.RIGHT)
 
+    # Tooltips — shown on hover after 600 ms
+    Tooltip(boton_seleccionar, "Abrí el explorador de archivos para agregar audios MP3, WAV, M4A o FLAC a la cola de transcripción.")
+    Tooltip(boton_borrar, "Eliminá el archivo seleccionado de la lista (no borra el archivo del disco).")
+    Tooltip(boton_transcribir, "Iniciá la transcripción del archivo seleccionado usando el modelo Whisper offline. Podés detenerlo en cualquier momento.")
+    Tooltip(boton_resumir, "Generá un resumen con IA (Gemini) del texto transcrito que aparece en el área de texto. Necesita conexión a internet.")
+    Tooltip(boton_exportar, "Guardá el texto transcrito como archivo .txt en la ubicación que elijas.")
+    Tooltip(boton_limpiar, "Limpiá el área de texto de transcripciones anteriores.")
+
     # ----------------------------------------------------
     # PLAYER CARD (Card B)
     # ----------------------------------------------------
@@ -575,6 +596,13 @@ def crear_interfaz(ventana):
         frame_reproduccion, text="00:00 / 00:00", font=("Segoe UI", 11), text_color=COLOR_TEXT_FG
     )
     label_tiempo.pack(side=tk.LEFT)
+
+    Tooltip(boton_reproducir, "Reproducí el archivo de audio seleccionado en la lista.")
+    Tooltip(boton_retroceder, "Retrocedé 5 segundos en la reproducción.")
+    Tooltip(boton_pausar_reanudar, "Pausá o reanudá la reproducción.")
+    Tooltip(boton_adelantar, "Avanzá 5 segundos en la reproducción.")
+    Tooltip(boton_detener, "Detené la reproducción y volvé al inicio.")
+    Tooltip(label_tiempo, "Tiempo actual / duración total del audio.")
 
     # Bind lists selection
     lista_archivos.bind(
@@ -715,10 +743,11 @@ def crear_interfaz(ventana):
             boton_limpiar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
             boton_exportar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
         else:
-            # 2-Column Layout: Side-by-Side Listbox and Transcript
+            # 2-Column Layout: fixed left, expanding right
             left_col.pack_forget()
             right_col.pack_forget()
-            left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+            left_col.configure(width=340)
+            left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
             right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
 
             # Horizontal Option Card Grid Layout

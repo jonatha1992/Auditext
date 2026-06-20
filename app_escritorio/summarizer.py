@@ -20,14 +20,29 @@ from config import logger
 load_dotenv()
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-1.5-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
-_PROMPT = (
-    "Sos un asistente que resume transcripciones de audio. "
-    "Resumi el siguiente texto en vinetas claras y concisas, en el mismo "
-    "idioma del texto, destacando los puntos principales, las decisiones y "
-    "las acciones a seguir si las hubiera.\n\n"
-    "Transcripcion:\n{text}"
+# Fallback chain tried in order when the primary model hits a quota/rate-limit error.
+# gemini-2.0-flash free tier has limit=0 in many regions — fallbacks cover that.
+_FALLBACK_MODELS = [
+    "gemini-2.0-flash-lite",
+    "gemini-2.5-flash",
+    "gemini-flash-lite-latest",
+]
+
+_PROMPT_TEMPLATE = (
+    "Sos un asistente experto en resumir transcripciones de audio que pueden "
+    "contener ruido, errores de transcripcion o frases incompletas.\n\n"
+    "Tu tarea: IGNORAR el ruido, palabras sueltas sin sentido y errores de "
+    "transcripcion, y extraer los PUNTOS CLAVE que el hablante realmente "
+    "quiso comunicar.\n\n"
+    "Formato de respuesta:\n"
+    "- Respondé en el MISMO IDIOMA del texto transcripto\n"
+    "- Usá EXACTAMENTE 3 a 6 viñetas, cada una con un titulo corto en negrita "
+    "y una descripcion de 1 a 2 oraciones\n"
+    "- Destacá: ideas principales, temas discutidos, decisiones y acciones a seguir\n"
+    "- Si el texto es demasiado corto o sin contenido claro, indicalo en una viñeta\n\n"
+    "Transcripcion:\n"
 )
 
 
@@ -55,32 +70,42 @@ def summarize(text: str) -> str:
             "Falta el paquete google-genai (pip install google-genai)."
         ) from exc
 
-    try:
-        client = genai.Client(api_key=GEMINI_API_KEY)
-        response = client.models.generate_content(
-            model=GEMINI_MODEL,
-            contents=_PROMPT.format(text=text),
-        )
-        summary = (response.text or "").strip()
-        if not summary:
-            raise SummaryError("La API devolvio un resumen vacio.")
-        return summary
-    except SummaryError:
-        raise
-    except Exception as exc:
-        # Log the full API error (e.g. the long 429 quota JSON) to the bitacora,
-        # show the user a short classified message.
-        logger.exception("Fallo el resumen con Gemini: %s", exc)
-        detail = str(exc).lower()
-        if "429" in detail or "quota" in detail or "resource_exhausted" in detail:
-            friendly = (
-                "Cuota de la API agotada. Proba con otro modelo "
-                "(gemini-1.5-flash) o revisa tu plan/billing en Google AI Studio."
-            )
-        elif "api key" in detail or "permission" in detail or "401" in detail or "403" in detail:
-            friendly = "Clave de API invalida o sin permisos. Revisa GEMINI_API_KEY en .env."
-        elif "deadline" in detail or "connection" in detail or "timeout" in detail or "network" in detail:
-            friendly = "Sin conexion con la API. Revisa tu red."
-        else:
-            friendly = "Error al contactar la API. Revisa la bitacora (logs/error_log.txt)."
-        raise SummaryError(friendly) from exc
+    client = genai.Client(api_key=GEMINI_API_KEY)
+    contents = _PROMPT_TEMPLATE + text
+
+    # Try primary model first, then fallbacks if quota is exhausted.
+    models_to_try = [GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != GEMINI_MODEL]
+    last_exc = None
+
+    for model in models_to_try:
+        try:
+            response = client.models.generate_content(model=model, contents=contents)
+            summary = (response.text or "").strip()
+            if not summary:
+                raise SummaryError("La API devolvio un resumen vacio.")
+            if model != GEMINI_MODEL:
+                logger.info("Resumen generado con modelo de respaldo: %s", model)
+            return summary
+        except SummaryError:
+            raise
+        except Exception as exc:
+            detail = str(exc).lower()
+            is_quota = "429" in detail or "quota" in detail or "resource_exhausted" in detail
+            if is_quota:
+                logger.warning("Cuota agotada para %s, intentando siguiente modelo...", model)
+                last_exc = exc
+                continue
+            # Non-quota error: log and classify immediately
+            logger.exception("Fallo el resumen con Gemini (%s): %s", model, exc)
+            if "api key" in detail or "permission" in detail or "401" in detail or "403" in detail:
+                raise SummaryError("Clave de API invalida o sin permisos. Revisa GEMINI_API_KEY en .env.") from exc
+            if "deadline" in detail or "connection" in detail or "timeout" in detail or "network" in detail:
+                raise SummaryError("Sin conexion con la API. Revisa tu red.") from exc
+            raise SummaryError("Error al contactar la API. Revisa la bitacora (logs/error_log.txt).") from exc
+
+    # All models returned quota errors
+    logger.exception("Cuota agotada en todos los modelos: %s", last_exc)
+    raise SummaryError(
+        "Cuota agotada en todos los modelos disponibles. "
+        "Revisá tu plan en ai.google.dev o esperá unos minutos para reintentar."
+    ) from last_exc

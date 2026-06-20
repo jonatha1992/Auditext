@@ -118,6 +118,23 @@ def get_all_transcriptions():
         config.logger.error(f"Error al obtener todas las transcripciones: {e}")
         return []
 
+def rename_transcription(file_path: str, new_name: str) -> bool:
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "UPDATE transcripciones SET file_name = ? WHERE file_path = ?",
+            (new_name, file_path)
+        )
+        conn.commit()
+        conn.close()
+        config.logger.info("Transcripción renombrada: %s -> %s", file_path, new_name)
+        return True
+    except Exception as e:
+        config.logger.error("Error al renombrar transcripción: %s", e)
+        return False
+
+
 def delete_transcription(file_path):
     try:
         conn = get_connection()

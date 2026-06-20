@@ -39,9 +39,16 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # Configurar rutas de FFmpeg
-ffmpeg_path = os.path.join(base_dir, "ffmpeg", "bin", "ffmpeg.exe")
-ffprobe_path = os.path.join(base_dir, "ffmpeg", "bin", "ffprobe.exe")
-ffmpeg_bin_path = os.path.join(base_dir, "ffmpeg", "bin")
+# When frozen (PyInstaller): ffmpeg is bundled next to the exe → use base_dir.
+# When running from source: ffmpeg lives at the repo root, one level up from app_escritorio/.
+if getattr(sys, "frozen", False):
+    _ffmpeg_root = base_dir
+else:
+    _ffmpeg_root = os.path.dirname(base_dir)
+
+ffmpeg_path = os.path.join(_ffmpeg_root, "ffmpeg", "bin", "ffmpeg.exe")
+ffprobe_path = os.path.join(_ffmpeg_root, "ffmpeg", "bin", "ffprobe.exe")
+ffmpeg_bin_path = os.path.join(_ffmpeg_root, "ffmpeg", "bin")
 os.environ["PATH"] = ffmpeg_bin_path + os.pathsep + os.environ["PATH"]
 
 def report_error(context, exc, user_msg=None):

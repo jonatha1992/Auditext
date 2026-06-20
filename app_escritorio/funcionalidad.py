@@ -266,8 +266,8 @@ def iniciar_transcripcion_thread(
     if config.transcripcion_activa:
         config.transcripcion_activa = False
         config.transcripcion_en_curso = False
-        boton_transcribir.config(text="Transcribir")
-        progress_bar["value"] = 0
+        boton_transcribir.configure(text="🎙️   Transcribir")
+        progress_bar.configure(value=0)
         progress_bar.pack_forget()
         if spinner:
             spinner.stop()
@@ -277,7 +277,7 @@ def iniciar_transcripcion_thread(
     else:
         config.transcripcion_activa = True
         config.transcripcion_en_curso = True
-        boton_transcribir.config(text="Detener Transcripcion")
+        boton_transcribir.configure(text="⏹   Detener")
         progress_bar["value"] = 0
         if frame_progress:
             frame_progress.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
@@ -317,8 +317,8 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
     filename = os.path.basename(audio_file)
 
     def progress_cb(fraction):
-        progress_bar["value"] = fraction * 100
-        ventana.update_idletasks()
+        # Schedule on the main thread — Tkinter is not thread-safe.
+        ventana.after(0, lambda f=fraction: progress_bar.configure(value=f * 100))
 
     def should_continue():
         return config.transcripcion_activa
@@ -406,7 +406,7 @@ def iniciar_transcripcion(
 
     config.transcripcion_activa = True
     config.transcripcion_en_curso = True
-    boton_transcribir.config(text="Detener Transcripcion")
+    ventana.after(0, lambda: boton_transcribir.configure(text="⏹   Detener"))
 
     # Pre-cargar el modelo si no está en memoria y avisar al usuario
     if transcriber._model is None:
@@ -438,14 +438,16 @@ def iniciar_transcripcion(
                 parent=ventana,
             )
             if respuesta is True:
-                texto_transcrito = ajustar_texto_sencillo(transcripcion_guardada["transcription"])
                 nuevo_texto = (
-                    f"Transcripcion de {archivo} (Historial guardado): \n{texto_transcrito} \n\n"
+                    f"Transcripcion de {archivo} (Historial guardado): \n"
+                    f"{transcripcion_guardada['transcription']}\n\n"
                 )
-                text_area.insert(tk.END, nuevo_texto)
-                text_area.see(tk.END)
-                progress_bar["value"] = ((index + 1) / total_archivos) * 100
-                ventana.update_idletasks()
+                ventana.after(0, lambda t=nuevo_texto: (
+                    text_area.insert(tk.END, t),
+                    text_area.see(tk.END),
+                ))
+                frac = ((index + 1) / total_archivos) * 100
+                ventana.after(0, lambda v=frac: progress_bar.configure(value=v))
                 continue
             elif respuesta is None:
                 # Cancelar toda la cola
@@ -460,15 +462,16 @@ def iniciar_transcripcion(
             )
 
             if config.transcripcion_activa:
-                texto_transcrito = ajustar_texto_sencillo(resultado["transcripcion"])
                 nuevo_texto = (
-                    f"Transcripcion de {archivo}: \n{texto_transcrito} \n\n"
+                    f"Transcripcion de {archivo}: \n{resultado['transcripcion']}\n\n"
                     f"Palabras: {resultado['palabras']}\n\n"
                 )
-                text_area.insert(tk.END, nuevo_texto)
-                text_area.see(tk.END)
-                
-                # Guardar en base de datos
+                ventana.after(0, lambda t=nuevo_texto: (
+                    text_area.insert(tk.END, t),
+                    text_area.see(tk.END),
+                ))
+
+                # Guardar en base de datos (no toca UI — seguro desde thread)
                 db.save_transcription(
                     audio_file,
                     resultado["filename"],
@@ -478,8 +481,8 @@ def iniciar_transcripcion(
                     language=idioma_entrada
                 )
 
-            progress_bar["value"] = ((index + 1) / total_archivos) * 100
-            ventana.update_idletasks()
+            frac = ((index + 1) / total_archivos) * 100
+            ventana.after(0, lambda v=frac: progress_bar.configure(value=v))
 
         except diarizer.DiarizationError as e:
             messagebox.showerror(
@@ -504,13 +507,16 @@ def iniciar_transcripcion(
             "Informacion", f"Transcripcion completa para {total_archivos} archivo(s)."
         )
 
-    boton_transcribir.config(text="Transcribir")
+    def _reset_ui():
+        boton_transcribir.configure(text="🎙️   Transcribir")
+        progress_bar.configure(value=0)
+        progress_bar.pack_forget()
+        if spinner:
+            spinner.stop()
+            spinner.pack_forget()
+        if frame_progress:
+            frame_progress.pack_forget()
+
+    ventana.after(0, _reset_ui)
     config.transcripcion_activa = False
-    progress_bar.pack_forget()
-    progress_bar["value"] = 0
     config.transcripcion_en_curso = False
-    if spinner:
-        spinner.stop()
-        spinner.pack_forget()
-    if frame_progress:
-        frame_progress.pack_forget()

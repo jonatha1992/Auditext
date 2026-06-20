@@ -106,6 +106,37 @@ def transcribe_file(
     return " ".join(parts).strip()
 
 
+def transcribe_file_segments(
+    path: str,
+    language: str | None = None,
+    translate: bool = False,
+    progress_cb=None,
+    should_continue=None,
+) -> list[tuple[float, float, str]]:
+    """Like transcribe_file but returns [(start_sec, end_sec, text), ...].
+
+    Used by the simple_diarizer backend to align timestamps with speaker segments.
+    progress_cb receives values in [0, 1].
+    """
+    model = get_model()
+    task = "translate" if translate else "transcribe"
+    segments, info = model.transcribe(
+        path, language=language, task=task,
+        vad_filter=True, condition_on_previous_text=False,
+    )
+    duration = info.duration or 0
+    result: list[tuple[float, float, str]] = []
+    for seg in segments:
+        if should_continue is not None and not should_continue():
+            break
+        text = seg.text.strip()
+        if text:
+            result.append((seg.start, seg.end, text))
+        if progress_cb is not None and duration:
+            progress_cb(min(seg.end / duration, 1.0))
+    return result
+
+
 def transcribe_array(audio, language: str | None = None, translate: bool = False):
     """Transcribe a numpy float32 mono array (16 kHz) offline.
 

@@ -1,134 +1,157 @@
 import os
 import threading
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import messagebox, filedialog, simpledialog
 import customtkinter as ctk
 import db
 import summarizer
 from spinner import Spinner
 
-COLOR_BG = "#0B0C10"          # Deep dark window background
-COLOR_PANEL = "#15161E"       # Cards and panels background
-COLOR_PANEL_LIGHT = "#1A1B26" # Hover and sub-panels background
-COLOR_TEXT_FG = "#FFFFFF"     # Primary text
-COLOR_MUTED = "#8A8F9E"       # Muted/secondary text
-COLOR_ACCENT = "#7000FF"      # Purple accent
-COLOR_ACCENT_HOVER = "#5900CC"# Darker purple hover
-COLOR_BORDER = "#2A2B36"      # Card border outline
+COLOR_BG          = "#0B0C10"
+COLOR_PANEL       = "#15161E"
+COLOR_PANEL_LIGHT = "#1A1B26"
+COLOR_TEXT_FG     = "#FFFFFF"
+COLOR_MUTED       = "#8A8F9E"
+COLOR_ACCENT      = "#7000FF"
+COLOR_ACCENT_HOVER= "#5900CC"
+COLOR_BORDER      = "#2A2B36"
+COLOR_CARD_HOVER  = "#23243A"
+COLOR_CARD_SEL    = "#2D1569"  # dark purple for selected card bg
+COLOR_DANGER      = "#E53E3E"
+COLOR_GREEN       = "#48BB78"
+
 
 class HistorialFrame(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
         super().__init__(parent, fg_color="transparent", **kwargs)
-        
-        self.records = []
+        self.records       = []
         self.selected_record = None
+        self._card_widgets = []
+        self._selected_idx = -1
 
-        # Main layout structure: Split into Header and Body Columns
-        # Header
-        header_frame = ctk.CTkFrame(self, fg_color="transparent")
-        header_frame.pack(fill=tk.X, padx=24, pady=(20, 10))
+        self._build_ui()
+        self.load_history()
 
-        label_titulo = ctk.CTkLabel(
-            header_frame, text="Historial de transcripciones",
+    # ------------------------------------------------------------------
+    # UI BUILD
+    # ------------------------------------------------------------------
+
+    def _build_ui(self):
+        # Header row
+        hdr = ctk.CTkFrame(self, fg_color="transparent")
+        hdr.pack(fill=tk.X, padx=24, pady=(20, 4))
+
+        ctk.CTkLabel(
+            hdr, text="Historial de transcripciones",
             font=("Segoe UI Semibold", 22), text_color=COLOR_TEXT_FG
-        )
-        label_titulo.pack(side=tk.LEFT, anchor=tk.W)
+        ).pack(side=tk.LEFT, anchor=tk.W)
 
         self.btn_refresh = ctk.CTkButton(
-            header_frame, text="↻   Actualizar", font=("Segoe UI Semibold", 12),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
-            width=100, height=32, corner_radius=8, command=self.load_history
+            hdr, text="↻   Actualizar", font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG,
+            hover_color=COLOR_BORDER, width=120, height=32, corner_radius=8,
+            command=self.load_history
         )
         self.btn_refresh.pack(side=tk.RIGHT)
 
-        label_subtitulo = ctk.CTkLabel(
+        ctk.CTkLabel(
             self, text="Revisá, exportá y generá resúmenes de tus transcripciones pasadas.",
             font=("Segoe UI", 12), text_color=COLOR_MUTED
-        )
-        label_subtitulo.pack(anchor=tk.W, padx=24, pady=(0, 10))
+        ).pack(anchor=tk.W, padx=24, pady=(0, 14))
 
-        # Columns container
-        self.columns_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.columns_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
+        # Body
+        body = ctk.CTkFrame(self, fg_color="transparent")
+        body.pack(fill=tk.BOTH, expand=True, padx=24, pady=(0, 12))
 
-        # Left Column: List of recordings (transcriptions)
-        self.left_col = ctk.CTkFrame(self.columns_frame, fg_color="transparent", width=320)
-        self.left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
+        # Left column — fixed width card list
+        self.left_col = ctk.CTkFrame(body, fg_color="transparent", width=260)
+        self.left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 14))
         self.left_col.pack_propagate(False)
 
-        label_left_title = ctk.CTkLabel(
-            self.left_col, text="TRANSCRIPCIONES GUARDADAS", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        ctk.CTkLabel(
+            self.left_col, text="TRANSCRIPCIONES GUARDADAS",
+            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        ).pack(anchor=tk.W, pady=(0, 6))
+
+        self.card_scroll = ctk.CTkScrollableFrame(
+            self.left_col, fg_color=COLOR_PANEL, corner_radius=12,
+            border_color=COLOR_BORDER, border_width=1,
+            scrollbar_button_color=COLOR_BORDER,
+            scrollbar_button_hover_color=COLOR_ACCENT
         )
-        label_left_title.pack(anchor=tk.W, pady=(0, 6))
+        self.card_scroll.pack(fill=tk.BOTH, expand=True)
 
-        self.card_listbox = ctk.CTkFrame(self.left_col, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
-        self.card_listbox.pack(fill=tk.BOTH, expand=True)
+        # Right column
+        self.right_col = ctk.CTkFrame(body, fg_color="transparent")
+        self.right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
-        self.scrollbar_listbox = tk.Scrollbar(
-            self.card_listbox, orient=tk.VERTICAL,
-            bg=COLOR_PANEL, troughcolor=COLOR_PANEL, activebackground=COLOR_ACCENT,
-            borderwidth=0, highlightthickness=0,
+        # Placeholder (shown when no record selected)
+        self.placeholder_frame = ctk.CTkFrame(
+            self.right_col, fg_color=COLOR_PANEL, corner_radius=12,
+            border_color=COLOR_BORDER, border_width=1
         )
-        self.lista_historial = tk.Listbox(
-            self.card_listbox,
-            selectmode=tk.SINGLE,
-            yscrollcommand=self.scrollbar_listbox.set,
-            bg="#11121A", fg=COLOR_TEXT_FG,
-            selectbackground=COLOR_ACCENT, selectforeground="#ffffff",
-            relief=tk.FLAT, borderwidth=0, highlightthickness=0,
-            font=("Segoe UI", 10), activestyle="none",
-        )
-        self.lista_historial.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=12)
-        self.scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=12)
-        self.scrollbar_listbox.config(command=self.lista_historial.yview)
-        
-        self.lista_historial.bind("<<ListboxSelect>>", self.on_record_select)
-
-        # Right Column: Details view
-        self.right_col = ctk.CTkFrame(self.columns_frame, fg_color="transparent")
-        self.right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
-
-        # Placeholder inside right column (initially shown)
-        self.placeholder_frame = ctk.CTkFrame(self.right_col, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
         self.placeholder_frame.pack(fill=tk.BOTH, expand=True)
-        
-        self.placeholder_label = ctk.CTkLabel(
-            self.placeholder_frame, text="📜\n\nSeleccioná una transcripción para ver sus detalles.",
-            font=("Segoe UI Semibold", 13), text_color=COLOR_MUTED, justify=tk.CENTER
-        )
-        self.placeholder_label.pack(expand=True)
-
-        # Details Panel container (packed when a record is selected)
-        self.details_frame = ctk.CTkFrame(self.right_col, fg_color="transparent")
-        # Initially not packed
-
-        # Header of details: Title, Date, Duration, and Top action buttons
-        self.details_header = ctk.CTkFrame(self.details_frame, fg_color="transparent")
-        self.details_header.pack(fill=tk.X, pady=(0, 8))
-
-        self.label_details_title = ctk.CTkLabel(
-            self.details_header, text="nombre_archivo.mp3", font=("Segoe UI Semibold", 14), text_color=COLOR_TEXT_FG,
-            anchor=tk.W, justify=tk.LEFT
-        )
-        self.label_details_title.pack(anchor=tk.W)
-
-        self.label_details_meta = ctk.CTkLabel(
-            self.details_header, text="Duración: 00:00  •  Fecha: 2026-06-20", font=("Segoe UI", 11), text_color=COLOR_MUTED,
-            anchor=tk.W
-        )
-        self.label_details_meta.pack(anchor=tk.W, pady=(2, 0))
-
-        # Split Card view for details (Transcription on left/top, Summary on right/bottom)
-        self.split_details = ctk.CTkFrame(self.details_frame, fg_color="transparent")
-        self.split_details.pack(fill=tk.BOTH, expand=True)
-
-        # Left Detail Panel: Transcription Text
-        self.pane_text = ctk.CTkFrame(self.split_details, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
-        self.pane_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
 
         ctk.CTkLabel(
-            self.pane_text, text="TEXTO TRANSCRITO", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
-        ).pack(anchor=tk.W, padx=14, pady=(12, 4))
+            self.placeholder_frame,
+            text="📜\n\nSeleccioná una transcripción para ver sus detalles.",
+            font=("Segoe UI Semibold", 13), text_color=COLOR_MUTED,
+            justify=tk.CENTER
+        ).pack(expand=True)
+
+        # Detail frame (hidden until a card is selected)
+        self.details_frame = ctk.CTkFrame(self.right_col, fg_color="transparent")
+        self._build_detail_ui()
+
+    def _build_detail_ui(self):
+        df = self.details_frame
+
+        # Title + metadata (2 rows)
+        dh = ctk.CTkFrame(df, fg_color="transparent")
+        dh.pack(fill=tk.X, pady=(0, 10))
+
+        self.label_detail_title = ctk.CTkLabel(
+            dh, text="", font=("Segoe UI Semibold", 16),
+            text_color=COLOR_TEXT_FG, anchor=tk.W
+        )
+        self.label_detail_title.pack(anchor=tk.W)
+
+        self.label_detail_meta1 = ctk.CTkLabel(
+            dh, text="", font=("Segoe UI", 11),
+            text_color=COLOR_MUTED, anchor=tk.W
+        )
+        self.label_detail_meta1.pack(anchor=tk.W, pady=(2, 0))
+
+        self.label_detail_meta2 = ctk.CTkLabel(
+            dh, text="", font=("Segoe UI", 11),
+            text_color=COLOR_MUTED, anchor=tk.W
+        )
+        self.label_detail_meta2.pack(anchor=tk.W)
+
+        # Two side-by-side panels
+        self.split_details = ctk.CTkFrame(df, fg_color="transparent")
+        self.split_details.pack(fill=tk.BOTH, expand=True)
+
+        # — Transcript panel —
+        self.pane_text = ctk.CTkFrame(
+            self.split_details, fg_color=COLOR_PANEL, corner_radius=12,
+            border_color=COLOR_BORDER, border_width=1
+        )
+        self.pane_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+
+        txt_hdr = ctk.CTkFrame(self.pane_text, fg_color="transparent")
+        txt_hdr.pack(fill=tk.X, padx=14, pady=(12, 4))
+
+        ctk.CTkLabel(
+            txt_hdr, text="TEXTO TRANSCRITO",
+            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        ).pack(side=tk.LEFT)
+
+        self.label_word_count = ctk.CTkLabel(
+            txt_hdr, text="",
+            font=("Segoe UI", 10), text_color=COLOR_MUTED
+        )
+        self.label_word_count.pack(side=tk.RIGHT)
 
         self.txt_transcription = ctk.CTkTextbox(
             self.pane_text, fg_color="#11121A", text_color=COLOR_TEXT_FG,
@@ -136,73 +159,109 @@ class HistorialFrame(ctk.CTkFrame):
         )
         self.txt_transcription.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
 
-        # Right Detail Panel: AI Summary
-        self.pane_summary = ctk.CTkFrame(self.split_details, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+        # — Summary panel —
+        self.pane_summary = ctk.CTkFrame(
+            self.split_details, fg_color=COLOR_PANEL, corner_radius=12,
+            border_color=COLOR_BORDER, border_width=1
+        )
         self.pane_summary.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
 
-        ctk.CTkLabel(
-            self.pane_summary, text="RESUMEN CON IA (GEMINI)", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
-        ).pack(anchor=tk.W, padx=14, pady=(12, 4))
+        sum_hdr = ctk.CTkFrame(self.pane_summary, fg_color="transparent")
+        sum_hdr.pack(fill=tk.X, padx=14, pady=(12, 4))
 
-        # Summary Sub-container (can either show summary text or the AI prompt placeholder)
+        ctk.CTkLabel(
+            sum_hdr, text="✨  RESUMEN IA - GEMINI",
+            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        ).pack(side=tk.LEFT)
+
+        # Summary content area (either textbox or no-summary placeholder)
         self.summary_content_frame = ctk.CTkFrame(self.pane_summary, fg_color="transparent")
-        self.summary_content_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        self.summary_content_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 0))
 
         self.txt_summary = ctk.CTkTextbox(
             self.summary_content_frame, fg_color="#11121A", text_color=COLOR_TEXT_FG,
             font=("Segoe UI", 12), corner_radius=8, border_width=0
         )
-        # Packed dynamically based on summary status
 
-        self.no_summary_frame = ctk.CTkFrame(self.summary_content_frame, fg_color="#11121A", corner_radius=8)
-        # Packed dynamically
+        self.no_summary_frame = ctk.CTkFrame(
+            self.summary_content_frame, fg_color="#11121A", corner_radius=8
+        )
 
         self.spinner = Spinner(
             self.no_summary_frame, size=24, bg="#11121A",
             accent_color=COLOR_ACCENT, muted_color=COLOR_PANEL
         )
-        
+
         self.label_no_summary = ctk.CTkLabel(
-            self.no_summary_frame, text="Esta transcripción aún no tiene un resumen generado.",
+            self.no_summary_frame,
+            text="Esta transcripción aún no tiene un resumen generado.",
             font=("Segoe UI", 12), text_color=COLOR_MUTED, justify=tk.CENTER
         )
         self.label_no_summary.pack(pady=(20, 8), padx=20)
 
         self.btn_gen_summary_inline = ctk.CTkButton(
-            self.no_summary_frame, text="✨   Generar Resumen con IA", font=("Segoe UI Semibold", 12),
+            self.no_summary_frame, text="✨   Generar Resumen con IA",
+            font=("Segoe UI Semibold", 12),
             fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
             height=36, corner_radius=8, command=self.generate_summary
         )
         self.btn_gen_summary_inline.pack(pady=(0, 20))
 
-        # Action Buttons Row below cards
-        self.action_row = ctk.CTkFrame(self.details_frame, fg_color="transparent")
+        # "● Generado - N puntos clave" indicator at bottom of summary panel
+        self.summary_indicator = ctk.CTkFrame(self.pane_summary, fg_color="transparent")
+
+        self.dot_label = ctk.CTkLabel(
+            self.summary_indicator, text="●",
+            font=("Segoe UI", 9), text_color=COLOR_GREEN
+        )
+        self.dot_label.pack(side=tk.LEFT, padx=(14, 4))
+
+        self.label_indicator_text = ctk.CTkLabel(
+            self.summary_indicator, text="",
+            font=("Segoe UI", 10), text_color=COLOR_MUTED
+        )
+        self.label_indicator_text.pack(side=tk.LEFT)
+
+        # Action bar
+        self.action_row = ctk.CTkFrame(df, fg_color="transparent")
         self.action_row.pack(fill=tk.X, pady=(10, 0))
 
+        self.btn_rename = ctk.CTkButton(
+            self.action_row, text="✏️   Renombrar",
+            font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+            height=36, corner_radius=8, command=self.rename_record
+        )
+        self.btn_rename.pack(side=tk.LEFT, padx=(0, 6))
+
         self.btn_copy_text = ctk.CTkButton(
-            self.action_row, text="📋   Copiar Transcripción", font=("Segoe UI Semibold", 12),
+            self.action_row, text="📋   Copiar Transcripción",
+            font=("Segoe UI Semibold", 12),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
             height=36, corner_radius=8, command=self.copy_transcription
         )
         self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 6))
 
         self.btn_copy_summary = ctk.CTkButton(
-            self.action_row, text="✨   Copiar Resumen", font=("Segoe UI Semibold", 12),
+            self.action_row, text="✨   Copiar Resumen",
+            font=("Segoe UI Semibold", 12),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
             height=36, corner_radius=8, command=self.copy_summary
         )
         self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 6))
 
         self.btn_export = ctk.CTkButton(
-            self.action_row, text="📥   Exportar", font=("Segoe UI Semibold", 12),
+            self.action_row, text="📥   Exportar",
+            font=("Segoe UI Semibold", 12),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
             height=36, corner_radius=8, command=self.export_transcription
         )
         self.btn_export.pack(side=tk.LEFT, padx=(0, 6))
 
         self.btn_delete = ctk.CTkButton(
-            self.action_row, text="🗑️   Eliminar Registro", font=("Segoe UI Semibold", 12),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color="#E53E3E",
+            self.action_row, text="🗑️   Eliminar Registro",
+            font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_DANGER, text_color="#FFFFFF", hover_color="#C53030",
             height=36, corner_radius=8, command=self.delete_record
         )
         self.btn_delete.pack(side=tk.RIGHT)
@@ -212,82 +271,174 @@ class HistorialFrame(ctk.CTkFrame):
         )
         self.label_status.pack(side=tk.RIGHT, padx=12)
 
-        # Responsive layout adjustments
-        self.last_hist_width = [0]
-        self.bind("<Configure>", self.on_hist_configure)
+    # ------------------------------------------------------------------
+    # CARD LIST
+    # ------------------------------------------------------------------
 
-        # Load data initially
-        self.load_history()
+    def _make_card(self, record, index):
+        card = ctk.CTkFrame(
+            self.card_scroll, fg_color=COLOR_PANEL_LIGHT,
+            corner_radius=10, cursor="hand2"
+        )
+        card.pack(fill=tk.X, padx=6, pady=(4, 0))
+
+        name = record.get("file_name", "")
+        dur  = record.get("duration") or "00:00"
+        date = (record.get("created_at") or "").split(" ")[0]
+
+        lbl_name = ctk.CTkLabel(
+            card, text=name, font=("Segoe UI Semibold", 11),
+            text_color=COLOR_TEXT_FG, anchor=tk.W
+        )
+        lbl_name.pack(fill=tk.X, padx=12, pady=(10, 2))
+
+        row2 = ctk.CTkFrame(card, fg_color="transparent")
+        row2.pack(fill=tk.X, padx=12, pady=(0, 10))
+
+        badge = ctk.CTkLabel(
+            row2, text=dur, font=("Segoe UI Semibold", 9),
+            fg_color=COLOR_ACCENT, text_color="#FFFFFF",
+            corner_radius=4, width=48, height=18
+        )
+        badge.pack(side=tk.LEFT, padx=(0, 8))
+
+        lbl_date = ctk.CTkLabel(
+            row2, text=date, font=("Segoe UI", 10), text_color=COLOR_MUTED
+        )
+        lbl_date.pack(side=tk.LEFT)
+
+        def on_click(ev, idx=index):
+            self._select_card(idx)
+
+        def on_enter(ev, idx=index):
+            if self._selected_idx != idx:
+                self._card_widgets[idx].configure(fg_color=COLOR_CARD_HOVER)
+
+        def on_leave_safe(ev, idx=index):
+            # Check pointer is actually outside the card before dehighlighting
+            c = self._card_widgets[idx]
+            def check():
+                try:
+                    mx, my = c.winfo_pointerxy()
+                    cx, cy = c.winfo_rootx(), c.winfo_rooty()
+                    cw, ch = c.winfo_width(), c.winfo_height()
+                    inside = cx <= mx < cx + cw and cy <= my < cy + ch
+                    if not inside and self._selected_idx != idx:
+                        c.configure(fg_color=COLOR_PANEL_LIGHT)
+                except Exception:
+                    pass
+            c.after(10, check)
+
+        for w in [card, lbl_name, row2, badge, lbl_date]:
+            w.bind("<Button-1>", on_click)
+            w.bind("<Enter>", on_enter)
+            w.bind("<Leave>", on_leave_safe)
+
+        return card
+
+    def _select_card(self, index):
+        if index >= len(self.records):
+            return
+
+        # Reset all cards to default
+        for c in self._card_widgets:
+            c.configure(fg_color=COLOR_PANEL_LIGHT)
+
+        self._selected_idx = index
+        self._card_widgets[index].configure(fg_color=COLOR_CARD_SEL)
+
+        record = self.records[index]
+        self.selected_record = record
+
+        self.placeholder_frame.pack_forget()
+        self.details_frame.pack(fill=tk.BOTH, expand=True)
+
+        # Header labels
+        self.label_detail_title.configure(text=record.get("file_name", ""))
+
+        file_path = record.get("file_path", "")
+        duration  = record.get("duration") or "00:00"
+        created   = record.get("created_at", "")
+
+        # Truncate long paths
+        display_path = file_path
+        if len(display_path) > 65:
+            display_path = "..." + display_path[-62:]
+
+        self.label_detail_meta1.configure(
+            text=f"Archivo  -  {display_path}    Duración  -  {duration}"
+        )
+        self.label_detail_meta2.configure(text=f"Fecha  -  {created}")
+
+        # Fill transcript
+        self.txt_transcription.configure(state="normal")
+        self.txt_transcription.delete("1.0", tk.END)
+        text = record.get("transcription") or ""
+        self.txt_transcription.insert("1.0", text)
+
+        # Word count
+        words = len(text.split()) if text.strip() else 0
+        self.label_word_count.configure(text=f"{words} palabras")
+
+        self.update_summary_ui()
+
+    # ------------------------------------------------------------------
+    # DATA
+    # ------------------------------------------------------------------
 
     def load_history(self):
         self.records = db.get_all_transcriptions()
-        self.lista_historial.delete(0, tk.END)
-        for r in self.records:
-            # Format: "Filename (duration) - timestamp"
-            filename = r["file_name"]
-            duration = r["duration"] or "00:00"
-            date_str = r["created_at"].split(" ")[0] if r["created_at"] else ""
-            item_text = f"{filename} ({duration}) - {date_str}"
-            self.lista_historial.insert(tk.END, item_text)
-        
-        # Hide details panel and show placeholder
+
+        for c in self._card_widgets:
+            c.destroy()
+        self._card_widgets.clear()
+        self._selected_idx = -1
+
+        for i, rec in enumerate(self.records):
+            card = self._make_card(rec, i)
+            self._card_widgets.append(card)
+
         self.details_frame.pack_forget()
         self.placeholder_frame.pack(fill=tk.BOTH, expand=True)
         self.selected_record = None
 
-    def on_record_select(self, event):
-        selection = self.lista_historial.curselection()
-        if not selection:
-            return
-        
-        idx = selection[0]
-        if idx >= len(self.records):
-            return
-            
-        record = self.records[idx]
-        self.selected_record = record
-        
-        # Hide placeholder and show details panel
-        self.placeholder_frame.pack_forget()
-        self.details_frame.pack(fill=tk.BOTH, expand=True)
-
-        # Update labels
-        self.label_details_title.configure(text=record["file_name"])
-        date_str = record["created_at"] or "Desconocida"
-        meta_text = f"Archivo: {record['file_path']}  •  Duración: {record['duration'] or '00:00'}  •  Fecha: {date_str}"
-        self.label_details_meta.configure(text=meta_text)
-
-        # Set text fields
-        self.txt_transcription.configure(state="normal")
-        self.txt_transcription.delete("1.0", tk.END)
-        self.txt_transcription.insert("1.0", record["transcription"] or "")
-        self.txt_transcription.configure(state="normal") # Allow user editing if they want, or keep it read-only? Keep normal but user can modify.
-
-        self.update_summary_ui()
-
     def update_summary_ui(self):
         if not self.selected_record:
             return
-            
-        summary = self.selected_record.get("summary", "").strip()
-        
+
+        summary = (self.selected_record.get("summary") or "").strip()
+
         self.txt_summary.pack_forget()
         self.no_summary_frame.pack_forget()
-        
+        self.summary_indicator.pack_forget()
+
         if summary:
             self.txt_summary.pack(fill=tk.BOTH, expand=True)
             self.txt_summary.configure(state="normal")
             self.txt_summary.delete("1.0", tk.END)
             self.txt_summary.insert("1.0", summary)
+            self.txt_summary.configure(state="disabled")
             self.btn_copy_summary.configure(state="normal")
+
+            # Count key points (non-empty paragraphs / bullet lines)
+            lines = [ln.strip() for ln in summary.split("\n") if ln.strip() and
+                     (ln.strip().startswith("-") or ln.strip().startswith("•") or ln.strip().startswith("**"))]
+            n = len(lines) if lines else max(1, len([p for p in summary.split("\n\n") if p.strip()]))
+            plural = "s" if n != 1 else ""
+            self.label_indicator_text.configure(text=f"Generado  -  {n} punto{plural} clave")
+            self.summary_indicator.pack(fill=tk.X, pady=(0, 10))
         else:
             self.no_summary_frame.pack(fill=tk.BOTH, expand=True)
             self.btn_copy_summary.configure(state="disabled")
 
+    # ------------------------------------------------------------------
+    # SUMMARY GENERATION
+    # ------------------------------------------------------------------
+
     def generate_summary(self):
         if not self.selected_record:
             return
-            
+
         text = self.txt_transcription.get("1.0", tk.END).strip()
         if not text:
             messagebox.showwarning("Advertencia", "No hay texto transcrito para resumir.")
@@ -301,12 +452,10 @@ class HistorialFrame(ctk.CTkFrame):
             )
             return
 
-        # Show spinner, hide labels and button
         self.label_no_summary.pack_forget()
         self.btn_gen_summary_inline.pack_forget()
         self.spinner.pack(pady=40)
         self.spinner.start()
-        
         self.set_status("Resumiendo con IA...")
 
         threading.Thread(target=self._run_summary_thread, args=(text,), daemon=True).start()
@@ -314,15 +463,14 @@ class HistorialFrame(ctk.CTkFrame):
     def _run_summary_thread(self, text):
         try:
             summary = summarizer.summarize(text)
-            self.after(0, lambda: self._summary_success(summary))
+            self.after(0, lambda s=summary: self._summary_success(s))
         except Exception as e:
-            self.after(0, lambda: self._summary_failed(str(e)))
+            err_msg = str(e)
+            self.after(0, lambda msg=err_msg: self._summary_failed(msg))
 
     def _summary_success(self, summary):
         self.spinner.stop()
         self.spinner.pack_forget()
-        
-        # Restore labels for future use if it gets cleared
         self.label_no_summary.pack(pady=(20, 8), padx=20)
         self.btn_gen_summary_inline.pack(pady=(0, 20))
 
@@ -330,16 +478,13 @@ class HistorialFrame(ctk.CTkFrame):
             file_path = self.selected_record["file_path"]
             db.update_summary(file_path, summary)
             self.selected_record["summary"] = summary
-            
-            # Refresh list item reference
             for r in self.records:
                 if r["file_path"] == file_path:
                     r["summary"] = summary
                     break
-                    
             self.update_summary_ui()
             self.set_status("¡Resumen listo!")
-            messagebox.showinfo("Éxito", "El resumen de IA fue generado e incorporado correctamente.")
+            messagebox.showinfo("Éxito", "El resumen de IA fue generado correctamente.")
         else:
             self.set_status("")
 
@@ -351,6 +496,10 @@ class HistorialFrame(ctk.CTkFrame):
         self.set_status("Error al resumir")
         messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{err_msg}")
 
+    # ------------------------------------------------------------------
+    # ACTIONS
+    # ------------------------------------------------------------------
+
     def copy_transcription(self):
         text = self.txt_transcription.get("1.0", tk.END).strip()
         if text:
@@ -359,7 +508,10 @@ class HistorialFrame(ctk.CTkFrame):
             self.show_toast("Transcripción copiada")
 
     def copy_summary(self):
-        text = self.txt_summary.get("1.0", tk.END).strip()
+        try:
+            text = self.txt_summary.get("1.0", tk.END).strip()
+        except Exception:
+            text = ""
         if text:
             self.clipboard_clear()
             self.clipboard_append(text)
@@ -373,33 +525,64 @@ class HistorialFrame(ctk.CTkFrame):
             messagebox.showwarning("Advertencia", "No hay transcripción para exportar.")
             return
 
-        initial_name = os.path.splitext(self.selected_record["file_name"])[0] + "_transcripcion.txt"
-        output_file = filedialog.asksaveasfilename(
+        initial = os.path.splitext(self.selected_record["file_name"])[0] + "_transcripcion.txt"
+        out = filedialog.asksaveasfilename(
             defaultextension=".txt",
             filetypes=[("Archivo de texto", "*.txt")],
             title="Guardar transcripción como",
-            initialfile=initial_name
+            initialfile=initial
         )
-        if output_file:
+        if out:
             try:
-                with open(output_file, "w", encoding="utf-8") as f:
+                with open(out, "w", encoding="utf-8") as f:
                     f.write(text)
-                messagebox.showinfo("Información", f"Transcripción guardada en {output_file}.")
+                messagebox.showinfo("Información", f"Transcripción guardada en {out}.")
             except Exception as e:
                 messagebox.showerror("Error", f"No se pudo guardar el archivo: {e}")
+
+    def rename_record(self):
+        if not self.selected_record:
+            return
+        current_name = self.selected_record.get("file_name", "")
+        new_name = simpledialog.askstring(
+            "Renombrar transcripción",
+            "Nuevo nombre:",
+            initialvalue=current_name,
+            parent=self,
+        )
+        if not new_name or new_name.strip() == current_name:
+            return
+        new_name = new_name.strip()
+        file_path = self.selected_record["file_path"]
+        if db.rename_transcription(file_path, new_name):
+            self.selected_record["file_name"] = new_name
+            for r in self.records:
+                if r["file_path"] == file_path:
+                    r["file_name"] = new_name
+                    break
+            # Refresh the card label in-place
+            card = self._card_widgets[self._selected_idx]
+            for child in card.winfo_children():
+                if isinstance(child, ctk.CTkLabel):
+                    child.configure(text=new_name)
+                    break
+            self.label_detail_title.configure(text=new_name)
+            self.show_toast("Nombre actualizado")
+        else:
+            messagebox.showerror("Error", "No se pudo renombrar el registro.")
 
     def delete_record(self):
         if not self.selected_record:
             return
-            
         confirm = messagebox.askyesno(
             "Confirmar eliminación",
-            f"¿Estás seguro de que querés borrar la transcripción de '{self.selected_record['file_name']}' del historial?\n\nEsta acción no eliminará tu archivo de audio, solo el registro guardado.",
+            f"¿Estás seguro de que querés borrar la transcripción de "
+            f"'{self.selected_record['file_name']}' del historial?\n\n"
+            "Esta acción no eliminará tu archivo de audio, solo el registro guardado.",
             parent=self
         )
         if confirm:
-            file_path = self.selected_record["file_path"]
-            if db.delete_transcription(file_path):
+            if db.delete_transcription(self.selected_record["file_path"]):
                 self.show_toast("Registro eliminado")
                 self.load_history()
             else:
@@ -411,67 +594,3 @@ class HistorialFrame(ctk.CTkFrame):
     def show_toast(self, text):
         self.set_status(f"✓ {text}")
         self.after(2500, lambda: self.set_status(""))
-
-    def on_hist_configure(self, event):
-        if event.widget != self:
-            return
-            
-        new_w = event.width
-        if new_w < 400: # Ignorar anchos de inicialización
-            return
-            
-        if new_w == self.last_hist_width[0]:
-            return
-        self.last_hist_width[0] = new_w
-
-        # Threshold at 800px width
-        if new_w < 800:
-            # 1-Column Layout: Left Column full width above details
-            self.left_col.pack_forget()
-            self.right_col.pack_forget()
-            
-            self.left_col.configure(height=180)
-            self.left_col.pack(side=tk.TOP, fill=tk.X, expand=False, pady=(0, 10))
-            self.right_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
-            
-            # Stack cards inside right column details vertically
-            self.pane_text.pack_forget()
-            self.pane_summary.pack_forget()
-            self.pane_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 6))
-            self.pane_summary.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(6, 0))
-            
-            # Wrap action buttons
-            self.btn_copy_text.pack_forget()
-            self.btn_copy_summary.pack_forget()
-            self.btn_export.pack_forget()
-            self.btn_delete.pack_forget()
-            
-            self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-            self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-            self.btn_export.pack(side=tk.LEFT, padx=(0, 4), pady=2)
-            self.btn_delete.pack(side=tk.RIGHT, pady=2)
-        else:
-            # 2-Column Layout: Side-by-side
-            self.left_col.pack_forget()
-            self.right_col.pack_forget()
-            
-            self.left_col.configure(width=320)
-            self.left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
-            self.right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
-            
-            # Side-by-side cards inside details
-            self.pane_text.pack_forget()
-            self.pane_summary.pack_forget()
-            self.pane_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
-            self.pane_summary.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
-            
-            # Single row buttons
-            self.btn_copy_text.pack_forget()
-            self.btn_copy_summary.pack_forget()
-            self.btn_export.pack_forget()
-            self.btn_delete.pack_forget()
-            
-            self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 6))
-            self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 6))
-            self.btn_export.pack(side=tk.LEFT, padx=(0, 6))
-            self.btn_delete.pack(side=tk.RIGHT)
