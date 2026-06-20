@@ -24,6 +24,25 @@ from config import logger
 
 load_dotenv()
 
+# Patch SpeechBrain to avoid lazy-loading 'k2' on Windows & to use COPY instead of SYMLINK
+try:
+    import sys
+    import speechbrain.inference
+    sys.modules["speechbrain.pretrained"] = speechbrain.inference
+    
+    from speechbrain.inference import EncoderClassifier
+    from speechbrain.utils.fetching import LocalStrategy
+    
+    orig_from_hparams = EncoderClassifier.from_hparams
+    
+    def _patched_from_hparams(*args, **kwargs):
+        kwargs["local_strategy"] = LocalStrategy.COPY
+        return orig_from_hparams(*args, **kwargs)
+        
+    EncoderClassifier.from_hparams = _patched_from_hparams
+except Exception:
+    pass
+
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
@@ -101,7 +120,14 @@ def _diarize_pyannote(path: str, language: str | None, progress_cb) -> str:
         if progress_cb:
             progress_cb(0.75)
 
-        diarize_model = _diarization_pipeline()(use_auth_token=HF_TOKEN, device=DEVICE)
+        pipeline_class = _diarization_pipeline()
+        import inspect
+        sig = inspect.signature(pipeline_class.__init__)
+        if "token" in sig.parameters:
+            diarize_model = pipeline_class(token=HF_TOKEN, device=DEVICE)
+        else:
+            diarize_model = pipeline_class(use_auth_token=HF_TOKEN, device=DEVICE)
+            
         diarize_segments = diarize_model(audio)
         result = whisperx.assign_word_speakers(diarize_segments, result)
         if progress_cb:
@@ -232,15 +258,39 @@ def diarize_file(path: str, language: str | None = None, progress_cb=None) -> st
     """Transcribe and label each segment by speaker.
 
     Tries pyannote (whisperx + HF_TOKEN) first for best quality.
-    Falls back to simple_diarizer when no HF token is set.
-    Raises DiarizationError when neither backend is available.
+    Falls back to simple_diarizer when pyannote fails or when no HF token is set.
+    Raises DiarizationError when neither backend is available or both fail.
     """
+    pyannote_failed = False
+    pyannote_error_msg = ""
+
     if _is_pyannote_available():
-        return _diarize_pyannote(path, language, progress_cb)
+        try:
+            logger.info("Iniciando diarización con pyannote/whisperx...")
+            return _diarize_pyannote(path, language, progress_cb)
+        except Exception as exc:
+            pyannote_failed = True
+            pyannote_error_msg = str(exc)
+            logger.warning(
+                "Fallo pyannote/whisperx (%s). Intentando fallback a simple_diarizer...",
+                exc,
+                exc_info=True
+            )
 
     if _is_simple_available():
-        logger.info("HF_TOKEN no configurado; usando simple_diarizer como alternativa")
+        if pyannote_failed:
+            logger.info("Usando simple_diarizer como fallback de emergencia")
+        else:
+            logger.info("HF_TOKEN no configurado; usando simple_diarizer como alternativa")
         return _diarize_simple(path, language, progress_cb)
+
+    if pyannote_failed:
+        raise DiarizationError(
+            f"Fallo la diarización con pyannote y no está disponible simple_diarizer.\n"
+            f"Error original: {pyannote_error_msg}\n\n"
+            "Solución: Aceptá los términos de 'pyannote/speaker-diarization-3.1' y "
+            "'pyannote/speaker-diarization-community-1' en huggingface.co, o instalá simple_diarizer."
+        )
 
     raise DiarizationError(
         "No hay ningun backend de diarizacion disponible.\n"
