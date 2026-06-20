@@ -1,5 +1,6 @@
 import tkinter as tk
 from tkinter import messagebox
+import customtkinter as ctk
 from interfaz import crear_interfaz, centrar_ventana
 from config import check_dependencies, logger
 from reproductor import pygame
@@ -25,7 +26,11 @@ def main():
         # Inicializar pygame mixer
         pygame.mixer.init()
 
-        ventana = tk.Tk()
+        # Configurar CustomTkinter
+        ctk.set_appearance_mode("dark")
+        ctk.set_default_color_theme("blue")
+
+        ventana = ctk.CTk()
         ventana.title("AudioText")
         # Optional window icon. Bundled only in the PyInstaller build, so a
         # missing file when running from source must not crash the app.

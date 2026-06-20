@@ -1,88 +1,45 @@
 import tkinter as tk
 from tkinter import ttk
+import customtkinter as ctk
 from funcionalidad import *
 from reproductor import *
 from config import idiomas
-from live_frame import (
-    LiveFrame,
-    COLOR_BG,
-    COLOR_PANEL,
-    COLOR_TEXT_BG,
-    COLOR_TEXT_FG,
-    COLOR_ACCENT,
-    COLOR_ACCENT_ACTIVE,
-    COLOR_MUTED,
-)
+from live_frame import LiveFrame
 from spinner import Spinner
+from ajustes_frame import AjustesFrame
 
-
-
-def _accent_btn(parent, text, command, **kw):
-    # tk.Button (not ttk): the native Windows ttk theme ignores custom button
-    # colors, so the classic widget is used for consistent dark styling.
-    return tk.Button(
-        parent, text=text, command=command, cursor="hand2",
-        bg=COLOR_ACCENT, fg="#ffffff",
-        activebackground=COLOR_ACCENT_ACTIVE, activeforeground="#ffffff",
-        relief=tk.FLAT, borderwidth=0, font=("Segoe UI Semibold", 10),
-        padx=14, pady=6, **kw,
-    )
-
-
-def _flat_btn(parent, text, command, **kw):
-    return tk.Button(
-        parent, text=text, command=command, cursor="hand2",
-        bg=COLOR_PANEL, fg=COLOR_TEXT_FG,
-        activebackground="#34344a", activeforeground=COLOR_TEXT_FG,
-        disabledforeground=COLOR_MUTED,
-        relief=tk.FLAT, borderwidth=0, font=("Segoe UI", 10),
-        padx=12, pady=6, **kw,
-    )
+# Design System Colors matching the mockup
+COLOR_BG = "#0B0C10"          # Deep dark window background
+COLOR_SIDEBAR = "#08090C"     # Even darker sidebar background
+COLOR_PANEL = "#15161E"       # Cards and panels background
+COLOR_PANEL_LIGHT = "#1A1B26" # Hover and sub-panels background
+COLOR_TEXT_FG = "#FFFFFF"     # Primary text
+COLOR_MUTED = "#8A8F9E"       # Muted/secondary text
+COLOR_ACCENT = "#7000FF"      # Purple accent
+COLOR_ACCENT_HOVER = "#5900CC"# Darker purple hover
+COLOR_BORDER = "#2A2B36"      # Card border outline
 
 
 def _setup_theme(ventana):
-    ventana.configure(bg=COLOR_BG)
+    ventana.configure(fg_color=COLOR_BG)
     style = ttk.Style(ventana)
-    # The native Windows theme ignores custom tab/combobox colors. "clam" honors
-    # configure()/map(), so the dark theme actually applies.
     try:
         style.theme_use("clam")
     except tk.TclError:
         pass
 
-    style.configure("TNotebook", background=COLOR_BG, borderwidth=0)
-    style.configure(
-        "TNotebook.Tab", background=COLOR_PANEL, foreground=COLOR_MUTED,
-        padding=(18, 9), font=("Segoe UI", 10), borderwidth=0,
-    )
-    style.map(
-        "TNotebook.Tab",
-        background=[("selected", COLOR_ACCENT)],
-        foreground=[("selected", "#ffffff")],
-    )
-
+    # Style the listbox scrollbars and progressbar to match
     style.configure(
         "Archivos.Horizontal.TProgressbar",
-        background=COLOR_ACCENT, troughcolor=COLOR_PANEL, borderwidth=0,
+        background=COLOR_ACCENT, troughcolor=COLOR_PANEL_LIGHT, borderwidth=0,
     )
-
-    # Dark comboboxes.
     style.configure(
-        "TCombobox", fieldbackground=COLOR_TEXT_BG, background=COLOR_PANEL,
-        foreground=COLOR_TEXT_FG, arrowcolor=COLOR_TEXT_FG, borderwidth=0,
-        padding=4,
+        "ProgressScale.Horizontal.TScale",
+        background=COLOR_PANEL,
+        troughcolor="#11121A",
+        slidercolor=COLOR_ACCENT,
+        borderwidth=0,
     )
-    style.map(
-        "TCombobox",
-        fieldbackground=[("readonly", COLOR_TEXT_BG)],
-        foreground=[("readonly", COLOR_TEXT_FG)],
-        selectbackground=[("readonly", COLOR_TEXT_BG)],
-        selectforeground=[("readonly", COLOR_TEXT_FG)],
-    )
-    ventana.option_add("*TCombobox*Listbox.background", COLOR_TEXT_BG)
-    ventana.option_add("*TCombobox*Listbox.foreground", COLOR_TEXT_FG)
-    ventana.option_add("*TCombobox*Listbox.selectBackground", COLOR_ACCENT)
-    ventana.option_add("*TCombobox*Listbox.selectForeground", "#ffffff")
 
 
 def crear_interfaz(ventana):
@@ -94,157 +51,264 @@ def crear_interfaz(ventana):
 
     _setup_theme(ventana)
 
-    # Two tabs: file transcription (existing) and live system-audio transcription.
-    notebook = ttk.Notebook(ventana)
-    notebook.pack(fill=tk.BOTH, expand=True)
+    # ----------------------------------------------------
+    # APP SHELL: LEFT SIDEBAR & RIGHT CONTENT AREA
+    # ----------------------------------------------------
+    
+    # Left Sidebar Frame
+    sidebar_frame = ctk.CTkFrame(ventana, width=200, corner_radius=0, fg_color=COLOR_SIDEBAR, border_width=0)
+    sidebar_frame.pack(side=tk.LEFT, fill=tk.Y)
+    sidebar_frame.pack_propagate(False)
 
-    tab_archivos = tk.Frame(notebook, bg=COLOR_BG)
-    notebook.add(tab_archivos, text="Archivos")
-
-    live_frame = LiveFrame(notebook)
-    notebook.add(live_frame, text="En vivo")
-
-    # Header (top), then bottom-pinned control bars, then the body fills the
-    # middle. Pinning controls to the bottom keeps them visible regardless of
-    # window height (otherwise the tall text area pushes them off-screen).
-    label_titulo = tk.Label(
-        tab_archivos, text="Transcripcion de archivos",
-        font=("Segoe UI Semibold", 15), bg=COLOR_BG, fg=COLOR_TEXT_FG,
+    # Logo/Brand
+    label_logo = ctk.CTkLabel(
+        sidebar_frame, text="AudioText", font=("Segoe UI Semibold", 20), text_color="#A78BFA"
     )
-    label_titulo.pack(side=tk.TOP, anchor=tk.W, padx=16, pady=(14, 8))
+    label_logo.pack(pady=(24, 28), padx=20, anchor=tk.W)
 
-    # Bottom container is packed first so it reserves the bottom edge; the body
-    # (main_frame) then fills the remaining middle and can never push the
-    # controls off-screen.
-    bottom = tk.Frame(tab_archivos, bg=COLOR_BG)
-    bottom.pack(side=tk.BOTTOM, fill=tk.X)
+    # Navigation logic
+    def switch_view(view_name):
+        view_archivos.pack_forget()
+        view_envivo.pack_forget()
+        view_ajustes.pack_forget()
 
-    main_frame = tk.Frame(tab_archivos, bg=COLOR_BG)
-    main_frame.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=16, pady=(0, 6))
+        # Reset button colors
+        btn_archivos.configure(fg_color="transparent" if view_name != "archivos" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "archivos" else COLOR_TEXT_FG)
+        btn_envivo.configure(fg_color="transparent" if view_name != "envivo" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "envivo" else COLOR_TEXT_FG)
+        btn_ajustes.configure(fg_color="transparent" if view_name != "ajustes" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "ajustes" else COLOR_TEXT_FG)
 
-    frame_listbox = tk.Frame(main_frame, bg=COLOR_BG)
-    frame_listbox.pack(side=tk.LEFT, fill=tk.Y, padx=(0, 12), pady=2)
+        if view_name == "archivos":
+            view_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        elif view_name == "envivo":
+            view_envivo.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            # Refresh devices or parameters if needed
+            if hasattr(view_envivo, "refresh_devices"):
+                view_envivo.refresh_devices()
+        elif view_name == "ajustes":
+            view_ajustes.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            # Refresh DB stats
+            view_ajustes.refresh_db_stats()
 
-    label_listbox = tk.Label(
-        frame_listbox, text="Lista de archivos",
-        bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    # Sidebar Buttons
+    btn_archivos = ctk.CTkButton(
+        sidebar_frame, text="📁   Archivos", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("archivos")
     )
-    label_listbox.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
+    btn_archivos.pack(fill=tk.X, padx=12, pady=4)
 
+    btn_envivo = ctk.CTkButton(
+        sidebar_frame, text="🎙️   En vivo", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("envivo")
+    )
+    btn_envivo.pack(fill=tk.X, padx=12, pady=4)
+
+    btn_ajustes = ctk.CTkButton(
+        sidebar_frame, text="⚙️   Ajustes", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("ajustes")
+    )
+    btn_ajustes.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=20)
+
+    # Right Content Frame
+    right_content = ctk.CTkFrame(ventana, corner_radius=0, fg_color=COLOR_BG, border_width=0)
+    right_content.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    # ----------------------------------------------------
+    # VIEW 1: ARCHIVOS TAB
+    # ----------------------------------------------------
+    view_archivos = ctk.CTkFrame(right_content, corner_radius=0, fg_color="transparent")
+    view_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+    # Header
+    header_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
+    header_frame.pack(fill=tk.X, padx=24, pady=(20, 10))
+
+    label_titulo = ctk.CTkLabel(
+        header_frame, text="Transcripción de archivos",
+        font=("Segoe UI Semibold", 22), text_color=COLOR_TEXT_FG
+    )
+    label_titulo.pack(anchor=tk.W)
+
+    label_subtitulo = ctk.CTkLabel(
+        header_frame, text="Selecciona uno o más audios y conviértelos en texto.",
+        font=("Segoe UI", 12), text_color=COLOR_MUTED
+    )
+    label_subtitulo.pack(anchor=tk.W, pady=(2, 0))
+
+    # Main Body Columns
+    columns_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
+    columns_frame.pack(fill=tk.BOTH, expand=True, padx=24, pady=8)
+
+    # Left Column: Listbox
+    left_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
+    left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+
+    label_left_title = ctk.CTkLabel(
+        left_col, text="LISTA DE ARCHIVOS", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+    )
+    label_left_title.pack(anchor=tk.W, pady=(0, 6))
+
+    card_listbox = ctk.CTkFrame(left_col, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+    card_listbox.pack(fill=tk.BOTH, expand=True)
+
+    # Clickable Upload Zone
+    dnd_frame = ctk.CTkFrame(card_listbox, fg_color=COLOR_PANEL_LIGHT, corner_radius=8, cursor="hand2")
+    dnd_frame.pack(fill=tk.X, padx=12, pady=12)
+
+    def on_dnd_click(event):
+        seleccionar_archivos(lista_archivos, lista_archivos_paths)
+
+    dnd_frame.bind("<Button-1>", on_dnd_click)
+
+    icon_label = ctk.CTkLabel(dnd_frame, text="📤", font=("Segoe UI", 22), text_color="#A78BFA")
+    icon_label.pack(pady=(12, 2))
+    icon_label.bind("<Button-1>", on_dnd_click)
+
+    dnd_text1 = ctk.CTkLabel(dnd_frame, text="Arrastra tus audios aquí", font=("Segoe UI Semibold", 12), text_color=COLOR_TEXT_FG)
+    dnd_text1.pack(pady=1)
+    dnd_text1.bind("<Button-1>", on_dnd_click)
+
+    dnd_text2 = ctk.CTkLabel(dnd_frame, text="o usa Seleccionar", font=("Segoe UI Semibold", 12), text_color="#A78BFA")
+    dnd_text2.pack(pady=1)
+    dnd_text2.bind("<Button-1>", on_dnd_click)
+
+    dnd_text3 = ctk.CTkLabel(dnd_frame, text="MP3  •  WAV  •  M4A  •  FLAC", font=("Segoe UI", 9), text_color=COLOR_MUTED)
+    dnd_text3.pack(pady=(2, 12))
+    dnd_text3.bind("<Button-1>", on_dnd_click)
+
+    # Files Listbox
     scrollbar_listbox = tk.Scrollbar(
-        frame_listbox, orient=tk.VERTICAL,
-        bg=COLOR_PANEL, troughcolor=COLOR_BG, activebackground=COLOR_ACCENT,
+        card_listbox, orient=tk.VERTICAL,
+        bg=COLOR_PANEL, troughcolor=COLOR_PANEL, activebackground=COLOR_ACCENT,
         borderwidth=0, highlightthickness=0,
     )
     lista_archivos = tk.Listbox(
-        frame_listbox,
+        card_listbox,
         selectmode=tk.EXTENDED,
-        width=44,
-        height=12,
         yscrollcommand=scrollbar_listbox.set,
-        bg=COLOR_TEXT_BG, fg=COLOR_TEXT_FG,
+        bg="#11121A", fg=COLOR_TEXT_FG,
         selectbackground=COLOR_ACCENT, selectforeground="#ffffff",
         relief=tk.FLAT, borderwidth=0, highlightthickness=0,
         font=("Segoe UI", 10), activestyle="none",
     )
-
-    lista_archivos.pack(side=tk.LEFT, fill=tk.BOTH)
-    scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y)
+    lista_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 12))
+    scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=(0, 12))
     scrollbar_listbox.config(command=lista_archivos.yview)
 
-    frame_text = tk.Frame(main_frame, bg=COLOR_BG)
-    frame_text.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=2)
+    # Right Column: Transcript area
+    right_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
+    right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
 
-    label_text_area = tk.Label(
-        frame_text, text="Transcripcion",
-        bg=COLOR_BG, fg=COLOR_MUTED, font=("Segoe UI", 10),
+    right_col_header = ctk.CTkFrame(right_col, fg_color="transparent")
+    right_col_header.pack(fill=tk.X, pady=(0, 6))
+
+    label_right_title = ctk.CTkLabel(
+        right_col_header, text="TRANSCRIPCIÓN", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
     )
-    label_text_area.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
+    label_right_title.pack(side=tk.LEFT)
 
-    scrollbar_text = tk.Scrollbar(
-        frame_text, orient=tk.VERTICAL,
-        bg=COLOR_PANEL, troughcolor=COLOR_BG, activebackground=COLOR_ACCENT,
-        borderwidth=0, highlightthickness=0,
+    label_palabras = ctk.CTkLabel(
+        right_col_header, text="0 palabras", font=("Segoe UI", 10), text_color=COLOR_MUTED
     )
-    text_area = tk.Text(
-        frame_text, height=12, width=81, yscrollcommand=scrollbar_text.set,
-        bg=COLOR_TEXT_BG, fg=COLOR_TEXT_FG, insertbackground=COLOR_TEXT_FG,
-        relief=tk.FLAT, borderwidth=0, highlightthickness=0,
-        font=("Segoe UI", 12), padx=12, pady=10, spacing3=4,
+    label_palabras.pack(side=tk.RIGHT)
+
+    card_text = ctk.CTkFrame(right_col, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+    card_text.pack(fill=tk.BOTH, expand=True)
+
+    text_area = ctk.CTkTextbox(
+        card_text, fg_color="#11121A", text_color=COLOR_TEXT_FG,
+        font=("Segoe UI", 12),
+        corner_radius=8, border_width=0,
     )
-    text_area.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-    scrollbar_text.pack(side=tk.RIGHT, fill=tk.Y)
-    scrollbar_text.config(command=text_area.yview)
+    text_area.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
-    # ----------------------------------------------------
-    # CARD A: PANEL DE TRANSCRIPCIÓN
-    # ----------------------------------------------------
-    card_transcripcion = tk.Frame(bottom, bg=COLOR_PANEL, padx=16, pady=12)
-    card_transcripcion.pack(side=tk.TOP, fill=tk.X, padx=16, pady=6)
+    # Update word count automatically on typing
+    def update_word_count(event=None):
+        try:
+            content = text_area.get("1.0", "end-1c").strip()
+            if content:
+                words = len(content.split())
+                label_palabras.configure(text=f"{words} palabras")
+            else:
+                label_palabras.configure(text="0 palabras")
+        except Exception:
+            pass
 
-    # 1. Fila de Opciones (Idioma, diarización)
-    frame_opciones = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
-    frame_opciones.pack(side=tk.TOP, fill=tk.X, pady=(0, 10))
+    text_area.bind("<KeyRelease>", update_word_count)
 
-    tk.Label(
-        frame_opciones, text="Idioma de entrada",
-        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
-    ).pack(side=tk.LEFT, padx=(0, 6))
-    combobox_idioma_entrada = ttk.Combobox(
-        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
+    # Options Card
+    card_options = ctk.CTkFrame(view_archivos, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+    card_options.pack(fill=tk.X, padx=24, pady=6)
+
+    # Options Grid Layout
+    label_entrada = ctk.CTkLabel(card_options, text="IDIOMA DE ENTRADA", font=("Segoe UI Semibold", 9), text_color=COLOR_MUTED)
+    label_entrada.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
+
+    combobox_idioma_entrada = ctk.CTkComboBox(
+        card_options, values=list(idiomas.keys()), state="readonly", width=140,
+        fg_color=COLOR_PANEL_LIGHT, border_color=COLOR_BORDER, button_color=COLOR_BORDER,
+        button_hover_color=COLOR_PANEL_LIGHT, dropdown_fg_color=COLOR_PANEL, dropdown_text_color=COLOR_TEXT_FG,
+        dropdown_hover_color=COLOR_ACCENT
     )
     combobox_idioma_entrada.set("Spanish")
-    combobox_idioma_entrada.pack(side=tk.LEFT, padx=(0, 20))
+    combobox_idioma_entrada.grid(row=1, column=0, padx=(16, 12), pady=(0, 12), sticky=tk.W)
 
-    tk.Label(
-        frame_opciones, text="Idioma de salida",
-        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
-    ).pack(side=tk.LEFT, padx=(0, 6))
-    combobox_idioma_salida = ttk.Combobox(
-        frame_opciones, values=list(idiomas.keys()), state="readonly", width=14
+    label_salida = ctk.CTkLabel(card_options, text="IDIOMA DE SALIDA", font=("Segoe UI Semibold", 9), text_color=COLOR_MUTED)
+    label_salida.grid(row=0, column=1, padx=(4, 4), pady=(8, 2), sticky=tk.W)
+
+    combobox_idioma_salida = ctk.CTkComboBox(
+        card_options, values=list(idiomas.keys()), state="readonly", width=140,
+        fg_color=COLOR_PANEL_LIGHT, border_color=COLOR_BORDER, button_color=COLOR_BORDER,
+        button_hover_color=COLOR_PANEL_LIGHT, dropdown_fg_color=COLOR_PANEL, dropdown_text_color=COLOR_TEXT_FG,
+        dropdown_hover_color=COLOR_ACCENT
     )
     combobox_idioma_salida.set("Spanish")
-    combobox_idioma_salida.pack(side=tk.LEFT)
+    combobox_idioma_salida.grid(row=1, column=1, padx=(4, 12), pady=(0, 12), sticky=tk.W)
 
-    tk.Checkbutton(
-        frame_opciones, text="Diferenciar hablantes", variable=diarizar_var,
-        bg=COLOR_PANEL, fg=COLOR_TEXT_FG, selectcolor=COLOR_TEXT_BG,
-        activebackground=COLOR_PANEL, activeforeground=COLOR_TEXT_FG,
-        font=("Segoe UI", 10), borderwidth=0, highlightthickness=0,
-        cursor="hand2",
-    ).pack(side=tk.LEFT, padx=(20, 0))
-
-    # 2. Fila de Botones (Seleccionar, Borrar, Transcribir, Limpiar, Exportar)
-    frame_botones = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
-    frame_botones.pack(side=tk.TOP, fill=tk.X)
-
-    boton_seleccionar = _flat_btn(
-        frame_botones, "\U0001F4C2  Seleccionar",
-        lambda: seleccionar_archivos(lista_archivos, lista_archivos_paths),
+    check_diarizar = ctk.CTkCheckBox(
+        card_options, text="Diferenciar hablantes", variable=diarizar_var,
+        font=("Segoe UI", 12), text_color=COLOR_TEXT_FG,
+        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, border_color=COLOR_BORDER
     )
-    boton_seleccionar.pack(side=tk.LEFT)
+    check_diarizar.grid(row=0, column=2, rowspan=2, padx=(32, 16), pady=12, sticky=tk.E)
+    card_options.grid_columnconfigure(2, weight=1)
 
-    boton_borrar = _flat_btn(
-        frame_botones, "\U0001F5D1  Borrar",
-        lambda: borrar_y_actualizar(lista_archivos, lista_archivos_paths, boton_borrar),
-        state="disabled",
+    # Action Buttons Row
+    buttons_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
+    buttons_frame.pack(fill=tk.X, padx=24, pady=6)
+
+    boton_seleccionar = ctk.CTkButton(
+        buttons_frame, text="📁   Seleccionar", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        width=120, height=36, corner_radius=8,
+        command=lambda: seleccionar_archivos(lista_archivos, lista_archivos_paths)
     )
-    boton_borrar.pack(side=tk.LEFT, padx=(8, 0))
+    boton_seleccionar.pack(side=tk.LEFT, padx=(0, 8))
 
-    # 3. Fila del Indicador de Progreso
-    frame_progress = tk.Frame(card_transcripcion, bg=COLOR_PANEL)
+    boton_borrar = ctk.CTkButton(
+        buttons_frame, text="🗑️   Borrar", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color="#E53E3E",
+        width=90, height=36, corner_radius=8, state="disabled",
+        command=lambda: borrar_y_actualizar(lista_archivos, lista_archivos_paths, boton_borrar)
+    )
+    boton_borrar.pack(side=tk.LEFT, padx=(0, 8))
 
-    frame_status_info = tk.Frame(frame_progress, bg=COLOR_PANEL)
+    # Dynamic Progress container for files transcription (initially unpacked)
+    frame_progress = ctk.CTkFrame(view_archivos, fg_color="transparent")
+
+    frame_status_info = ctk.CTkFrame(frame_progress, fg_color="transparent")
     frame_status_info.pack(pady=4)
 
     spinner = Spinner(
-        frame_status_info, size=20, bg=COLOR_PANEL,
+        frame_status_info, size=20, bg=COLOR_BG,
         accent_color=COLOR_ACCENT, muted_color=COLOR_MUTED
     )
 
-    progress_label = tk.Label(
+    progress_label = ctk.CTkLabel(
         frame_status_info, textvariable=archivo_procesando,
-        bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10),
+        font=("Segoe UI", 12), text_color=COLOR_MUTED
     )
     progress_label.pack(side=tk.LEFT)
 
@@ -256,10 +320,11 @@ def crear_interfaz(ventana):
     )
     progress_bar.pack_forget()
 
-    # Botón transcribir va después de declarar el spinner y progress_bar
-    boton_transcribir = _accent_btn(
-        frame_botones, "\U0001F4DD  Transcribir",
-        lambda: iniciar_transcripcion_thread(
+    boton_transcribir = ctk.CTkButton(
+        buttons_frame, text="🎙️   Transcribir", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
+        width=120, height=36, corner_radius=8,
+        command=lambda: iniciar_transcripcion_thread(
             lista_archivos,
             text_area,
             archivo_procesando,
@@ -275,38 +340,33 @@ def crear_interfaz(ventana):
             frame_progress=frame_progress,
         ),
     )
-    boton_transcribir.pack(side=tk.LEFT, padx=(8, 0))
+    boton_transcribir.pack(side=tk.LEFT, padx=(0, 8))
 
-    boton_exportar = _flat_btn(
-        frame_botones, "\U0001F4BE  Exportar",
-        lambda: exportar_transcripcion(text_area.get("1.0", tk.END)),
+    boton_exportar = ctk.CTkButton(
+        buttons_frame, text="📥   Exportar", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        width=100, height=36, corner_radius=8,
+        command=lambda: exportar_transcripcion(text_area.get("1.0", tk.END))
     )
-    boton_exportar.pack(side=tk.RIGHT)
+    boton_exportar.pack(side=tk.RIGHT, padx=(8, 0))
 
-    boton_limpiar = _flat_btn(
-        frame_botones, "\U0001F9F9  Limpiar",
-        lambda: limpiar(text_area),
+    boton_limpiar = ctk.CTkButton(
+        buttons_frame, text="🧹   Limpiar", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        width=90, height=36, corner_radius=8,
+        command=lambda: limpiar(text_area)
     )
-    boton_limpiar.pack(side=tk.RIGHT, padx=(0, 8))
-
+    boton_limpiar.pack(side=tk.RIGHT)
 
     # ----------------------------------------------------
-    # CARD B: PANEL DE REPRODUCCIÓN
+    # PLAYER CARD (Card B)
     # ----------------------------------------------------
-    card_reproductor = tk.Frame(bottom, bg=COLOR_PANEL, padx=16, pady=12)
-    card_reproductor.pack(side=tk.TOP, fill=tk.X, padx=16, pady=6)
+    card_reproductor = ctk.CTkFrame(view_archivos, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+    card_reproductor.pack(side=tk.TOP, fill=tk.X, padx=24, pady=6)
 
-    # 1. Fila de la barra de progreso (Scale)
-    frame_slider = tk.Frame(card_reproductor, bg=COLOR_PANEL)
-
-    style = ttk.Style(ventana)
-    style.configure(
-        "ProgressScale.Horizontal.TScale",
-        background=COLOR_PANEL,
-        troughcolor=COLOR_TEXT_BG,
-        slidercolor=COLOR_ACCENT,
-        borderwidth=0,
-    )
+    # Fila de la barra de progreso (Scale)
+    frame_slider = ctk.CTkFrame(card_reproductor, fg_color="transparent")
+    # Not packed at startup, packed dynamically on playback
 
     slider_progreso = ttk.Scale(
         frame_slider,
@@ -315,16 +375,18 @@ def crear_interfaz(ventana):
         orient=tk.HORIZONTAL,
         style="ProgressScale.Horizontal.TScale",
     )
-    # Se empaqueta dinámicamente al reproducir audio
     slider_arrastrando = [False]
 
-    # 2. Fila de controles de reproducción
-    frame_reproduccion = tk.Frame(card_reproductor, bg=COLOR_PANEL)
-    frame_reproduccion.pack(side=tk.TOP, fill=tk.X)
+    # Controls Row
+    frame_reproduccion = ctk.CTkFrame(card_reproductor, fg_color="transparent")
+    frame_reproduccion.pack(side=tk.TOP, fill=tk.X, padx=16, pady=12)
 
-    boton_reproducir = _flat_btn(
-        frame_reproduccion, "▶  Reproducir",
-        lambda: reproducir(
+    # Circular Player buttons
+    boton_reproducir = ctk.CTkButton(
+        frame_reproduccion, text="▶", font=("Segoe UI", 13),
+        fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
+        width=36, height=36, corner_radius=18,
+        command=lambda: reproducir(
             lista_archivos,
             lista_archivos_paths,
             boton_pausar_reanudar,
@@ -339,18 +401,19 @@ def crear_interfaz(ventana):
     )
     boton_reproducir.pack(side=tk.LEFT)
 
-    boton_retroceder = _flat_btn(
-        frame_reproduccion, "⏪  -5s",
-        lambda: retroceder(label_tiempo), state="disabled",
+    boton_retroceder = ctk.CTkButton(
+        frame_reproduccion, text="⏪", font=("Segoe UI", 12),
+        fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+        width=36, height=36, corner_radius=18, state="disabled",
+        command=lambda: retroceder(label_tiempo)
     )
-    boton_retroceder.pack(side=tk.LEFT, padx=(8, 0))
+    boton_retroceder.pack(side=tk.LEFT, padx=(6, 0))
 
-    lista_archivos.bind(
-        "<<ListboxSelect>>", lambda event: activar_boton_borrar(event, boton_borrar)
-    )
-    boton_pausar_reanudar = _flat_btn(
-        frame_reproduccion, "⏸  Pausar",
-        lambda: pausar_reanudar(
+    boton_pausar_reanudar = ctk.CTkButton(
+        frame_reproduccion, text="⏸", font=("Segoe UI", 12),
+        fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+        width=36, height=36, corner_radius=18, state="disabled",
+        command=lambda: pausar_reanudar(
             boton_pausar_reanudar,
             label_reproduccion,
             label_tiempo,
@@ -359,19 +422,22 @@ def crear_interfaz(ventana):
             slider_progreso=slider_progreso,
             slider_arrastrando=slider_arrastrando,
         ),
-        state="disabled",
     )
-    boton_pausar_reanudar.pack(side=tk.LEFT, padx=(8, 0))
+    boton_pausar_reanudar.pack(side=tk.LEFT, padx=(6, 0))
 
-    boton_adelantar = _flat_btn(
-        frame_reproduccion, "⏩  +5s",
-        lambda: adelantar(label_tiempo), state="disabled",
+    boton_adelantar = ctk.CTkButton(
+        frame_reproduccion, text="⏩", font=("Segoe UI", 12),
+        fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+        width=36, height=36, corner_radius=18, state="disabled",
+        command=lambda: adelantar(label_tiempo)
     )
-    boton_adelantar.pack(side=tk.LEFT, padx=(8, 0))
+    boton_adelantar.pack(side=tk.LEFT, padx=(6, 0))
 
-    boton_detener = _flat_btn(
-        frame_reproduccion, "⏹  Detener",
-        lambda: detener_reproduccion(
+    boton_detener = ctk.CTkButton(
+        frame_reproduccion, text="⏹", font=("Segoe UI", 12),
+        fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+        width=36, height=36, corner_radius=18,
+        command=lambda: detener_reproduccion(
             boton_pausar_reanudar,
             label_reproduccion,
             label_tiempo,
@@ -381,19 +447,24 @@ def crear_interfaz(ventana):
             frame_slider=frame_slider,
         ),
     )
-    boton_detener.pack(side=tk.LEFT, padx=(8, 0))
+    boton_detener.pack(side=tk.LEFT, padx=(6, 0))
 
-    label_reproduccion = tk.Label(
-        frame_reproduccion, text="", bg=COLOR_PANEL, fg=COLOR_MUTED, font=("Segoe UI", 10)
+    label_reproduccion = ctk.CTkLabel(
+        frame_reproduccion, text="", font=("Segoe UI", 11), text_color=COLOR_MUTED
     )
     label_reproduccion.pack(side=tk.LEFT, padx=(16, 6))
 
-    label_tiempo = tk.Label(
-        frame_reproduccion, text="00:00 / 00:00",
-        bg=COLOR_PANEL, fg=COLOR_TEXT_FG, font=("Segoe UI", 10),
+    label_tiempo = ctk.CTkLabel(
+        frame_reproduccion, text="00:00 / 00:00", font=("Segoe UI", 11), text_color=COLOR_TEXT_FG
     )
     label_tiempo.pack(side=tk.LEFT)
 
+    # Bind lists selection
+    lista_archivos.bind(
+        "<<ListboxSelect>>", lambda event: activar_boton_borrar(event, boton_borrar)
+    )
+
+    # Slider Drag events
     def iniciar_arrastre(event):
         slider_arrastrando[0] = True
 
@@ -406,54 +477,68 @@ def crear_interfaz(ventana):
                 pygame.mixer.music.play(start=nuevo_tiempo)
                 reproductor.tiempo_inicio = time.time() - nuevo_tiempo
             else:
-                label_tiempo.config(text=reproductor.obtener_tiempo_formateado())
+                label_tiempo.configure(text=reproductor.obtener_tiempo_formateado())
 
     slider_progreso.bind("<ButtonPress-1>", iniciar_arrastre)
     slider_progreso.bind("<ButtonRelease-1>", finalizar_arrastre)
 
-    # Atajos de teclado (Hotkeys)
+    # Playback Hotkeys
     def hotkey_play_pause(event=None):
-        if boton_pausar_reanudar["state"] == "normal":
+        if boton_pausar_reanudar.cget("state") == "normal":
             boton_pausar_reanudar.invoke()
-        elif boton_reproducir["state"] == "normal":
+        elif boton_reproducir.cget("state") == "normal":
             boton_reproducir.invoke()
 
     def hotkey_retroceder(event=None):
-        if boton_retroceder["state"] == "normal":
+        if boton_retroceder.cget("state") == "normal":
             boton_retroceder.invoke()
 
     def hotkey_adelantar(event=None):
-        if boton_adelantar["state"] == "normal":
+        if boton_adelantar.cget("state") == "normal":
             boton_adelantar.invoke()
 
-    # Vincular atajos globales en la ventana
+    # Keyboard bindings
     ventana.bind("<Alt-p>", hotkey_play_pause)
     ventana.bind("<Alt-P>", hotkey_play_pause)
     ventana.bind("<Alt-Left>", hotkey_retroceder)
     ventana.bind("<Alt-Right>", hotkey_adelantar)
 
+    # ----------------------------------------------------
+    # VIEW 2: LIVE TRANSCRIPTION (EN VIVO)
+    # ----------------------------------------------------
+    view_envivo = LiveFrame(right_content)
+    # Initially hidden, packed dynamically via switch_view
 
-    frame_creditos = tk.Frame(bottom, bg=COLOR_BG)
-    frame_creditos.pack(side=tk.TOP, pady=6)
+    # ----------------------------------------------------
+    # VIEW 3: SETTINGS (AJUSTES)
+    # ----------------------------------------------------
+    view_ajustes = AjustesFrame(right_content)
+    # Initially hidden, packed dynamically via switch_view
+
+    # Credits footer (Bottom of view_archivos)
+    frame_creditos = ctk.CTkFrame(view_archivos, fg_color="transparent")
+    frame_creditos.pack(side=tk.BOTTOM, pady=8)
 
     import webbrowser
-
     def abrir_web(event=None):
         try:
             webbrowser.open_new("https://tecnofuision-it.web.app/")
         except Exception:
             pass
 
-    label_creditos = tk.Label(
+    label_creditos = ctk.CTkLabel(
         frame_creditos,
-        text="@Copyright 2026 Version 2.0 Produced by tecnofusion.it",
-        font=("Segoe UI", 9, "underline"), bg=COLOR_BG, fg=COLOR_MUTED,
+        text="© 2026 - AudioText v2.0 - tecnofusion.it",
+        font=("Segoe UI", 10, "underline"), text_color=COLOR_MUTED,
         cursor="hand2"
     )
     label_creditos.bind("<Button-1>", abrir_web)
-    label_creditos.bind("<Enter>", lambda e: label_creditos.config(fg=COLOR_ACCENT))
-    label_creditos.bind("<Leave>", lambda e: label_creditos.config(fg=COLOR_MUTED))
+    label_creditos.bind("<Enter>", lambda e: label_creditos.configure(text_color=COLOR_ACCENT))
+    label_creditos.bind("<Leave>", lambda e: label_creditos.configure(text_color=COLOR_MUTED))
     label_creditos.pack()
+
+    # Initialize view
+    switch_view("archivos")
 
     return {
         "lista_archivos": lista_archivos,
@@ -470,7 +555,7 @@ def crear_interfaz(ventana):
         "boton_detener": boton_detener,
         "label_reproduccion": label_reproduccion,
         "label_tiempo": label_tiempo,
-        "live_frame": live_frame,
+        "live_frame": view_envivo,
         "spinner": spinner,
         "frame_progress": frame_progress,
         "frame_slider": frame_slider,
@@ -490,11 +575,11 @@ def centrar_ventana(ventana):
 
 def activar_boton_borrar(event, boton_borrar):
     if event.widget.curselection():
-        boton_borrar.config(state="normal")
+        boton_borrar.configure(state="normal")
     else:
-        boton_borrar.config(state="disabled")
+        boton_borrar.configure(state="disabled")
 
 
 def borrar_y_actualizar(lista_archivos, lista_archivos_paths, boton_borrar):
     if borrar_archivo(lista_archivos, lista_archivos_paths):
-        boton_borrar.config(state="disabled")
+        boton_borrar.configure(state="disabled")
