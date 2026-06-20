@@ -781,15 +781,13 @@ def crear_interfaz(ventana):
     }
 
 
-def centrar_ventana(ventana):
+def centrar_ventana(ventana, ancho=1200, alto=700):
     ventana.update_idletasks()
-    ancho_ventana = ventana.winfo_width()
-    alto_ventana = ventana.winfo_height()
     ancho_pantalla = ventana.winfo_screenwidth()
     alto_pantalla = ventana.winfo_screenheight()
-    x = (ancho_pantalla // 2) - (ancho_ventana // 2)
-    y = (alto_pantalla // 2) - (alto_ventana // 2)
-    ventana.geometry(f"{ancho_ventana}x{alto_ventana}+{x}+{y}")
+    x = (ancho_pantalla // 2) - (ancho // 2)
+    y = (alto_pantalla // 2) - (alto // 2)
+    ventana.geometry(f"{ancho}x{alto}+{x}+{y}")
 
 
 def activar_boton_borrar(event, boton_borrar):
