@@ -304,9 +304,10 @@ class LiveFrame(ctk.CTkFrame):
         card_config.pack(fill=tk.X, padx=24, pady=6)
 
         # Options layout inside config card
-        ctk.CTkLabel(
+        self.label_fuente = ctk.CTkLabel(
             card_config, text="FUENTE", font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
-        ).grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
+        )
+        self.label_fuente.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
 
         try:
             default_dev = sc.default_speaker().name
@@ -331,9 +332,10 @@ class LiveFrame(ctk.CTkFrame):
         )
         self.btn_refresh.grid(row=1, column=1, padx=(0, 12), pady=(0, 12), sticky=tk.W)
 
-        ctk.CTkLabel(
+        self.label_idioma = ctk.CTkLabel(
             card_config, text="IDIOMA", font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
-        ).grid(row=0, column=2, padx=(8, 4), pady=(8, 2), sticky=tk.W)
+        )
+        self.label_idioma.grid(row=0, column=2, padx=(8, 4), pady=(8, 2), sticky=tk.W)
 
         _sys = transcriber.detect_system_language()
         _default_lang = next(
@@ -356,6 +358,62 @@ class LiveFrame(ctk.CTkFrame):
         )
         self.translate_check.grid(row=0, column=3, rowspan=2, padx=(24, 16), pady=12, sticky=tk.E)
         card_config.grid_columnconfigure(3, weight=1)
+
+        # Responsive layout adjustment logic
+        self.last_live_width = [0]
+        
+        def on_live_configure(event):
+            if event.widget != self:
+                return
+            new_w = event.width
+            if new_w == self.last_live_width[0]:
+                return
+            self.last_live_width[0] = new_w
+
+            # Center equalizer wave
+            self._init_wave_bars()
+
+            # Responsive config cards grid rearrange
+            if new_w < 800:
+                self.label_fuente.grid_forget()
+                self.source_combo.grid_forget()
+                self.btn_refresh.grid_forget()
+                self.label_idioma.grid_forget()
+                self.lang_combo.grid_forget()
+                self.translate_check.grid_forget()
+
+                self.label_fuente.grid(row=0, column=0, padx=16, pady=(8, 2), sticky=tk.W)
+                self.source_combo.grid(row=1, column=0, padx=(16, 8), pady=(0, 6), sticky=tk.W)
+                self.btn_refresh.grid(row=1, column=1, padx=(0, 16), pady=(0, 6), sticky=tk.W)
+                self.label_idioma.grid(row=2, column=0, padx=16, pady=(6, 2), sticky=tk.W)
+                self.lang_combo.grid(row=3, column=0, padx=16, pady=(0, 6), sticky=tk.W)
+                self.translate_check.grid(row=4, column=0, columnspan=2, padx=16, pady=(8, 12), sticky=tk.W)
+
+                card_config.grid_columnconfigure(0, weight=1)
+                card_config.grid_columnconfigure(1, weight=0)
+                card_config.grid_columnconfigure(2, weight=0)
+                card_config.grid_columnconfigure(3, weight=0)
+            else:
+                self.label_fuente.grid_forget()
+                self.source_combo.grid_forget()
+                self.btn_refresh.grid_forget()
+                self.label_idioma.grid_forget()
+                self.lang_combo.grid_forget()
+                self.translate_check.grid_forget()
+
+                self.label_fuente.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
+                self.source_combo.grid(row=1, column=0, padx=(16, 8), pady=(0, 12), sticky=tk.W)
+                self.btn_refresh.grid(row=1, column=1, padx=(0, 12), pady=(0, 12), sticky=tk.W)
+                self.label_idioma.grid(row=0, column=2, padx=(8, 4), pady=(8, 2), sticky=tk.W)
+                self.lang_combo.grid(row=1, column=2, padx=(8, 12), pady=(0, 12), sticky=tk.W)
+                self.translate_check.grid(row=0, column=3, rowspan=2, padx=(24, 16), pady=12, sticky=tk.E)
+
+                card_config.grid_columnconfigure(0, weight=0)
+                card_config.grid_columnconfigure(1, weight=0)
+                card_config.grid_columnconfigure(2, weight=0)
+                card_config.grid_columnconfigure(3, weight=1)
+
+        self.bind("<Configure>", on_live_configure)
 
         # Equalizer Wave Card (like Screenshot 2)
         self.wave_card = ctk.CTkFrame(self, fg_color="#15161E", corner_radius=12, border_color="#2A2B36", border_width=1)

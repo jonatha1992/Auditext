@@ -1,6 +1,10 @@
 import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
+
+# Monkey-patch config to configure on all customtkinter widgets for backwards compatibility
+ctk.CTkBaseClass.config = lambda self, **kwargs: self.configure(**kwargs)
+
 from interfaz import crear_interfaz, centrar_ventana
 from config import check_dependencies, logger
 from reproductor import pygame

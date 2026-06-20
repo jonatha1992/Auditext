@@ -537,6 +537,94 @@ def crear_interfaz(ventana):
     label_creditos.bind("<Leave>", lambda e: label_creditos.configure(text_color=COLOR_MUTED))
     label_creditos.pack()
 
+    # Responsive layout adjustment
+    last_width = [0]
+
+    def on_view_configure(event):
+        if event.widget != view_archivos:
+            return
+        
+        new_width = event.width
+        if new_width == last_width[0]:
+            return
+        last_width[0] = new_width
+
+        # Threshold at 850px width
+        if new_width < 850:
+            # 1-Column Layout: Stack Listbox and Transcript vertically
+            left_col.pack_forget()
+            right_col.pack_forget()
+            left_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
+            right_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
+
+            # Vertical Option Card Grid Layout
+            label_entrada.grid_forget()
+            combobox_idioma_entrada.grid_forget()
+            label_salida.grid_forget()
+            combobox_idioma_salida.grid_forget()
+            check_diarizar.grid_forget()
+
+            label_entrada.grid(row=0, column=0, padx=16, pady=(8, 2), sticky=tk.W)
+            combobox_idioma_entrada.grid(row=1, column=0, padx=16, pady=(0, 6), sticky=tk.W)
+            label_salida.grid(row=2, column=0, padx=16, pady=(6, 2), sticky=tk.W)
+            combobox_idioma_salida.grid(row=3, column=0, padx=16, pady=(0, 6), sticky=tk.W)
+            check_diarizar.grid(row=4, column=0, padx=16, pady=(8, 12), sticky=tk.W)
+
+            card_options.grid_columnconfigure(0, weight=1)
+            card_options.grid_columnconfigure(1, weight=0)
+            card_options.grid_columnconfigure(2, weight=0)
+
+            # Wrapped Action Buttons Frame
+            boton_seleccionar.pack_forget()
+            boton_borrar.pack_forget()
+            boton_transcribir.pack_forget()
+            boton_exportar.pack_forget()
+            boton_limpiar.pack_forget()
+
+            boton_seleccionar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+            boton_borrar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+            boton_transcribir.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+            boton_limpiar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+            boton_exportar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+        else:
+            # 2-Column Layout: Side-by-Side Listbox and Transcript
+            left_col.pack_forget()
+            right_col.pack_forget()
+            left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 12))
+            right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
+
+            # Horizontal Option Card Grid Layout
+            label_entrada.grid_forget()
+            combobox_idioma_entrada.grid_forget()
+            label_salida.grid_forget()
+            combobox_idioma_salida.grid_forget()
+            check_diarizar.grid_forget()
+
+            label_entrada.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
+            combobox_idioma_entrada.grid(row=1, column=0, padx=(16, 12), pady=(0, 12), sticky=tk.W)
+            label_salida.grid(row=0, column=1, padx=(4, 4), pady=(8, 2), sticky=tk.W)
+            combobox_idioma_salida.grid(row=1, column=1, padx=(4, 12), pady=(0, 12), sticky=tk.W)
+            check_diarizar.grid(row=0, column=2, rowspan=2, padx=(32, 16), pady=12, sticky=tk.E)
+
+            card_options.grid_columnconfigure(0, weight=0)
+            card_options.grid_columnconfigure(1, weight=0)
+            card_options.grid_columnconfigure(2, weight=1)
+
+            # Single Horizontal Row for Buttons
+            boton_seleccionar.pack_forget()
+            boton_borrar.pack_forget()
+            boton_transcribir.pack_forget()
+            boton_exportar.pack_forget()
+            boton_limpiar.pack_forget()
+
+            boton_seleccionar.pack(side=tk.LEFT, padx=(0, 8))
+            boton_borrar.pack(side=tk.LEFT, padx=(0, 8))
+            boton_transcribir.pack(side=tk.LEFT, padx=(0, 8))
+            boton_exportar.pack(side=tk.RIGHT, padx=(8, 0))
+            boton_limpiar.pack(side=tk.RIGHT)
+
+    view_archivos.bind("<Configure>", on_view_configure)
+
     # Initialize view
     switch_view("archivos")
 
