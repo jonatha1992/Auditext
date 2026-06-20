@@ -305,7 +305,7 @@ def iniciar_transcripcion_thread(
         ).start()
 
 
-def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar=False):
+def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar=False, status_cb=None):
     """Transcribe a single file offline with faster-whisper.
 
     Whisper decodes the file itself (no ffmpeg conversion) and applies its own
@@ -318,7 +318,11 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
 
     def progress_cb(fraction):
         # Schedule on the main thread — Tkinter is not thread-safe.
-        ventana.after(0, lambda f=fraction: progress_bar.configure(value=f * 100))
+        def _update():
+            progress_bar.configure(value=fraction * 100)
+            if status_cb:
+                status_cb(fraction)
+        ventana.after(0, _update)
 
     def should_continue():
         return config.transcripcion_activa
@@ -456,9 +460,20 @@ def iniciar_transcripcion(
         archivo_procesando.set(f"Procesando: {archivo} ({index + 1}/{total_archivos})")
         logger.info(f"Procesando archivo: {audio_file}")
 
+        def status_cb(fraction):
+            if fraction < 0.05:
+                status = "Cargando..."
+            elif fraction < 0.55:
+                status = f"Transcribiendo ({int((fraction - 0.05) / 0.5 * 100)}%)"
+            elif fraction < 0.95:
+                status = f"Separando voces ({int((fraction - 0.55) / 0.4 * 100)}%)"
+            else:
+                status = "Finalizando..."
+            archivo_procesando.set(f"{status}: {archivo} ({index + 1}/{total_archivos})")
+
         try:
             resultado = procesar_audio(
-                audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar
+                audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar, status_cb
             )
 
             if config.transcripcion_activa:

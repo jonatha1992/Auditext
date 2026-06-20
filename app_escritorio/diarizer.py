@@ -90,9 +90,31 @@ try:
     simple_diarizer.utils.convert_wavfile = _patched_convert_wavfile
     simple_diarizer.diarizer.convert_wavfile = _patched_convert_wavfile
 
+    # 5. Patch tqdm in simple_diarizer to report progress during voice extraction
+    class ProgressTqdm:
+        def __init__(self, iterable, *args, **kwargs):
+            self.iterable = list(iterable)
+            self.total = len(self.iterable) if self.iterable else 1
+            self.current = 0
+            from tqdm import tqdm as orig_tqdm
+            self.tqdm_obj = orig_tqdm(self.iterable, *args, **kwargs)
+            
+        def __iter__(self):
+            global _current_progress_cb
+            for item in self.tqdm_obj:
+                yield item
+                self.current += 1
+                if _current_progress_cb and self.total > 0:
+                    # Diarization progress goes from 55% (0.55) to 95% (0.95)
+                    fraction = 0.55 + (self.current / self.total) * 0.40
+                    _current_progress_cb(fraction)
+
+    simple_diarizer.diarizer.tqdm = ProgressTqdm
+
 except Exception as e:
     logger.warning("Error al aplicar los parches de compatibilidad de SpeechBrain/simple_diarizer: %s", e)
 
+_current_progress_cb = None
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
@@ -311,40 +333,45 @@ def diarize_file(path: str, language: str | None = None, progress_cb=None) -> st
     Falls back to simple_diarizer when pyannote fails or when no HF token is set.
     Raises DiarizationError when neither backend is available or both fail.
     """
-    pyannote_failed = False
-    pyannote_error_msg = ""
+    global _current_progress_cb
+    _current_progress_cb = progress_cb
+    try:
+        pyannote_failed = False
+        pyannote_error_msg = ""
 
-    if _is_pyannote_available():
-        try:
-            logger.info("Iniciando diarización con pyannote/whisperx...")
-            return _diarize_pyannote(path, language, progress_cb)
-        except Exception as exc:
-            pyannote_failed = True
-            pyannote_error_msg = str(exc)
-            logger.warning(
-                "Fallo pyannote/whisperx (%s). Intentando fallback a simple_diarizer...",
-                exc,
-                exc_info=True
+        if _is_pyannote_available():
+            try:
+                logger.info("Iniciando diarización con pyannote/whisperx...")
+                return _diarize_pyannote(path, language, progress_cb)
+            except Exception as exc:
+                pyannote_failed = True
+                pyannote_error_msg = str(exc)
+                logger.warning(
+                    "Fallo pyannote/whisperx (%s). Intentando fallback a simple_diarizer...",
+                    exc,
+                    exc_info=True
+                )
+
+        if _is_simple_available():
+            if pyannote_failed:
+                logger.info("Usando simple_diarizer como fallback de emergencia")
+            else:
+                logger.info("HF_TOKEN no configurado; usando simple_diarizer como alternativa")
+            return _diarize_simple(path, language, progress_cb)
+
+        if pyannote_failed:
+            raise DiarizationError(
+                f"Fallo la diarización con pyannote y no está disponible simple_diarizer.\n"
+                f"Error original: {pyannote_error_msg}\n\n"
+                "Solución: Aceptá los términos de 'pyannote/speaker-diarization-3.1' y "
+                "'pyannote/speaker-diarization-community-1' en huggingface.co, o instalá simple_diarizer."
             )
 
-    if _is_simple_available():
-        if pyannote_failed:
-            logger.info("Usando simple_diarizer como fallback de emergencia")
-        else:
-            logger.info("HF_TOKEN no configurado; usando simple_diarizer como alternativa")
-        return _diarize_simple(path, language, progress_cb)
-
-    if pyannote_failed:
         raise DiarizationError(
-            f"Fallo la diarización con pyannote y no está disponible simple_diarizer.\n"
-            f"Error original: {pyannote_error_msg}\n\n"
-            "Solución: Aceptá los términos de 'pyannote/speaker-diarization-3.1' y "
-            "'pyannote/speaker-diarization-community-1' en huggingface.co, o instalá simple_diarizer."
+            "No hay ningun backend de diarizacion disponible.\n"
+            "Opcion 1 (mejor calidad): configurá HF_TOKEN en .env y aceptá los términos "
+            "de pyannote/speaker-diarization-3.1 en huggingface.co.\n"
+            "Opcion 2 (sin cuenta): pip install simple_diarizer"
         )
-
-    raise DiarizationError(
-        "No hay ningun backend de diarizacion disponible.\n"
-        "Opcion 1 (mejor calidad): configurá HF_TOKEN en .env y aceptá los términos "
-        "de pyannote/speaker-diarization-3.1 en huggingface.co.\n"
-        "Opcion 2 (sin cuenta): pip install simple_diarizer"
-    )
+    finally:
+        _current_progress_cb = None
