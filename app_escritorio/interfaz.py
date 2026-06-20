@@ -64,11 +64,21 @@ def crear_interfaz(ventana):
     sidebar_frame.pack(side=tk.LEFT, fill=tk.Y)
     sidebar_frame.pack_propagate(False)
 
-    # Logo/Brand
+    # Logo/Brand / Toggle Frame
+    logo_frame = ctk.CTkFrame(sidebar_frame, fg_color="transparent")
+    logo_frame.pack(fill=tk.X, pady=(24, 28), padx=12)
+
     label_logo = ctk.CTkLabel(
-        sidebar_frame, text="AudioText", font=("Segoe UI Semibold", 20), text_color="#A78BFA"
+        logo_frame, text="AudioText", font=("Segoe UI Semibold", 20), text_color="#A78BFA"
     )
-    label_logo.pack(pady=(24, 28), padx=20, anchor=tk.W)
+    label_logo.pack(side=tk.LEFT, padx=(8, 0))
+
+    btn_toggle_sidebar = ctk.CTkButton(
+        logo_frame, text="☰", font=("Segoe UI", 15),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        width=32, height=32, corner_radius=6
+    )
+    btn_toggle_sidebar.pack(side=tk.RIGHT)
 
     # Navigation logic
     def switch_view(view_name):
@@ -102,28 +112,28 @@ def crear_interfaz(ventana):
     btn_archivos = ctk.CTkButton(
         sidebar_frame, text="📁   Archivos", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
-        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("archivos")
+        anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("archivos")
     )
     btn_archivos.pack(fill=tk.X, padx=12, pady=4)
 
     btn_envivo = ctk.CTkButton(
-        sidebar_frame, text="🎙️   En vivo", font=("Segoe UI Semibold", 13),
+        sidebar_frame, text="🎙   En vivo", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
-        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("envivo")
+        anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("envivo")
     )
     btn_envivo.pack(fill=tk.X, padx=12, pady=4)
 
     btn_historial = ctk.CTkButton(
         sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
-        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("historial")
+        anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("historial")
     )
     btn_historial.pack(fill=tk.X, padx=12, pady=4)
 
     btn_ajustes = ctk.CTkButton(
-        sidebar_frame, text="⚙️   Ajustes", font=("Segoe UI Semibold", 13),
+        sidebar_frame, text="⚙   Ajustes", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
-        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("ajustes")
+        anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("ajustes")
     )
     btn_ajustes.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=20)
 
@@ -131,6 +141,53 @@ def crear_interfaz(ventana):
     Tooltip(btn_envivo, "Transcribí en tiempo real lo que reproduce el sistema o el micrófono.")
     Tooltip(btn_historial, "Revisá, buscá y exportá transcripciones guardadas anteriormente.")
     Tooltip(btn_ajustes, "Configuración de la app: base de datos, modelo, carpetas.")
+
+    # Sidebar Collapse Logic
+    sidebar_collapsed = [False]
+
+    def toggle_sidebar():
+        if not sidebar_collapsed[0]:
+            # Collapse sidebar to 60px
+            sidebar_frame.configure(width=60)
+            label_logo.pack_forget()
+            
+            btn_toggle_sidebar.pack_forget()
+            btn_toggle_sidebar.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=4)
+            btn_toggle_sidebar.configure(text="☰", width=36)
+            
+            btn_archivos.configure(text="📁", anchor=tk.CENTER, width=44)
+            btn_envivo.configure(text="🎙", anchor=tk.CENTER, width=44)
+            btn_historial.configure(text="📜", anchor=tk.CENTER, width=44)
+            btn_ajustes.configure(text="⚙", anchor=tk.CENTER, width=44)
+            
+            btn_archivos.pack_configure(padx=8)
+            btn_envivo.pack_configure(padx=8)
+            btn_historial.pack_configure(padx=8)
+            btn_ajustes.pack_configure(padx=8)
+            
+            sidebar_collapsed[0] = True
+        else:
+            # Expand sidebar back to 200px
+            sidebar_frame.configure(width=200)
+            
+            btn_toggle_sidebar.pack_forget()
+            label_logo.pack(side=tk.LEFT, padx=(8, 0))
+            btn_toggle_sidebar.pack(side=tk.RIGHT)
+            btn_toggle_sidebar.configure(text="☰", width=32)
+            
+            btn_archivos.configure(text="📁   Archivos", anchor=tk.W, width=176)
+            btn_envivo.configure(text="🎙   En vivo", anchor=tk.W, width=176)
+            btn_historial.configure(text="📜   Historial", anchor=tk.W, width=176)
+            btn_ajustes.configure(text="⚙   Ajustes", anchor=tk.W, width=176)
+            
+            btn_archivos.pack_configure(padx=12)
+            btn_envivo.pack_configure(padx=12)
+            btn_historial.pack_configure(padx=12)
+            btn_ajustes.pack_configure(padx=12)
+            
+            sidebar_collapsed[0] = False
+
+    btn_toggle_sidebar.configure(command=toggle_sidebar)
 
     # Right Content Frame
     right_content = ctk.CTkFrame(ventana, corner_radius=0, fg_color=COLOR_BG, border_width=0)
@@ -180,35 +237,10 @@ def crear_interfaz(ventana):
         card_listbox, fg_color=COLOR_PANEL_LIGHT, corner_radius=10,
         border_width=1, border_color=COLOR_BORDER, cursor="hand2"
     )
-    dnd_frame.pack(fill=tk.X, padx=12, pady=12)
-
-    seleccionar_lock = [False]
-
-    def on_dnd_click(event):
-        if seleccionar_lock[0]:
-            return "break"
-        seleccionar_lock[0] = True
-        seleccionar_archivos(lista_archivos, lista_archivos_paths)
-        ventana.after(600, lambda: seleccionar_lock.__setitem__(0, False))
-        return "break"
-
-    dnd_frame.bind("<Button-1>", on_dnd_click)
-
-    icon_label = ctk.CTkLabel(dnd_frame, text="📤", font=("Segoe UI", 22), text_color="#A78BFA")
-    icon_label.pack(pady=(12, 2))
-    icon_label.bind("<Button-1>", on_dnd_click)
-
-    dnd_text1 = ctk.CTkLabel(dnd_frame, text="Arrastra tus audios aquí", font=("Segoe UI Semibold", 12), text_color=COLOR_TEXT_FG)
-    dnd_text1.pack(pady=1)
-    dnd_text1.bind("<Button-1>", on_dnd_click)
-
-    dnd_text2 = ctk.CTkLabel(dnd_frame, text="o usa Seleccionar", font=("Segoe UI Semibold", 12), text_color="#A78BFA")
-    dnd_text2.pack(pady=1)
-    dnd_text2.bind("<Button-1>", on_dnd_click)
-
-    dnd_text3 = ctk.CTkLabel(dnd_frame, text="MP3  •  WAV  •  M4A  •  FLAC", font=("Segoe UI", 9), text_color=COLOR_MUTED)
-    dnd_text3.pack(pady=(2, 12))
-    dnd_text3.bind("<Button-1>", on_dnd_click)
+    
+    # Sub-frame to center DND content vertically when expanded
+    dnd_content = ctk.CTkFrame(dnd_frame, fg_color="transparent")
+    dnd_content.pack(expand=True)
 
     # Files Listbox & Scrollbar
     lista_archivos = tk.Listbox(
@@ -224,9 +256,50 @@ def crear_interfaz(ventana):
         command=lista_archivos.yview
     )
     lista_archivos.config(yscrollcommand=scrollbar_listbox.set)
-    
-    lista_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=(0, 12))
-    scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=(0, 12))
+
+    def actualizar_vista_lista():
+        if lista_archivos.size() == 0:
+            lista_archivos.pack_forget()
+            scrollbar_listbox.pack_forget()
+            dnd_frame.pack_forget()
+            dnd_frame.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+        else:
+            dnd_frame.pack_forget()
+            lista_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0), pady=12)
+            scrollbar_listbox.pack(side=tk.RIGHT, fill=tk.Y, padx=(0, 12), pady=12)
+
+    seleccionar_lock = [False]
+
+    def on_dnd_click(event=None):
+        if seleccionar_lock[0]:
+            return "break"
+        seleccionar_lock[0] = True
+        seleccionar_archivos(lista_archivos, lista_archivos_paths)
+        actualizar_vista_lista()
+        ventana.after(600, lambda: seleccionar_lock.__setitem__(0, False))
+        return "break"
+
+    dnd_frame.bind("<Button-1>", on_dnd_click)
+    dnd_content.bind("<Button-1>", on_dnd_click)
+
+    icon_label = ctk.CTkLabel(dnd_content, text="📤", font=("Segoe UI", 22), text_color="#A78BFA")
+    icon_label.pack(pady=(12, 2))
+    icon_label.bind("<Button-1>", on_dnd_click)
+
+    dnd_text1 = ctk.CTkLabel(dnd_content, text="Arrastra tus audios aquí", font=("Segoe UI Semibold", 12), text_color=COLOR_TEXT_FG)
+    dnd_text1.pack(pady=1)
+    dnd_text1.bind("<Button-1>", on_dnd_click)
+
+    dnd_text2 = ctk.CTkLabel(dnd_content, text="o usa Seleccionar", font=("Segoe UI Semibold", 12), text_color="#A78BFA")
+    dnd_text2.pack(pady=1)
+    dnd_text2.bind("<Button-1>", on_dnd_click)
+
+    dnd_text3 = ctk.CTkLabel(dnd_content, text="MP3  •  WAV  •  M4A  •  FLAC", font=("Segoe UI", 9), text_color=COLOR_MUTED)
+    dnd_text3.pack(pady=(2, 12))
+    dnd_text3.bind("<Button-1>", on_dnd_click)
+
+    # Configure initial empty layout visibility
+    actualizar_vista_lista()
 
     # Right Column: Transcript area
     right_col = ctk.CTkFrame(columns_frame, fg_color="transparent")
@@ -313,11 +386,19 @@ def crear_interfaz(ventana):
     buttons_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
     buttons_frame.pack(fill=tk.X, padx=24, pady=6)
 
+    def on_seleccionar():
+        seleccionar_archivos(lista_archivos, lista_archivos_paths)
+        actualizar_vista_lista()
+
+    def on_borrar():
+        borrar_y_actualizar(lista_archivos, lista_archivos_paths, boton_borrar)
+        actualizar_vista_lista()
+
     boton_seleccionar = ctk.CTkButton(
         buttons_frame, text="📁   Seleccionar", font=("Segoe UI Semibold", 12),
         fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
         width=120, height=36, corner_radius=8,
-        command=lambda: seleccionar_archivos(lista_archivos, lista_archivos_paths)
+        command=on_seleccionar
     )
     boton_seleccionar.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -325,7 +406,7 @@ def crear_interfaz(ventana):
         buttons_frame, text="🗑️   Borrar", font=("Segoe UI Semibold", 12),
         fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color="#E53E3E",
         width=90, height=36, corner_radius=8, state="disabled",
-        command=lambda: borrar_y_actualizar(lista_archivos, lista_archivos_paths, boton_borrar)
+        command=on_borrar
     )
     boton_borrar.pack(side=tk.LEFT, padx=(0, 8))
 

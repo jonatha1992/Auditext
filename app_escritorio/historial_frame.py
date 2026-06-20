@@ -1,7 +1,7 @@
 import os
 import threading
 import tkinter as tk
-from tkinter import messagebox, filedialog, simpledialog
+from tkinter import messagebox, filedialog
 import customtkinter as ctk
 import db
 import summarizer
@@ -20,6 +20,79 @@ COLOR_CARD_SEL    = "#2D1569"  # dark purple for selected card bg
 COLOR_DANGER      = "#E53E3E"
 COLOR_GREEN       = "#48BB78"
 
+class RenameDialog(ctk.CTkToplevel):
+    def __init__(self, parent, current_name, title="Renombrar transcripción", prompt="Nuevo nombre:"):
+        super().__init__(parent)
+        self.title(title)
+        self.geometry("400x200")
+        self.resizable(False, False)
+        self.configure(fg_color=COLOR_BG)
+        
+        # Center the dialog on the parent window
+        self.transient(parent)
+        self.grab_set()
+        
+        self.result = None
+        
+        # Title/Prompt
+        ctk.CTkLabel(
+            self, text=prompt, font=("Segoe UI Semibold", 13), text_color="#FFFFFF"
+        ).pack(anchor=tk.W, padx=24, pady=(20, 8))
+        
+        # Entry field
+        self.entry = ctk.CTkEntry(
+            self, fg_color="#11121A", border_color=COLOR_BORDER, text_color="#FFFFFF",
+            width=350, height=36, corner_radius=8
+        )
+        self.entry.pack(padx=24, pady=4)
+        self.entry.insert(0, current_name)
+        self.entry.select_range(0, tk.END)
+        self.entry.focus()
+        
+        # Buttons frame
+        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
+        btn_frame.pack(fill=tk.X, padx=24, pady=(24, 20))
+        
+        def on_ok(event=None):
+            self.result = self.entry.get().strip()
+            self.destroy()
+            
+        def on_cancel(event=None):
+            self.destroy()
+            
+        btn_ok = ctk.CTkButton(
+            btn_frame, text="Aceptar", font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
+            width=100, height=36, corner_radius=8, command=on_ok
+        )
+        btn_ok.pack(side=tk.LEFT)
+        
+        btn_cancel = ctk.CTkButton(
+            btn_frame, text="Cancelar", font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_PANEL_LIGHT, text_color="#FFFFFF", hover_color=COLOR_BORDER,
+            width=90, height=36, corner_radius=8, command=on_cancel
+        )
+        btn_cancel.pack(side=tk.RIGHT)
+        
+        # Bind enter and escape keys
+        self.bind("<Return>", on_ok)
+        self.bind("<Escape>", on_cancel)
+        
+        # Centering helper
+        self.update_idletasks()
+        try:
+            pw = parent.winfo_toplevel().winfo_x()
+            ph = parent.winfo_toplevel().winfo_y()
+            pwidth = parent.winfo_toplevel().winfo_width()
+            pheight = parent.winfo_toplevel().winfo_height()
+            x = pw + (pwidth // 2) - (400 // 2)
+            y = ph + (pheight // 2) - (200 // 2)
+            self.geometry(f"400x200+{x}+{y}")
+        except Exception:
+            pass
+        
+        # Wait for window to close
+        parent.wait_window(self)
 
 class HistorialFrame(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
@@ -310,29 +383,23 @@ class HistorialFrame(ctk.CTkFrame):
         def on_click(ev, idx=index):
             self._select_card(idx)
 
-        def on_enter(ev, idx=index):
-            if self._selected_idx != idx:
-                self._card_widgets[idx].configure(fg_color=COLOR_CARD_HOVER)
+        def on_enter(ev):
+            if self._selected_idx != index:
+                card.configure(fg_color=COLOR_CARD_HOVER)
 
-        def on_leave_safe(ev, idx=index):
-            # Check pointer is actually outside the card before dehighlighting
-            c = self._card_widgets[idx]
-            def check():
-                try:
-                    mx, my = c.winfo_pointerxy()
-                    cx, cy = c.winfo_rootx(), c.winfo_rooty()
-                    cw, ch = c.winfo_width(), c.winfo_height()
-                    inside = cx <= mx < cx + cw and cy <= my < cy + ch
-                    if not inside and self._selected_idx != idx:
-                        c.configure(fg_color=COLOR_PANEL_LIGHT)
-                except Exception:
-                    pass
-            c.after(10, check)
+        def on_leave(ev):
+            if self._selected_idx == index:
+                return
+            x, y = ev.x, ev.y
+            w, h = card.winfo_width(), card.winfo_height()
+            if x < 0 or x >= w or y < 0 or y >= h:
+                card.configure(fg_color=COLOR_PANEL_LIGHT)
 
         for w in [card, lbl_name, row2, badge, lbl_date]:
             w.bind("<Button-1>", on_click)
-            w.bind("<Enter>", on_enter)
-            w.bind("<Leave>", on_leave_safe)
+            
+        card.bind("<Enter>", on_enter)
+        card.bind("<Leave>", on_leave)
 
         return card
 
@@ -544,15 +611,10 @@ class HistorialFrame(ctk.CTkFrame):
         if not self.selected_record:
             return
         current_name = self.selected_record.get("file_name", "")
-        new_name = simpledialog.askstring(
-            "Renombrar transcripción",
-            "Nuevo nombre:",
-            initialvalue=current_name,
-            parent=self,
-        )
-        if not new_name or new_name.strip() == current_name:
+        dialog = RenameDialog(self, current_name)
+        new_name = dialog.result
+        if not new_name or new_name == current_name:
             return
-        new_name = new_name.strip()
         file_path = self.selected_record["file_path"]
         if db.rename_transcription(file_path, new_name):
             self.selected_record["file_name"] = new_name

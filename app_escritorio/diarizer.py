@@ -24,12 +24,36 @@ from config import logger
 
 load_dotenv()
 
-# Patch SpeechBrain to avoid lazy-loading 'k2' on Windows & to use COPY instead of SYMLINK
+# Patch SpeechBrain and simple_diarizer to run correctly on Windows
 try:
     import sys
+    
+    # 1. Prevent lazy loading of integrations during inspection/hasattr checks (Windows separator fix)
+    import speechbrain.utils.importutils
+    orig_ensure_module = speechbrain.utils.importutils.LazyModule.ensure_module
+    
+    def _patched_ensure_module(self, stacklevel: int):
+        import sys, inspect
+        try:
+            frame = sys._getframe(stacklevel + 1)
+            importer_frame = inspect.getframeinfo(frame)
+            if importer_frame is not None:
+                filename = importer_frame.filename.replace("\\", "/")
+                if filename.endswith("/inspect.py"):
+                    raise AttributeError()
+        except AttributeError:
+            raise AttributeError()
+        except Exception:
+            pass
+        return orig_ensure_module(self, stacklevel)
+        
+    speechbrain.utils.importutils.LazyModule.ensure_module = _patched_ensure_module
+
+    # 2. Redirect deprecated imports to avoid scanning whole integrations directory
     import speechbrain.inference
     sys.modules["speechbrain.pretrained"] = speechbrain.inference
     
+    # 3. Use COPY strategy instead of SYMLINK (Windows permission bypass)
     from speechbrain.inference import EncoderClassifier
     from speechbrain.utils.fetching import LocalStrategy
     
@@ -40,8 +64,34 @@ try:
         return orig_from_hparams(*args, **kwargs)
         
     EncoderClassifier.from_hparams = _patched_from_hparams
-except Exception:
-    pass
+
+    # 4. Patch simple_diarizer convert_wavfile to support file paths with spaces on Windows
+    from config import ffmpeg_path
+    import simple_diarizer.utils
+    import simple_diarizer.diarizer
+    
+    def _patched_convert_wavfile(wavfile, outfile):
+        import subprocess
+        import platform
+        startupinfo = None
+        if platform.system() == "Windows":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
+        subprocess.run(
+            [ffmpeg_path, "-y", "-i", wavfile, "-acodec", "pcm_s16le", "-ar", "16000", "-ac", "1", outfile],
+            startupinfo=startupinfo,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        return outfile
+        
+    simple_diarizer.utils.convert_wavfile = _patched_convert_wavfile
+    simple_diarizer.diarizer.convert_wavfile = _patched_convert_wavfile
+
+except Exception as e:
+    logger.warning("Error al aplicar los parches de compatibilidad de SpeechBrain/simple_diarizer: %s", e)
 
 HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 DEVICE = "cpu"
@@ -221,7 +271,7 @@ def _diarize_simple(path: str, language: str | None, progress_cb) -> str:
         # Phase 2: speaker diarization (0.55 → 0.95)
         logger.info("simple_diarizer: iniciando diarizacion de %s", path)
         diar = Diarizer(embed_model="ecapa", cluster_method="sc")
-        diar_segs = diar.diarize(wav_path, num_speakers=None)
+        diar_segs = diar.diarize(wav_path, num_speakers=None, threshold=0.01)
         if progress_cb:
             progress_cb(0.95)
 

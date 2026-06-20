@@ -569,7 +569,7 @@ class LiveFrame(ctk.CTkFrame):
         self.translate_check.grid(row=0, column=3, rowspan=2, padx=(24, 16), pady=12, sticky=tk.E)
 
         # Recording controls — explicit toggle + folder picker
-        rec_frame = ctk.CTkFrame(card_config, fg_color="transparent")
+        rec_frame = ctk.CTkFrame(card_config, fg_color="#15161E")
         rec_frame.grid(row=0, column=4, rowspan=2, padx=(0, 16), pady=12, sticky=tk.E)
 
         self.record_check = ctk.CTkCheckBox(

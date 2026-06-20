@@ -45,15 +45,35 @@ class Tooltip:
         if self._tip_win:
             return
         try:
-            x = self._widget.winfo_rootx() + 10
-            y = self._widget.winfo_rooty() + self._widget.winfo_height() + 4
+            # Resolve root coordinates
+            toplevel = self._widget.winfo_toplevel()
+            parent_x = toplevel.winfo_x()
+            
+            widget_x = self._widget.winfo_rootx()
+            widget_y = self._widget.winfo_rooty()
+            widget_w = self._widget.winfo_width()
+            widget_h = self._widget.winfo_height()
+            
+            # Determine placement: sidebar (left) vs main content (right/bottom)
+            relative_x = widget_x - parent_x
+            if relative_x < 240:
+                # Sidebar buttons: Position to the right of the sidebar
+                x = widget_x + widget_w + 12
+                y = widget_y + (widget_h - 32) // 2
+            else:
+                # Content buttons: Position above the button, centered
+                x = widget_x + (widget_w - 220) // 2
+                if x < widget_x - 20:
+                    x = widget_x - 20
+                y = widget_y - 42
         except Exception:
             return
 
-        self._tip_win = tw = tk.Toplevel(self._widget)
+        self._tip_win = tw = tk.Toplevel(self._widget.winfo_toplevel())
         tw.wm_overrideredirect(True)
         tw.wm_geometry(f"+{x}+{y}")
         tw.attributes("-topmost", True)
+        tw.lift()
 
         outer = tk.Frame(tw, bg=self._BORDER, bd=1)
         outer.pack()
