@@ -366,6 +366,8 @@ class LiveFrame(ctk.CTkFrame):
             if event.widget != self:
                 return
             new_w = event.width
+            if new_w < 400: # Ignorar anchos de inicialización pequeños
+                return
             if new_w == self.last_live_width[0]:
                 return
             self.last_live_width[0] = new_w

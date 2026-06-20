@@ -1,12 +1,15 @@
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 import customtkinter as ctk
+import threading
+import summarizer
 from funcionalidad import *
 from reproductor import *
 from config import idiomas
 from live_frame import LiveFrame
 from spinner import Spinner
 from ajustes_frame import AjustesFrame
+from historial_frame import HistorialFrame
 
 # Design System Colors matching the mockup
 COLOR_BG = "#0B0C10"          # Deep dark window background
@@ -70,11 +73,13 @@ def crear_interfaz(ventana):
     def switch_view(view_name):
         view_archivos.pack_forget()
         view_envivo.pack_forget()
+        view_historial.pack_forget()
         view_ajustes.pack_forget()
 
         # Reset button colors
         btn_archivos.configure(fg_color="transparent" if view_name != "archivos" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "archivos" else COLOR_TEXT_FG)
         btn_envivo.configure(fg_color="transparent" if view_name != "envivo" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "envivo" else COLOR_TEXT_FG)
+        btn_historial.configure(fg_color="transparent" if view_name != "historial" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "historial" else COLOR_TEXT_FG)
         btn_ajustes.configure(fg_color="transparent" if view_name != "ajustes" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "ajustes" else COLOR_TEXT_FG)
 
         if view_name == "archivos":
@@ -84,6 +89,9 @@ def crear_interfaz(ventana):
             # Refresh devices or parameters if needed
             if hasattr(view_envivo, "refresh_devices"):
                 view_envivo.refresh_devices()
+        elif view_name == "historial":
+            view_historial.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            view_historial.load_history()
         elif view_name == "ajustes":
             view_ajustes.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             # Refresh DB stats
@@ -103,6 +111,13 @@ def crear_interfaz(ventana):
         anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("envivo")
     )
     btn_envivo.pack(fill=tk.X, padx=12, pady=4)
+
+    btn_historial = ctk.CTkButton(
+        sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, height=40, corner_radius=8, command=lambda: switch_view("historial")
+    )
+    btn_historial.pack(fill=tk.X, padx=12, pady=4)
 
     btn_ajustes = ctk.CTkButton(
         sidebar_frame, text="⚙️   Ajustes", font=("Segoe UI Semibold", 13),
@@ -157,8 +172,15 @@ def crear_interfaz(ventana):
     dnd_frame = ctk.CTkFrame(card_listbox, fg_color=COLOR_PANEL_LIGHT, corner_radius=8, cursor="hand2")
     dnd_frame.pack(fill=tk.X, padx=12, pady=12)
 
+    seleccionar_lock = [False]
+
     def on_dnd_click(event):
+        if seleccionar_lock[0]:
+            return "break"
+        seleccionar_lock[0] = True
         seleccionar_archivos(lista_archivos, lista_archivos_paths)
+        ventana.after(600, lambda: seleccionar_lock.__setitem__(0, False))
+        return "break"
 
     dnd_frame.bind("<Button-1>", on_dnd_click)
 
@@ -320,6 +342,93 @@ def crear_interfaz(ventana):
     )
     progress_bar.pack_forget()
 
+    def resumir_transcripcion_files():
+        texto = text_area.get("1.0", tk.END).strip()
+        if not texto:
+            messagebox.showwarning("Advertencia", "No hay texto para resumir.")
+            return
+            
+        if not summarizer.is_configured():
+            messagebox.showinfo(
+                "Resumen no configurado",
+                "Falta GEMINI_API_KEY. Crea un archivo .env en el directorio app_escritorio "
+                "con tu clave para habilitar el resumen.",
+            )
+            return
+            
+        boton_resumir.configure(state="disabled")
+        archivo_procesando.set("Resumiendo con IA usando Gemini...")
+        frame_progress.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
+        spinner.start()
+        spinner.pack(side=tk.LEFT, padx=5)
+        
+        def run():
+            try:
+                resumen = summarizer.summarize(texto)
+                ventana.after(0, lambda: mostrar_resumen_modal(resumen))
+            except Exception as e:
+                ventana.after(0, lambda: messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{e}"))
+            finally:
+                ventana.after(0, clean_up_resumir)
+                
+        def clean_up_resumir():
+            boton_resumir.configure(state="normal")
+            archivo_procesando.set("")
+            spinner.stop()
+            spinner.pack_forget()
+            frame_progress.pack_forget()
+            
+        def mostrar_resumen_modal(summary):
+            win = ctk.CTkToplevel(ventana)
+            win.title("Resumen de IA")
+            win.geometry("560x520")
+            win.configure(fg_color=COLOR_BG)
+            
+            # Make modal stay on top
+            win.transient(ventana)
+            win.grab_set()
+            
+            ctk.CTkLabel(
+                win, text="Resumen de la transcripción",
+                font=("Segoe UI Semibold", 18), text_color="#FFFFFF"
+            ).pack(anchor=tk.W, padx=20, pady=(16, 8))
+            
+            card_box = ctk.CTkFrame(win, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+            card_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 16))
+            
+            txt_resumen = ctk.CTkTextbox(
+                card_box, fg_color="#11121A", text_color=COLOR_TEXT_FG,
+                font=("Segoe UI", 12), corner_radius=8, border_width=0
+            )
+            txt_resumen.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
+            txt_resumen.insert("1.0", summary)
+            txt_resumen.configure(state="disabled") # read-only
+            
+            # Buttons row
+            btn_row = ctk.CTkFrame(win, fg_color="transparent")
+            btn_row.pack(fill=tk.X, padx=20, pady=(0, 16))
+            
+            def copiar_resumen():
+                win.clipboard_clear()
+                win.clipboard_append(summary)
+                messagebox.showinfo("Copiado", "El resumen ha sido copiado al portapapeles.", parent=win)
+                
+            btn_copy = ctk.CTkButton(
+                btn_row, text="📋   Copiar", font=("Segoe UI Semibold", 12),
+                fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
+                width=100, height=36, corner_radius=8, command=copiar_resumen
+            )
+            btn_copy.pack(side=tk.LEFT)
+            
+            btn_close = ctk.CTkButton(
+                btn_row, text="Cerrar", font=("Segoe UI Semibold", 12),
+                fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+                width=80, height=36, corner_radius=8, command=win.destroy
+            )
+            btn_close.pack(side=tk.RIGHT)
+            
+        threading.Thread(target=run, daemon=True).start()
+
     boton_transcribir = ctk.CTkButton(
         buttons_frame, text="🎙️   Transcribir", font=("Segoe UI Semibold", 12),
         fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
@@ -341,6 +450,14 @@ def crear_interfaz(ventana):
         ),
     )
     boton_transcribir.pack(side=tk.LEFT, padx=(0, 8))
+
+    boton_resumir = ctk.CTkButton(
+        buttons_frame, text="✨   Resumir", font=("Segoe UI Semibold", 12),
+        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        width=100, height=36, corner_radius=8,
+        command=resumir_transcripcion_files
+    )
+    boton_resumir.pack(side=tk.LEFT, padx=(0, 8))
 
     boton_exportar = ctk.CTkButton(
         buttons_frame, text="📥   Exportar", font=("Segoe UI Semibold", 12),
@@ -515,6 +632,12 @@ def crear_interfaz(ventana):
     view_ajustes = AjustesFrame(right_content)
     # Initially hidden, packed dynamically via switch_view
 
+    # ----------------------------------------------------
+    # VIEW 4: HISTORY (HISTORIAL)
+    # ----------------------------------------------------
+    view_historial = HistorialFrame(right_content)
+    # Initially hidden, packed dynamically via switch_view
+
     # Credits footer (Bottom of view_archivos)
     frame_creditos = ctk.CTkFrame(view_archivos, fg_color="transparent")
     frame_creditos.pack(side=tk.BOTTOM, pady=8)
@@ -545,6 +668,9 @@ def crear_interfaz(ventana):
             return
         
         new_width = event.width
+        if new_width < 400: # Ignorar anchos de inicialización pequeños
+            return
+            
         if new_width == last_width[0]:
             return
         last_width[0] = new_width
@@ -578,12 +704,14 @@ def crear_interfaz(ventana):
             boton_seleccionar.pack_forget()
             boton_borrar.pack_forget()
             boton_transcribir.pack_forget()
+            boton_resumir.pack_forget()
             boton_exportar.pack_forget()
             boton_limpiar.pack_forget()
 
             boton_seleccionar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
             boton_borrar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
             boton_transcribir.pack(side=tk.LEFT, padx=(0, 6), pady=4)
+            boton_resumir.pack(side=tk.LEFT, padx=(0, 6), pady=4)
             boton_limpiar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
             boton_exportar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
         else:
@@ -614,12 +742,14 @@ def crear_interfaz(ventana):
             boton_seleccionar.pack_forget()
             boton_borrar.pack_forget()
             boton_transcribir.pack_forget()
+            boton_resumir.pack_forget()
             boton_exportar.pack_forget()
             boton_limpiar.pack_forget()
 
             boton_seleccionar.pack(side=tk.LEFT, padx=(0, 8))
             boton_borrar.pack(side=tk.LEFT, padx=(0, 8))
             boton_transcribir.pack(side=tk.LEFT, padx=(0, 8))
+            boton_resumir.pack(side=tk.LEFT, padx=(0, 8))
             boton_exportar.pack(side=tk.RIGHT, padx=(8, 0))
             boton_limpiar.pack(side=tk.RIGHT)
 
@@ -644,6 +774,7 @@ def crear_interfaz(ventana):
         "label_reproduccion": label_reproduccion,
         "label_tiempo": label_tiempo,
         "live_frame": view_envivo,
+        "historial_frame": view_historial,
         "spinner": spinner,
         "frame_progress": frame_progress,
         "frame_slider": frame_slider,

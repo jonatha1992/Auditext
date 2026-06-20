@@ -76,3 +76,57 @@ def update_summary(file_path, summary):
         config.logger.info(f"Resumen actualizado en la base de datos para: {file_path}")
     except Exception as e:
         config.logger.error(f"Error al actualizar el resumen: {e}")
+
+def get_connection():
+    return sqlite3.connect(DB_PATH)
+
+def get_total_transcriptions_count():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM transcripciones")
+        count = cursor.fetchone()[0]
+        conn.close()
+        return count
+    except Exception as e:
+        config.logger.error(f"Error al obtener cantidad de transcripciones: {e}")
+        return 0
+
+def get_all_transcriptions():
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT file_path, file_name, duration, transcription, summary, language, created_at 
+            FROM transcripciones ORDER BY created_at DESC
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+        return [
+            {
+                "file_path": row[0],
+                "file_name": row[1],
+                "duration": row[2],
+                "transcription": row[3],
+                "summary": row[4],
+                "language": row[5],
+                "created_at": row[6]
+            }
+            for row in rows
+        ]
+    except Exception as e:
+        config.logger.error(f"Error al obtener todas las transcripciones: {e}")
+        return []
+
+def delete_transcription(file_path):
+    try:
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM transcripciones WHERE file_path = ?", (file_path,))
+        conn.commit()
+        conn.close()
+        config.logger.info(f"Transcripción eliminada para: {file_path}")
+        return True
+    except Exception as e:
+        config.logger.error(f"Error al eliminar transcripción: {e}")
+        return False

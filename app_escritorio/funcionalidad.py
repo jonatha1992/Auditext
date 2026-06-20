@@ -83,51 +83,60 @@ def obtener_duracion_audio(ruta_archivo):
 
 
 def seleccionar_archivos(lista_archivos, lista_archivos_paths):
-    file_paths = filedialog.askopenfilenames(
-        filetypes=[
-            ("Archivos de Audio", "*.mp3 *.wav *.flac *.ogg *.m4a *.mp4 *.aac *.opus")
-        ],
-        title="Seleccionar archivos de audio",
-    )
-    logger.info(f"Archivos seleccionados por el diálogo: {file_paths} (tipo: {type(file_paths)})")
-    
-    if not file_paths:
+    if getattr(seleccionar_archivos, "_lock", False):
+        logger.warning("seleccionar_archivos está bloqueado para evitar apertura doble.")
         return
-
-    # Si por alguna razón Tcl/Tk devuelve un string en vez de una lista/tupla,
-    # lo convertimos de forma segura usando shlex.
-    if isinstance(file_paths, str):
-        import shlex
-        try:
-            file_paths = shlex.split(file_paths)
-        except Exception:
-            file_paths = [file_paths]
-
-    archivos_no_agregados = []
-    for file_path in file_paths:
-        # Limpiar llaves de Tcl {} que a veces envuelven rutas con espacios en Windows
-        file_path = file_path.strip("{}").strip()
-        if not file_path:
-            continue
-            
-        file_name = os.path.basename(file_path)
-        duracion = obtener_duracion_audio(file_path)
-        duracion_str = time.strftime("%M:%S", time.gmtime(duracion))
-        item = f"{file_name} ({duracion_str})"
-        
-        logger.info(f"Procesando archivo para lista: path={file_path}, name={file_name}, duration={duracion_str}")
-        
-        if item not in lista_archivos.get(0, tk.END):
-            lista_archivos.insert(tk.END, item)
-            lista_archivos_paths[file_path] = item
-        else:
-            archivos_no_agregados.append(file_name)
-            
-    if archivos_no_agregados:
-        messagebox.showwarning(
-            "Archivos Duplicados",
-            f"Los siguientes archivos ya estaban en la lista y no se añadieron nuevamente:\n{', '.join(archivos_no_agregados)}",
+    setattr(seleccionar_archivos, "_lock", True)
+    
+    try:
+        file_paths = filedialog.askopenfilenames(
+            filetypes=[
+                ("Archivos de Audio", "*.mp3 *.wav *.flac *.ogg *.m4a *.mp4 *.aac *.opus")
+            ],
+            title="Seleccionar archivos de audio",
         )
+        logger.info(f"Archivos seleccionados por el diálogo: {file_paths} (tipo: {type(file_paths)})")
+        
+        if not file_paths:
+            return
+
+        # Si por alguna razón Tcl/Tk devuelve un string en vez de una lista/tupla,
+        # lo convertimos de forma segura usando shlex.
+        if isinstance(file_paths, str):
+            import shlex
+            try:
+                file_paths = shlex.split(file_paths)
+            except Exception:
+                file_paths = [file_paths]
+
+        archivos_no_agregados = []
+        for file_path in file_paths:
+            # Limpiar llaves de Tcl {} que a veces envuelven rutas con espacios en Windows
+            file_path = file_path.strip("{}").strip()
+            if not file_path:
+                continue
+                
+            file_name = os.path.basename(file_path)
+            duracion = obtener_duracion_audio(file_path)
+            duracion_str = time.strftime("%M:%S", time.gmtime(duracion))
+            item = f"{file_name} ({duracion_str})"
+            
+            logger.info(f"Procesando archivo para lista: path={file_path}, name={file_name}, duration={duracion_str}")
+            
+            if item not in lista_archivos.get(0, tk.END):
+                lista_archivos.insert(tk.END, item)
+                lista_archivos_paths[file_path] = item
+            else:
+                archivos_no_agregados.append(file_name)
+                
+        if archivos_no_agregados:
+            messagebox.showwarning(
+                "Archivos Duplicados",
+                f"Los siguientes archivos ya estaban en la lista y no se añadieron nuevamente:\n{', '.join(archivos_no_agregados)}",
+            )
+    finally:
+        # Liberar el bloqueo después de 300ms para ignorar eventos duplicados
+        lista_archivos.after(300, lambda: setattr(seleccionar_archivos, "_lock", False))
 
 
 def limpiar(text_area):
