@@ -332,7 +332,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_export.pack(side=tk.LEFT, padx=(0, 6))
 
         self.btn_delete = ctk.CTkButton(
-            self.action_row, text="🗑️   Eliminar Registro",
+            self.action_row, text="🗑️   Eliminar",
             font=("Segoe UI Semibold", 12),
             fg_color=COLOR_DANGER, text_color="#FFFFFF", hover_color="#C53030",
             height=36, corner_radius=8, command=self.delete_record

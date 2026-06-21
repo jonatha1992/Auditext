@@ -275,6 +275,20 @@ def iniciar_transcripcion_thread(
         if frame_progress:
             frame_progress.pack_forget()
     else:
+        # Read GUI variables safely on the main GUI thread before spawning the background thread
+        idioma_entrada_val = combobox_idioma_entrada.get()
+        idioma_salida_val = combobox_idioma_salida.get()
+        diarizar_val = bool(diarizar_var.get()) if diarizar_var is not None else False
+        
+        # Safe check for diarization availability on main GUI thread
+        if diarizar_val and not diarizer.is_available():
+            messagebox.showinfo(
+                "Diferenciar hablantes no disponible",
+                "Falta whisperx o el token de HuggingFace (HF_TOKEN en .env). "
+                "Se transcribirá sin diferenciar hablantes.",
+            )
+            diarizar_val = False
+
         config.transcripcion_activa = True
         config.transcripcion_en_curso = True
         boton_transcribir.configure(text="⏹   Detener")
@@ -296,9 +310,9 @@ def iniciar_transcripcion_thread(
                 progress_bar,
                 ventana,
                 boton_transcribir,
-                combobox_idioma_entrada,
-                combobox_idioma_salida,
-                diarizar_var,
+                idioma_entrada_val,
+                idioma_salida_val,
+                diarizar_val,
             ),
             kwargs={"spinner": spinner, "frame_progress": frame_progress},
             daemon=True,
@@ -362,9 +376,9 @@ def iniciar_transcripcion(
     progress_bar,
     ventana,
     boton_transcribir,
-    combobox_idioma_entrada,
-    combobox_idioma_salida,
-    diarizar_var=None,
+    idioma_entrada_val,
+    idioma_salida_val,
+    diarizar_val=False,
     spinner=None,
     frame_progress=None,
 ):
@@ -376,22 +390,13 @@ def iniciar_transcripcion(
         )
         return
 
-    # Speaker diarization is optional and heavy. Fall back to plain transcription
-    # when it is requested but unavailable (whisperx missing or no HF_TOKEN).
-    diarizar = bool(diarizar_var.get()) if diarizar_var is not None else False
-    if diarizar and not diarizer.is_available():
-        messagebox.showinfo(
-            "Diferenciar hablantes no disponible",
-            "Falta whisperx o el token de HuggingFace (HF_TOKEN en .env). "
-            "Se transcribira sin diferenciar hablantes.",
-        )
-        diarizar = False
+    diarizar = diarizar_val
 
     archivos_seleccionados = [lista_archivos.get(i) for i in seleccion]
     total_archivos = len(archivos_seleccionados)
 
-    idioma_entrada = idiomas[combobox_idioma_entrada.get()]
-    idioma_salida = idiomas[combobox_idioma_salida.get()]
+    idioma_entrada = idiomas[idioma_entrada_val]
+    idioma_salida = idiomas[idioma_salida_val]
 
     # Offline translation: Whisper's translate task only targets English.
     # When the requested output is English (and the source is not), translate;

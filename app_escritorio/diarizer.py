@@ -111,6 +111,34 @@ try:
 
     simple_diarizer.diarizer.tqdm = ProgressTqdm
 
+    # 6. Patch cluster_AHC in simple_diarizer.cluster to support scikit-learn 1.2+ (where 'affinity' was renamed to 'metric')
+    import simple_diarizer.cluster
+    def _patched_cluster_AHC(embeds, n_clusters=None, threshold=None, metric="cosine", **kwargs):
+        from sklearn.cluster import AgglomerativeClustering
+        from simple_diarizer.cluster import similarity_matrix
+        if n_clusters is None:
+            assert threshold, "If num_clusters is not defined, threshold must be defined"
+
+        S = similarity_matrix(embeds, metric=metric)
+
+        if n_clusters is None:
+            cluster_model = AgglomerativeClustering(
+                n_clusters=None,
+                metric="precomputed",
+                linkage="average",
+                compute_full_tree=True,
+                distance_threshold=threshold,
+            )
+            return cluster_model.fit_predict(S)
+        else:
+            cluster_model = AgglomerativeClustering(
+                n_clusters=n_clusters, metric="precomputed", linkage="average"
+            )
+            return cluster_model.fit_predict(S)
+
+    simple_diarizer.cluster.cluster_AHC = _patched_cluster_AHC
+    simple_diarizer.diarizer.cluster_AHC = _patched_cluster_AHC
+
 except Exception as e:
     logger.warning("Error al aplicar los parches de compatibilidad de SpeechBrain/simple_diarizer: %s", e)
 
@@ -119,6 +147,16 @@ HF_TOKEN = os.getenv("HF_TOKEN", "").strip()
 DEVICE = "cpu"
 COMPUTE_TYPE = "int8"
 MODEL_SIZE = "small"
+
+
+def format_time(seconds: float) -> str:
+    """Format seconds into HH:MM:SS or MM:SS."""
+    h = int(seconds // 3600)
+    m = int((seconds % 3600) // 60)
+    s = int(seconds % 60)
+    if h > 0:
+        return f"{h:02d}:{m:02d}:{s:02d}"
+    return f"{m:02d}:{s:02d}"
 
 
 class DiarizationError(Exception):
@@ -209,8 +247,10 @@ def _diarize_pyannote(path: str, language: str | None, progress_cb) -> str:
         for seg in result.get("segments", []):
             speaker = seg.get("speaker", "SPEAKER_??")
             text = (seg.get("text") or "").strip()
+            start = seg.get("start", 0.0)
+            end = seg.get("end", 0.0)
             if text:
-                lines.append(f"[{speaker}] {text}")
+                lines.append(f"[{format_time(start)} - {format_time(end)}] [{speaker}] {text}")
         if progress_cb:
             progress_cb(1.0)
         return "\n".join(lines)
@@ -292,8 +332,8 @@ def _diarize_simple(path: str, language: str | None, progress_cb) -> str:
 
         # Phase 2: speaker diarization (0.55 → 0.95)
         logger.info("simple_diarizer: iniciando diarizacion de %s", path)
-        diar = Diarizer(embed_model="ecapa", cluster_method="sc")
-        diar_segs = diar.diarize(wav_path, num_speakers=None, threshold=0.01)
+        diar = Diarizer(embed_model="ecapa", cluster_method="ahc")
+        diar_segs = diar.diarize(wav_path, num_speakers=None, threshold=0.8)
         if progress_cb:
             progress_cb(0.95)
 
@@ -301,7 +341,7 @@ def _diarize_simple(path: str, language: str | None, progress_cb) -> str:
         lines = []
         for start, end, text in text_segs:
             label = _dominant_speaker(start, end, diar_segs)
-            lines.append(f"[SPEAKER_{label:02d}] {text}")
+            lines.append(f"[{format_time(start)} - {format_time(end)}] [SPEAKER_{label:02d}] {text}")
 
         if progress_cb:
             progress_cb(1.0)
