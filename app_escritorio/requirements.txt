@@ -1,5 +1,6 @@
 # Desktop app. Transcription is fully offline (faster-whisper).
 # The optional transcript summary feature uses Google Gemini (online, on demand).
+customtkinter==5.2.2
 faster-whisper==1.2.1
 soundcard==0.4.6
 # Per-application live capture (Windows WASAPI process loopback): pycaw enumerates

@@ -14,11 +14,6 @@ db.sqlite3-journal
 
 # Environment variables - SECURITY CRITICAL
 .env
-.env.*
-.env.local
-.env.*.local
-!.env.example
-# Allow .env.example to be committed as a template
 
 # Virtual environments
 .venv

@@ -26,15 +26,22 @@ def main():
     try:
         # Inicializar la base de datos SQLite
         db.init_db()
+        logger.info("[DIAG] db.init_db OK")
 
         # Inicializar pygame mixer
+        logger.info("[DIAG] Iniciando pygame.mixer.init...")
         pygame.mixer.init()
+        logger.info("[DIAG] pygame.mixer.init OK")
 
         # Configurar CustomTkinter
+        logger.info("[DIAG] Configurando CustomTkinter...")
         ctk.set_appearance_mode("dark")
         ctk.set_default_color_theme("blue")
+        logger.info("[DIAG] CustomTkinter OK")
 
+        logger.info("[DIAG] Creando ventana CTk...")
         ventana = ctk.CTk()
+        logger.info("[DIAG] Ventana CTk creada")
         ventana.title("AudioText")
         # Optional window icon. Bundled only in the PyInstaller build, so a
         # missing file when running from source must not crash the app.
