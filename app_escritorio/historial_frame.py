@@ -295,54 +295,54 @@ class HistorialFrame(ctk.CTkFrame):
         )
         self.label_indicator_text.pack(side=tk.LEFT)
 
-        # Action bar
+        # Action bar — single row, delete on the right
         self.action_row = ctk.CTkFrame(df, fg_color="transparent")
         self.action_row.pack(fill=tk.X, pady=(10, 0))
 
         self.btn_rename = ctk.CTkButton(
-            self.action_row, text="✏️   Renombrar",
-            font=("Segoe UI Semibold", 12),
+            self.action_row, text="✏️  Renombrar",
+            font=("Segoe UI Semibold", 11),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
-            height=36, corner_radius=8, command=self.rename_record
+            width=110, height=34, corner_radius=8, command=self.rename_record
         )
-        self.btn_rename.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_rename.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_copy_text = ctk.CTkButton(
-            self.action_row, text="📋   Copiar Transcripción",
-            font=("Segoe UI Semibold", 12),
+            self.action_row, text="📋  Copiar",
+            font=("Segoe UI Semibold", 11),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
-            height=36, corner_radius=8, command=self.copy_transcription
+            width=90, height=34, corner_radius=8, command=self.copy_transcription
         )
-        self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_copy_summary = ctk.CTkButton(
-            self.action_row, text="✨   Copiar Resumen",
-            font=("Segoe UI Semibold", 12),
+            self.action_row, text="✨  Resumen",
+            font=("Segoe UI Semibold", 11),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
-            height=36, corner_radius=8, command=self.copy_summary
+            width=100, height=34, corner_radius=8, command=self.copy_summary
         )
-        self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_export = ctk.CTkButton(
-            self.action_row, text="📥   Exportar",
-            font=("Segoe UI Semibold", 12),
+            self.action_row, text="📥  Exportar",
+            font=("Segoe UI Semibold", 11),
             fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
-            height=36, corner_radius=8, command=self.export_transcription
+            width=100, height=34, corner_radius=8, command=self.export_transcription
         )
-        self.btn_export.pack(side=tk.LEFT, padx=(0, 6))
+        self.btn_export.pack(side=tk.LEFT, padx=(0, 4))
 
         self.btn_delete = ctk.CTkButton(
-            self.action_row, text="🗑️   Eliminar",
-            font=("Segoe UI Semibold", 12),
+            self.action_row, text="🗑️  Eliminar",
+            font=("Segoe UI Semibold", 11),
             fg_color=COLOR_DANGER, text_color="#FFFFFF", hover_color="#C53030",
-            height=36, corner_radius=8, command=self.delete_record
+            width=110, height=34, corner_radius=8, command=self.delete_record
         )
         self.btn_delete.pack(side=tk.RIGHT)
 
         self.label_status = ctk.CTkLabel(
             self.action_row, text="", font=("Segoe UI", 11), text_color=COLOR_MUTED
         )
-        self.label_status.pack(side=tk.RIGHT, padx=12)
+        self.label_status.pack(side=tk.RIGHT, padx=(0, 8))
 
     # ------------------------------------------------------------------
     # CARD LIST

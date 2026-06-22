@@ -8,12 +8,15 @@ no network calls, no API keys, no online speech service.
 from __future__ import annotations
 
 import locale
+import os
 import threading
 
 from faster_whisper import WhisperModel
 
 # Whisper language codes we expose in the UI.
 _KNOWN_LANGS = {"es", "en", "pt", "fr", "de", "it", "ca", "nl", "ru", "zh", "ja"}
+
+import audio_preprocessor
 
 
 def detect_system_language() -> str | None:
@@ -84,26 +87,36 @@ def transcribe_file(
     """
     model = get_model()
     task = "translate" if translate else "transcribe"
-    segments, info = model.transcribe(
-        path,
-        language=language,
-        task=task,
-        vad_filter=True,
-        condition_on_previous_text=False,
-    )
 
-    duration = info.duration or 0
-    parts: list[str] = []
-    for seg in segments:
-        if should_continue is not None and not should_continue():
-            break
-        text = seg.text.strip()
-        if text:
-            parts.append(text)
-        if progress_cb is not None and duration:
-            progress_cb(min(seg.end / duration, 1.0))
+    # Preprocess: normalize loudness, high-pass filter, compress dynamics
+    preprocessed_path, is_temp = audio_preprocessor.preprocess(path)
+    try:
+        segments, info = model.transcribe(
+            preprocessed_path,
+            language=language,
+            task=task,
+            vad_filter=True,
+            condition_on_previous_text=False,
+        )
 
-    return " ".join(parts).strip()
+        duration = info.duration or 0
+        parts: list[str] = []
+        for seg in segments:
+            if should_continue is not None and not should_continue():
+                break
+            text = seg.text.strip()
+            if text:
+                parts.append(text)
+            if progress_cb is not None and duration:
+                progress_cb(min(seg.end / duration, 1.0))
+
+        return " ".join(parts).strip()
+    finally:
+        if is_temp and os.path.exists(preprocessed_path):
+            try:
+                os.remove(preprocessed_path)
+            except Exception:
+                pass
 
 
 def transcribe_file_segments(
@@ -120,21 +133,31 @@ def transcribe_file_segments(
     """
     model = get_model()
     task = "translate" if translate else "transcribe"
-    segments, info = model.transcribe(
-        path, language=language, task=task,
-        vad_filter=True, condition_on_previous_text=False,
-    )
-    duration = info.duration or 0
-    result: list[tuple[float, float, str]] = []
-    for seg in segments:
-        if should_continue is not None and not should_continue():
-            break
-        text = seg.text.strip()
-        if text:
-            result.append((seg.start, seg.end, text))
-        if progress_cb is not None and duration:
-            progress_cb(min(seg.end / duration, 1.0))
-    return result
+
+    # Preprocess: normalize loudness, high-pass filter, compress dynamics
+    preprocessed_path, is_temp = audio_preprocessor.preprocess(path)
+    try:
+        segments, info = model.transcribe(
+            preprocessed_path, language=language, task=task,
+            vad_filter=True, condition_on_previous_text=False,
+        )
+        duration = info.duration or 0
+        result: list[tuple[float, float, str]] = []
+        for seg in segments:
+            if should_continue is not None and not should_continue():
+                break
+            text = seg.text.strip()
+            if text:
+                result.append((seg.start, seg.end, text))
+            if progress_cb is not None and duration:
+                progress_cb(min(seg.end / duration, 1.0))
+        return result
+    finally:
+        if is_temp and os.path.exists(preprocessed_path):
+            try:
+                os.remove(preprocessed_path)
+            except Exception:
+                pass
 
 
 def transcribe_array(audio, language: str | None = None, translate: bool = False):

@@ -1,6 +1,14 @@
 import os
 import sys
 import logging
+
+# Limit ctranslate2 / OpenMP threads so the Tkinter event loop keeps
+# enough CPU headroom to stay responsive during heavy transcription.
+_cpu_count = os.cpu_count() or 4
+_model_threads = max(2, int(_cpu_count * 0.75))
+os.environ.setdefault("OMP_NUM_THREADS", str(_model_threads))
+os.environ.setdefault("CT2_INTER_THREADS", "1")
+os.environ.setdefault("CT2_INTRA_THREADS", str(_model_threads))
 from logging.handlers import RotatingFileHandler
 import datetime
 

@@ -22,6 +22,8 @@ from dotenv import load_dotenv
 
 from config import logger
 
+import audio_preprocessor
+
 load_dotenv()
 
 # Patch SpeechBrain and simple_diarizer to run correctly on Windows
@@ -216,8 +218,14 @@ def _diarize_pyannote(path: str, language: str | None, progress_cb) -> str:
 
     try:
         if progress_cb:
+            progress_cb(0.02)
+
+        # Preprocess: normalize loudness, high-pass filter, compress dynamics
+        preprocessed_path, preprocess_temp = audio_preprocessor.preprocess(path)
+
+        if progress_cb:
             progress_cb(0.05)
-        audio = whisperx.load_audio(path)
+        audio = whisperx.load_audio(preprocessed_path)
 
         model = whisperx.load_model(MODEL_SIZE, DEVICE, compute_type=COMPUTE_TYPE)
         result = model.transcribe(audio, batch_size=8, language=language)
@@ -261,6 +269,12 @@ def _diarize_pyannote(path: str, language: str | None, progress_cb) -> str:
         raise DiarizationError(
             "Error al diferenciar hablantes. Revisa la bitacora (logs/error_log.txt)."
         ) from exc
+    finally:
+        if preprocess_temp and os.path.exists(preprocessed_path):
+            try:
+                os.remove(preprocessed_path)
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +327,7 @@ def _diarize_simple(path: str, language: str | None, progress_cb) -> str:
 
     import transcriber
 
-    wav_path, is_temp = _to_wav(path)
+    wav_path, is_temp = audio_preprocessor.preprocess(path)
     try:
         if progress_cb:
             progress_cb(0.05)
@@ -333,7 +347,15 @@ def _diarize_simple(path: str, language: str | None, progress_cb) -> str:
         # Phase 2: speaker diarization (0.55 → 0.95)
         logger.info("simple_diarizer: iniciando diarizacion de %s", path)
         diar = Diarizer(embed_model="ecapa", cluster_method="ahc")
-        diar_segs = diar.diarize(wav_path, num_speakers=None, threshold=0.8)
+        diar_segs = diar.diarize(wav_path, num_speakers=None, threshold=0.4)
+
+        # Renumber labels to consecutive 0, 1, 2, ... in order of first appearance
+        seen: dict[int, int] = {}
+        for seg in diar_segs:
+            lbl = seg["label"]
+            if lbl not in seen:
+                seen[lbl] = len(seen)
+            seg["label"] = seen[lbl]
         if progress_cb:
             progress_cb(0.95)
 

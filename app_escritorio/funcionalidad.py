@@ -23,6 +23,36 @@ from config import (
 )
 
 
+def _ask_on_main_thread(ventana, title, message):
+    """Show a yes/no/cancel messagebox on the main thread.
+
+    Blocks the calling (worker) thread until the user responds,
+    without freezing the Tkinter event loop.
+
+    Returns True (Yes), False (No), or None (Cancel).
+    """
+    result = [None]
+    event = threading.Event()
+
+    def _show():
+        result[0] = messagebox.askyesnocancel(title, message, parent=ventana)
+        event.set()
+
+    ventana.after(0, _show)
+    event.wait()
+    return result[0]
+
+
+def _show_error_on_main_thread(ventana, title, message):
+    """Show an error messagebox on the main thread (non-blocking for worker)."""
+    ventana.after(0, lambda: messagebox.showerror(title, message, parent=ventana))
+
+
+def _show_info_on_main_thread(ventana, title, message):
+    """Show an info messagebox on the main thread (non-blocking for worker)."""
+    ventana.after(0, lambda: messagebox.showinfo(title, message, parent=ventana))
+
+
 def convertir_a_wav(audio_path):
     """Convert an audio file to WAV with the bundled ffmpeg (local, offline).
 
@@ -437,14 +467,14 @@ def iniciar_transcripcion(
         transcripcion_guardada = db.get_transcription(audio_file)
         if transcripcion_guardada:
             # Preguntar si desea cargar la transcripción existente o volver a procesar
-            respuesta = messagebox.askyesnocancel(
+            respuesta = _ask_on_main_thread(
+                ventana,
                 "Transcripción Guardada",
                 f"El archivo '{archivo}' ya tiene una transcripción en el historial.\n\n"
                 "¿Querés cargar la transcripción guardada?\n"
                 "- Seleccioná SÍ para cargarla al instante.\n"
                 "- Seleccioná NO para volver a transcribirla desde cero.\n"
                 "- Seleccioná CANCELAR para abortar el proceso.",
-                parent=ventana,
             )
             if respuesta is True:
                 nuevo_texto = (
@@ -505,12 +535,14 @@ def iniciar_transcripcion(
             ventana.after(0, lambda v=frac: progress_bar.configure(value=v))
 
         except diarizer.DiarizationError as e:
-            messagebox.showerror(
+            _show_error_on_main_thread(
+                ventana,
                 "Diferenciar hablantes",
                 report_error(f"Diarizacion {archivo}", e, str(e)),
             )
         except Exception as e:
-            messagebox.showerror(
+            _show_error_on_main_thread(
+                ventana,
                 "Error",
                 report_error(
                     f"Procesar {archivo}", e, f"No se pudo procesar el archivo {archivo}."
@@ -523,7 +555,8 @@ def iniciar_transcripcion(
     archivo_procesando.set("")
 
     if config.transcripcion_activa:
-        messagebox.showinfo(
+        _show_info_on_main_thread(
+            ventana,
             "Informacion", f"Transcripcion completa para {total_archivos} archivo(s)."
         )
 

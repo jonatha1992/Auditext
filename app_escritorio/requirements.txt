@@ -9,6 +9,7 @@ psutil==7.2.2
 numpy==2.4.6
 pydub==0.25.1
 scipy==1.17.1
+noisereduce>=3.0.0
 mutagen==1.47.0
 pygame==2.6.1
 

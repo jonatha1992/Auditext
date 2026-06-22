@@ -771,15 +771,12 @@ def crear_interfaz(ventana):
 
     # Responsive layout adjustment
     last_width = [0]
+    _resize_after_id = [None]
 
-    def on_view_configure(event):
-        if event.widget != view_archivos:
-            return
-        
-        new_width = event.width
-        if new_width < 400: # Ignorar anchos de inicialización pequeños
-            return
-            
+    def _apply_layout(new_width):
+        """Actually perform the layout changes (called after debounce)."""
+        _resize_after_id[0] = None
+
         if new_width == last_width[0]:
             return
         last_width[0] = new_width
@@ -862,6 +859,17 @@ def crear_interfaz(ventana):
             boton_resumir.pack(side=tk.LEFT, padx=(0, 8))
             boton_exportar.pack(side=tk.RIGHT, padx=(8, 0))
             boton_limpiar.pack(side=tk.RIGHT)
+
+    def on_view_configure(event):
+        if event.widget != view_archivos:
+            return
+        new_width = event.width
+        if new_width < 400:
+            return
+        # Cancel any pending layout update (debounce at 150ms)
+        if _resize_after_id[0] is not None:
+            ventana.after_cancel(_resize_after_id[0])
+        _resize_after_id[0] = ventana.after(150, lambda w=new_width: _apply_layout(w))
 
     view_archivos.bind("<Configure>", on_view_configure)
 
