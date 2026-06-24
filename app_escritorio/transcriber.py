@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import locale
 import os
+import sys
 import threading
 
 from faster_whisper import WhisperModel
@@ -49,6 +50,17 @@ _model: WhisperModel | None = None
 _model_lock = threading.Lock()
 
 
+def _resolve_model_path() -> str:
+    """When frozen, load from bundled local path; otherwise use HF cache."""
+    if getattr(sys, "frozen", False):
+        # PyInstaller 6.x puts bundled data in sys._MEIPASS (_internal/), not next to exe.
+        base = getattr(sys, "_MEIPASS", os.path.dirname(sys.executable))
+        local = os.path.join(base, "models", "whisper-small")
+        if os.path.isdir(local):
+            return local
+    return MODEL_SIZE
+
+
 def get_model() -> WhisperModel:
     """Return the shared model, loading it on first use (thread-safe)."""
     global _model
@@ -56,7 +68,7 @@ def get_model() -> WhisperModel:
         with _model_lock:
             if _model is None:
                 _model = WhisperModel(
-                    MODEL_SIZE, device=DEVICE, compute_type=COMPUTE_TYPE
+                    _resolve_model_path(), device=DEVICE, compute_type=COMPUTE_TYPE
                 )
     return _model
 

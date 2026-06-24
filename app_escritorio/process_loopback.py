@@ -285,6 +285,7 @@ class ProcessLoopbackRecorder:
     # context manager ------------------------------------------------------
 
     def __enter__(self):
+        self._com_owner = False
         self._activate()
         return self
 
@@ -296,10 +297,11 @@ class ProcessLoopbackRecorder:
             pass
         self._client = None
         self._capture = None
-        try:
-            ctypes.windll.ole32.CoUninitialize()
-        except Exception:
-            pass
+        if getattr(self, "_com_owner", False):
+            try:
+                ctypes.windll.ole32.CoUninitialize()
+            except Exception:
+                pass
 
     # internals ------------------------------------------------------------
 
@@ -308,7 +310,9 @@ class ProcessLoopbackRecorder:
         # ActivateAudioInterfaceAsync requires the calling thread to be MTA, and
         # its completion callback arrives on an MTA worker thread. Initialize
         # this thread (the producer thread) as MTA before any COM call.
-        ole32.CoInitializeEx(None, 0x2)  # COINIT_MULTITHREADED
+        hr = ole32.CoInitializeEx(None, 0x2)  # COINIT_MULTITHREADED
+        if hr >= 0:
+            self._com_owner = True
 
         params = AUDIOCLIENT_ACTIVATION_PARAMS()
         params.ActivationType = AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK

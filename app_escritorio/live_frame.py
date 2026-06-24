@@ -121,6 +121,15 @@ class Transcriber:
         self._translate = False
         self._save_audio = True
         self._audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
+        self.num_bars = 60
+        self.last_bands = [0.0] * 60
+        self.playhead_index = 0
+        self.update_count = 0
+        self.peak_accumulator = []
+        self.start_time = None
+        self.duration_seconds = 0
+        self.current_transcript_path = None
+        self.current_wav_path = None
 
     def start(self, language=None, out_dir: Path = DEFAULT_DIR, source_type="loopback", source_val=None, translate=False, save_audio=True):
         if self._thread and self._thread.is_alive():
@@ -133,11 +142,23 @@ class Transcriber:
         self._translate = translate
         self._save_audio = save_audio
         self._stop.clear()
+        import time
+        self.start_time = time.time()
+        self.duration_seconds = 0
+        self.current_transcript_path = None
+        self.current_wav_path = None
+        self.last_bands = [0.0] * getattr(self, "num_bars", 60)
+        self.playhead_index = 0
+        self.update_count = 0
+        self.peak_accumulator = []
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
     def stop(self):
         self._stop.set()
+        import time
+        if getattr(self, "start_time", None):
+            self.duration_seconds = time.time() - self.start_time
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -145,16 +166,20 @@ class Transcriber:
     def _open_log(self):
         self._out_dir.mkdir(parents=True, exist_ok=True)
         stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        self.current_transcript_path = self._out_dir / f"transcript_{stamp}.txt"
         self._log_file = open(
-            self._out_dir / f"transcript_{stamp}.txt", "a", encoding="utf-8"
+            self.current_transcript_path, "a", encoding="utf-8"
         )
         if self._save_audio:
+            self.current_wav_path = self._out_dir / f"audio_{stamp}.wav"
             self._wav_file = wave.open(
-                str(self._out_dir / f"audio_{stamp}.wav"), "wb"
+                str(self.current_wav_path), "wb"
             )
             self._wav_file.setnchannels(1)
             self._wav_file.setsampwidth(2)
             self._wav_file.setframerate(SAMPLE_RATE)
+        else:
+            self.current_wav_path = None
 
     def _emit(self, text: str):
         self._text_queue.put(text)
@@ -163,29 +188,49 @@ class Transcriber:
             self._log_file.flush()
 
     def _producer(self):
-        block = int(SAMPLE_RATE * CAPTURE_BLOCK_SECONDS)
-        if self._source_type == "google_stt":
-            self._capture_google_stt()
-            return
-        if self._source_type == "windows_stt":
-            self._capture_windows_stt()
-            return
-        if self._source_type == "app":
+        import sys
+        com_initialized = False
+        if sys.platform == "win32":
+            import ctypes
             try:
-                self._capture_process(block)
-                return
+                # Inicializar COM como COINIT_MULTITHREADED (0x0)
+                hr = ctypes.windll.ole32.CoInitializeEx(None, 0)
+                if hr >= 0:
+                    com_initialized = True
             except Exception as exc:
-                logger.exception("Process loopback failed: %s", exc)
-                self._status_queue.put(
-                    "Error al capturar la app; usando micrófono."
-                )
-                self._source_type = "mic"
-                self._source_val = None
+                logger.exception("CoInitializeEx falló: %s", exc)
 
-        if self._source_type == "mic":
-            self._capture_mic(block)
-        else:
-            self._capture_system(block)
+        try:
+            block = int(SAMPLE_RATE * CAPTURE_BLOCK_SECONDS)
+            if self._source_type == "google_stt":
+                self._capture_google_stt()
+                return
+            if self._source_type == "windows_stt":
+                self._capture_windows_stt()
+                return
+            if self._source_type == "app":
+                try:
+                    self._capture_process(block)
+                    return
+                except Exception as exc:
+                    logger.exception("Process loopback failed: %s", exc)
+                    self._status_queue.put(
+                        "Error al capturar la app; usando micrófono."
+                    )
+                    self._source_type = "mic"
+                    self._source_val = None
+
+            if self._source_type == "mic":
+                self._capture_mic(block)
+            else:
+                self._capture_system(block)
+        finally:
+            if com_initialized:
+                import ctypes
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:
+                    pass
 
     def _capture_google_stt(self):
         """Use Google's free Web Speech API (same engine as Google Docs voice typing).
@@ -319,7 +364,48 @@ class Transcriber:
         except queue.Full:
             pass
 
+    def _update_equalizer(self, chunk):
+        if len(chunk) == 0:
+            return
+        try:
+            # Calcular la amplitud pico en este bloque de 50 ms
+            peak = float(np.max(np.abs(chunk)))
+            self.peak_accumulator.append(peak)
+            
+            # Cada 3 bloques (150 ms) procesamos y desplazamos el playhead
+            if len(self.peak_accumulator) >= 3:
+                max_peak = max(self.peak_accumulator)
+                self.peak_accumulator = []
+                
+                # Escalar para llenar el alto de las barras
+                val = min(1.0, max_peak * 4.5)
+                if max_peak < 0.001:
+                    val = 0.0
+                
+                num_bars = getattr(self, "num_bars", 60)
+                # Asegurar longitud correcta
+                if len(self.last_bands) != num_bars:
+                    if len(self.last_bands) < num_bars:
+                        self.last_bands += [0.0] * (num_bars - len(self.last_bands))
+                    else:
+                        self.last_bands = self.last_bands[:num_bars]
+                
+                idx = self.update_count
+                if idx < num_bars:
+                    self.last_bands[idx] = val
+                    self.playhead_index = idx
+                    self.update_count += 1
+                else:
+                    # Si llega al final, desplaza el historial hacia la izquierda
+                    # y mantiene el playhead en el último índice
+                    self.last_bands = self.last_bands[1:] + [val]
+                    self.playhead_index = num_bars - 1
+        except Exception:
+            pass
+
     def _capture_system(self, block):
+        sub_block = int(SAMPLE_RATE * 0.05)
+        accumulated = []
         try:
             speaker = sc.default_speaker()
             if self._source_val and self._source_type == "loopback":
@@ -330,12 +416,20 @@ class Transcriber:
             self._status_queue.put(f"Escuchando: Sistema ({speaker.name[:18]}...)")
             with loopback.recorder(samplerate=SAMPLE_RATE) as rec:
                 while not self._stop.is_set():
-                    self._push(to_mono(rec.record(numframes=block)))
+                    chunk_data = rec.record(numframes=sub_block)
+                    mono_chunk = to_mono(chunk_data)
+                    self._update_equalizer(mono_chunk)
+                    accumulated.append(mono_chunk)
+                    if len(accumulated) >= 10:
+                        self._push(np.concatenate(accumulated))
+                        accumulated = []
         except Exception as exc:
             logger.exception("System loopback capture failed: %s", exc)
             self._status_queue.put(f"Error sistema: {exc}")
 
     def _capture_mic(self, block):
+        sub_block = int(SAMPLE_RATE * 0.05)
+        accumulated = []
         try:
             mic = sc.default_microphone()
             if self._source_val and self._source_type == "mic":
@@ -345,7 +439,13 @@ class Transcriber:
             self._status_queue.put(f"Escuchando: Micrófono ({mic.name[:18]}...)")
             with mic.recorder(samplerate=SAMPLE_RATE) as rec:
                 while not self._stop.is_set():
-                    self._push(to_mono(rec.record(numframes=block)))
+                    chunk_data = rec.record(numframes=sub_block)
+                    mono_chunk = to_mono(chunk_data)
+                    self._update_equalizer(mono_chunk)
+                    accumulated.append(mono_chunk)
+                    if len(accumulated) >= 10:
+                        self._push(np.concatenate(accumulated))
+                        accumulated = []
         except Exception as exc:
             logger.exception("Microphone capture failed: %s", exc)
             self._status_queue.put(f"Error micrófono: {exc}")
@@ -353,13 +453,20 @@ class Transcriber:
     def _capture_process(self, block):
         import process_loopback
         self._status_queue.put(f"Escuchando App (PID {self._source_val})")
+        sub_block = int(SAMPLE_RATE * 0.05)
+        accumulated = []
         with process_loopback.ProcessLoopbackRecorder(
             self._source_val, samplerate=SAMPLE_RATE
         ) as rec:
             while not self._stop.is_set():
-                audio_data = rec.record(block, stop_event=self._stop)
+                audio_data = rec.record(sub_block, stop_event=self._stop)
                 if len(audio_data) > 0:
-                    self._push(to_mono(audio_data))
+                    mono_chunk = to_mono(audio_data)
+                    self._update_equalizer(mono_chunk)
+                    accumulated.append(mono_chunk)
+                    if len(accumulated) >= 10:
+                        self._push(np.concatenate(accumulated))
+                        accumulated = []
 
     def _consumer(self):
         target = int(SAMPLE_RATE * CHUNK_SECONDS)
@@ -602,9 +709,6 @@ class LiveFrame(ctk.CTkFrame):
                 return
             self.last_live_width[0] = new_w
 
-            # Center equalizer wave
-            self._init_wave_bars()
-
             # Responsive config cards grid rearrange
             _all_controls = [
                 self.label_fuente, self.source_combo, self.btn_refresh,
@@ -655,7 +759,7 @@ class LiveFrame(ctk.CTkFrame):
 
         # Setup equalizer bars variables
         self.bar_ids = []
-        self.num_bars = 36
+        self.num_bars = 60
         self.bar_width = 5
         self.bar_gap = 3
         self.is_animating = False
@@ -678,19 +782,39 @@ class LiveFrame(ctk.CTkFrame):
         self.output.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
 
         self._refresh_sources()
-        self.after(100, self._init_wave_bars)
+        self.wave_canvas.bind("<Configure>", lambda event: self._init_wave_bars(event.width))
         self.after(150, self._drain_queues)
 
-    def _init_wave_bars(self):
+    def _init_wave_bars(self, canvas_width=None):
         self.wave_canvas.delete("all")
         self.bar_ids = []
-        w = self.wave_canvas.winfo_width()
+        w = canvas_width if canvas_width is not None else self.wave_canvas.winfo_width()
         if w < 10:
             w = 500  # Default fallback width before render
+        
+        self.bar_width = 6
+        self.bar_gap = 3
+        
+        # Calcular cantidad de barras dinámicamente para ocupar el ancho disponible de la tarjeta
+        # Dejamos 24px de margen a los costados
+        visible_w = w - 48
+        self.num_bars = max(20, visible_w // (self.bar_width + self.bar_gap))
+        
+        # Sincronizar la cantidad de barras con el worker
+        self.worker.num_bars = self.num_bars
+        
         h = 70
-        center_y = h / 2
+        center_y = 45  # waveform centered in bottom 50px
+
         total_width = self.num_bars * self.bar_width + (self.num_bars - 1) * self.bar_gap
         start_x = (w - total_width) / 2
+
+        # Draw the baseline (horizontal dotted line)
+        x_start = start_x
+        x_end = start_x + total_width
+        self.wave_canvas.create_line(
+            x_start, center_y, x_end, center_y, fill="#1A1B26", width=1, dash=(2, 2)
+        )
 
         for i in range(self.num_bars):
             x0 = start_x + i * (self.bar_width + self.bar_gap)
@@ -701,24 +825,139 @@ class LiveFrame(ctk.CTkFrame):
                 x0, y0, x1, y1, fill="#7000FF", outline="", tags=f"bar_{i}"
             )
             self.bar_ids.append(bar_id)
+            
+        # Draw the initial red playhead line (make it width 3 for better visibility)
+        self.wave_canvas.create_line(
+            start_x, 22, start_x, 68, fill="#E53E3E", width=3, tags="playhead"
+        )
+        
+        # Initial draw of timeline
+        self._draw_timeline(0.0)
+
+    def _draw_timeline(self, elapsed):
+        self.wave_canvas.delete("timeline")
+        
+        w = self.wave_canvas.winfo_width()
+        if w < 10:
+            w = 500
+        total_width = self.num_bars * self.bar_width + (self.num_bars - 1) * self.bar_gap
+        start_x = (w - total_width) / 2
+
+        # Duración total que cabe en pantalla según la cantidad de barras
+        duration_on_screen = self.num_bars * 0.15
+        if elapsed < duration_on_screen:
+            base_time = 0.0
+        else:
+            base_time = elapsed - duration_on_screen
+
+        # Generar marcas de tiempo (ticks) dinámicamente cada 2 segundos
+        ticks = []
+        start_second = int(base_time // 2) * 2
+        if start_second < base_time:
+            start_second += 2.0
+            
+        t_val = start_second
+        while True:
+            idx = int((t_val - base_time) / 0.15)
+            if idx >= self.num_bars:
+                break
+            if idx >= 0:
+                ticks.append((idx, t_val))
+            t_val += 2.0
+
+        def format_time(t):
+            mins = int(t // 60)
+            secs = int(t % 60)
+            hundredths = int((t * 100) % 100)
+            return f"{mins:02d}:{secs:02d}.{hundredths:02d}"
+
+        for idx, t_val in ticks:
+            if idx < self.num_bars:
+                x = start_x + idx * (self.bar_width + self.bar_gap) + self.bar_width / 2
+                # Draw small tick mark
+                self.wave_canvas.create_line(x, 2, x, 8, fill="#2A2B36", width=1, tags="timeline")
+                # Draw text label
+                self.wave_canvas.create_text(
+                    x, 15, text=format_time(t_val), font=("Segoe UI Semibold", 8), fill="#8A8F9E", tags="timeline"
+                )
 
     def _animate_wave(self):
         if not self.is_animating:
-            # Flatten all bars when stopped
+            # Flatten all bars when stopped and reset playhead/timeline to start
             h = 70
-            center_y = h / 2
+            center_y = 45
             for bar_id in self.bar_ids:
                 coords = self.wave_canvas.coords(bar_id)
                 if coords:
                     x0, _, x1, _ = coords
                     self.wave_canvas.coords(bar_id, x0, center_y - 2, x1, center_y + 2)
+            
+            # Reset playhead to start
+            w = self.wave_canvas.winfo_width()
+            if w < 10:
+                w = 500
+            total_width = self.num_bars * self.bar_width + (self.num_bars - 1) * self.bar_gap
+            start_x = (w - total_width) / 2
+            self.wave_canvas.coords("playhead", start_x, 22, start_x, 68)
+            
+            # Reset timeline
+            self._draw_timeline(0.0)
             return
 
         h = 70
-        center_y = h / 2
-        for bar_id in self.bar_ids:
-            # Dynamic bar scale heights
-            bar_h = random.randint(4, 52)
+        center_y = 45
+
+        # Check if we are running in cloud or subprocess modes (simulate playhead moving)
+        if getattr(self.worker, "_source_type", None) in {"google_stt", "windows_stt"}:
+            if not hasattr(self, "_fake_history") or len(self._fake_history) != self.num_bars:
+                self._fake_history = [0.0] * self.num_bars
+                self._fake_playhead = min(getattr(self, "_fake_playhead", 0), self.num_bars - 1)
+                self._fake_counter = 0
+                self._fake_elapsed = getattr(self, "_fake_elapsed", 0.0)
+            
+            # Update fake wave every 3 animation frames (150ms)
+            self._fake_counter += 1
+            if self._fake_counter >= 3:
+                self._fake_counter = 0
+                self._fake_elapsed += 0.15
+                if random.random() < 0.15:
+                    sim_val = random.uniform(0.3, 0.9)
+                else:
+                    sim_val = 0.0
+                
+                idx = self._fake_playhead
+                if idx < self.num_bars - 1:
+                    self._fake_history[idx] = sim_val
+                    self._fake_playhead += 1
+                else:
+                    self._fake_history = self._fake_history[1:] + [sim_val]
+                    self._fake_playhead = self.num_bars - 1
+            
+            bands = self._fake_history
+            playhead_idx = self._fake_playhead
+            elapsed = self._fake_elapsed
+        else:
+            # Get latest rolling waveform history from real-time worker
+            bands = getattr(self.worker, "last_bands", None)
+            if not bands:
+                bands = [0.0] * self.num_bars
+            playhead_idx = getattr(self.worker, "playhead_index", 0) or 0
+            
+            # Real elapsed time
+            elapsed = 0.0
+            if self.is_animating and getattr(self.worker, "start_time", None):
+                import time
+                elapsed = time.time() - self.worker.start_time
+
+        for i, bar_id in enumerate(self.bar_ids):
+            band_val = bands[i] if i < len(bands) else 0.0
+            
+            # Tiny random jitter on silence to keep the UI feeling "alive"
+            if band_val < 0.02:
+                bar_h = 4 + random.randint(0, 1)
+            else:
+                bar_h = 4 + int(band_val * 40)  # max height 40px
+
             y0 = center_y - (bar_h / 2)
             y1 = center_y + (bar_h / 2)
             coords = self.wave_canvas.coords(bar_id)
@@ -726,7 +965,19 @@ class LiveFrame(ctk.CTkFrame):
                 x0, _, x1, _ = coords
                 self.wave_canvas.coords(bar_id, x0, y0, x1, y1)
 
-        self.after(70, self._animate_wave)
+        # Update the playhead red line position
+        w = self.wave_canvas.winfo_width()
+        if w < 10:
+            w = 500
+        total_width = self.num_bars * self.bar_width + (self.num_bars - 1) * self.bar_gap
+        start_x = (w - total_width) / 2
+        x_playhead = start_x + playhead_idx * (self.bar_width + self.bar_gap) + self.bar_width / 2
+        self.wave_canvas.coords("playhead", x_playhead, 22, x_playhead, 68)
+
+        # Draw the dynamic timeline
+        self._draw_timeline(elapsed)
+
+        self.after(50, self._animate_wave)
 
     def _toggle(self):
         if self.worker.is_running():
@@ -871,11 +1122,101 @@ class LiveFrame(ctk.CTkFrame):
         ).pack(side=tk.RIGHT)
 
     def _save(self):
+        text = self.output.get("1.0", tk.END).strip()
+        if not text:
+            messagebox.showwarning("Advertencia", "No hay texto para guardar.")
+            return
+
+        # Pedir nombre de la grabación al usuario usando CTkInputDialog
+        dialog = ctk.CTkInputDialog(
+            text="Ingresá el nombre para la grabación:",
+            title="Guardar grabación"
+        )
+        custom_name = dialog.get_input()
+        if not custom_name:
+            return
+        custom_name = custom_name.strip()
+        if not custom_name:
+            return
+
+        # Sanitizar nombre para ser compatible con Windows
+        import re
+        safe_name = re.sub(r'[\\/*?:"<>|]', "_", custom_name)
+
         self.out_dir.mkdir(parents=True, exist_ok=True)
-        stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        path = self.out_dir / f"edited_{stamp}.txt"
-        path.write_text(self.output.get("1.0", tk.END).strip() + "\n", encoding="utf-8")
-        self._set_status(f"Guardado: {path.name}")
+        target_txt = self.out_dir / f"{safe_name}.txt"
+        target_wav = self.out_dir / f"{safe_name}.wav"
+
+        # Verificar si ya existe para confirmar sobreescritura
+        if target_txt.exists() or (getattr(self.worker, "current_wav_path", None) and target_wav.exists()):
+            overwrite = messagebox.askyesno(
+                "Confirmar sobrescritura",
+                f"Ya existe una grabación con el nombre '{safe_name}'.\n\n¿Querés sobrescribirla?",
+                parent=self
+            )
+            if not overwrite:
+                return
+
+        # Guardar archivo de texto editado
+        try:
+            target_txt.write_text(text + "\n", encoding="utf-8")
+        except Exception as exc:
+            logger.exception("Failed to write transcript file: %s", exc)
+            messagebox.showerror("Error", f"No se pudo guardar el archivo de texto: {exc}")
+            return
+
+        # Si hay un audio asociado, renombrarlo/moverlo al nuevo nombre
+        import os
+        import shutil
+        wav_moved = False
+        if getattr(self.worker, "current_wav_path", None) and os.path.exists(self.worker.current_wav_path):
+            try:
+                shutil.move(str(self.worker.current_wav_path), str(target_wav))
+                self.worker.current_wav_path = target_wav
+                wav_moved = True
+            except Exception as exc:
+                logger.exception("Failed to move WAV file: %s", exc)
+                messagebox.showwarning(
+                    "Advertencia",
+                    f"Se guardó la transcripción pero no se pudo renombrar el archivo de audio:\n{exc}"
+                )
+
+        # Borrar el archivo de transcripción temporal original
+        if getattr(self.worker, "current_transcript_path", None) and os.path.exists(self.worker.current_transcript_path):
+            try:
+                if target_txt != self.worker.current_transcript_path:
+                    os.remove(self.worker.current_transcript_path)
+            except Exception:
+                pass
+            self.worker.current_transcript_path = target_txt
+
+        # Calcular duración
+        duration_str = "00:00"
+        if getattr(self.worker, "duration_seconds", 0) > 0:
+            mins = int(self.worker.duration_seconds // 60)
+            secs = int(self.worker.duration_seconds % 60)
+            duration_str = f"{mins:02d}:{secs:02d}"
+
+        # Guardar en base de datos para integrarlo con la pestaña "Historial"
+        db_path = str(target_wav) if wav_moved else str(target_txt)
+        db_friendly_name = safe_name
+        db_lang = self.worker._locked_language or self.worker._language or ""
+
+        import db
+        try:
+            db.save_transcription(
+                file_path=db_path,
+                file_name=db_friendly_name,
+                duration=duration_str,
+                transcription=text,
+                summary="",
+                language=db_lang
+            )
+            self._set_status(f"Guardado: {safe_name}")
+            messagebox.showinfo("Éxito", f"Grabación guardada como '{safe_name}' y añadida al historial.")
+        except Exception as exc:
+            logger.exception("Failed to save to database: %s", exc)
+            messagebox.showerror("Error", f"Se guardó el archivo en disco pero no se pudo indexar en el historial: {exc}")
 
     def _append(self, text: str):
         at_bottom = self.output.yview()[1] >= 0.999

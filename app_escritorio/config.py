@@ -47,10 +47,11 @@ logger.addHandler(file_handler)
 logger.addHandler(console_handler)
 
 # Configurar rutas de FFmpeg
-# When frozen (PyInstaller): ffmpeg is bundled next to the exe → use base_dir.
+# When frozen (PyInstaller 6.x+): bundled files live in sys._MEIPASS (_internal/),
+# not next to the exe. Use _MEIPASS for bundled binaries, base_dir for user data.
 # When running from source: ffmpeg lives at the repo root, one level up from app_escritorio/.
 if getattr(sys, "frozen", False):
-    _ffmpeg_root = base_dir
+    _ffmpeg_root = getattr(sys, "_MEIPASS", base_dir)
 else:
     _ffmpeg_root = os.path.dirname(base_dir)
 

@@ -6,6 +6,10 @@ import customtkinter as ctk
 import db
 import summarizer
 from spinner import Spinner
+from reproductor import reproductor
+from funcionalidad import obtener_duracion_audio
+from tooltip import Tooltip
+
 
 COLOR_BG          = "#0B0C10"
 COLOR_PANEL       = "#15161E"
@@ -102,8 +106,10 @@ class HistorialFrame(ctk.CTkFrame):
         self._card_widgets = []
         self._selected_idx = -1
 
+        self._slider_dragging = False
         self._build_ui()
         self.load_history()
+        self.after(100, self._tick_history_player)
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -145,6 +151,17 @@ class HistorialFrame(ctk.CTkFrame):
             self.left_col, text="TRANSCRIPCIONES GUARDADAS",
             font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
         ).pack(anchor=tk.W, pady=(0, 6))
+
+        # Search Bar
+        self.search_var = tk.StringVar()
+        self.search_var.trace_add("write", self._on_search_change)
+        
+        self.search_entry = ctk.CTkEntry(
+            self.left_col, placeholder_text="🔍 Buscar...", textvariable=self.search_var,
+            fg_color="#11121A", border_color=COLOR_BORDER, text_color="#FFFFFF",
+            height=32, corner_radius=8
+        )
+        self.search_entry.pack(fill=tk.X, pady=(0, 10))
 
         self.card_scroll = ctk.CTkScrollableFrame(
             self.left_col, fg_color=COLOR_PANEL, corner_radius=12,
@@ -200,6 +217,59 @@ class HistorialFrame(ctk.CTkFrame):
             text_color=COLOR_MUTED, anchor=tk.W
         )
         self.label_detail_meta2.pack(anchor=tk.W)
+
+        # Player Frame for audio files
+        self.player_frame = ctk.CTkFrame(
+            df, fg_color=COLOR_PANEL, corner_radius=12,
+            border_color=COLOR_BORDER, border_width=1
+        )
+        
+        play_btn_frame = ctk.CTkFrame(self.player_frame, fg_color="transparent")
+        play_btn_frame.pack(side=tk.LEFT, padx=(12, 6), pady=8)
+        
+        self.btn_play_history = ctk.CTkButton(
+            play_btn_frame, text="▶", font=("Segoe UI Semibold", 12),
+            fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
+            width=32, height=32, corner_radius=16,
+            command=self._play_pause_history
+        )
+        self.btn_play_history.pack()
+
+        self.btn_rewind_history = ctk.CTkButton(
+            self.player_frame, text="⏪", font=("Segoe UI", 12),
+            fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+            width=32, height=32, corner_radius=16,
+            command=lambda: self._seek_history(-5)
+        )
+        self.btn_rewind_history.pack(side=tk.LEFT, padx=2)
+
+        self.btn_forward_history = ctk.CTkButton(
+            self.player_frame, text="⏩", font=("Segoe UI", 12),
+            fg_color="transparent", text_color=COLOR_TEXT_FG, hover_color=COLOR_PANEL_LIGHT,
+            width=32, height=32, corner_radius=16,
+            command=lambda: self._seek_history(5)
+        )
+        self.btn_forward_history.pack(side=tk.LEFT, padx=2)
+        
+        self.lbl_time_history = ctk.CTkLabel(
+            self.player_frame, text="00:00 / 00:00",
+            font=("Segoe UI", 11), text_color=COLOR_TEXT_FG
+        )
+        self.lbl_time_history.pack(side=tk.LEFT, padx=8)
+        
+        self.slider_history = ctk.CTkSlider(
+            self.player_frame, from_=0, to=100,
+            fg_color="#11121A", progress_color=COLOR_ACCENT, button_color=COLOR_ACCENT,
+            button_hover_color=COLOR_ACCENT_HOVER, height=14,
+            command=self._on_slider_change
+        )
+        self.slider_history.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 16))
+        
+        def on_slider_press(event):
+            self._slider_dragging = True
+            
+        self.slider_history.bind("<ButtonPress-1>", on_slider_press)
+        self.slider_history.bind("<ButtonRelease-1>", self._on_slider_release)
 
         # Two side-by-side panels
         self.split_details = ctk.CTkFrame(df, fg_color="transparent")
@@ -380,6 +450,35 @@ class HistorialFrame(ctk.CTkFrame):
         )
         lbl_date.pack(side=tk.LEFT)
 
+        # Action buttons on card
+        def on_delete_card(ev=None):
+            self._select_card(index)
+            self.after(50, self.delete_record)
+
+        def on_rename_card(ev=None):
+            self._select_card(index)
+            self.after(50, self.rename_record)
+
+        btn_delete_card = ctk.CTkButton(
+            row2, text="🗑️", font=("Segoe UI", 10),
+            fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_DANGER,
+            width=20, height=20, corner_radius=4,
+            command=on_delete_card
+        )
+        btn_delete_card.pack(side=tk.RIGHT, padx=2)
+
+        btn_rename_card = ctk.CTkButton(
+            row2, text="✏️", font=("Segoe UI", 10),
+            fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_ACCENT,
+            width=20, height=20, corner_radius=4,
+            command=on_rename_card
+        )
+        btn_rename_card.pack(side=tk.RIGHT, padx=2)
+
+        Tooltip(btn_rename_card, "Renombrar grabación")
+        Tooltip(btn_delete_card, "Eliminar grabación")
+
+
         def on_click(ev, idx=index):
             self._select_card(idx)
 
@@ -420,6 +519,9 @@ class HistorialFrame(ctk.CTkFrame):
         self.placeholder_frame.pack_forget()
         self.details_frame.pack(fill=tk.BOTH, expand=True)
 
+        # Stop any active history playback
+        self._stop_history_playback()
+
         # Header labels
         self.label_detail_title.configure(text=record.get("file_name", ""))
 
@@ -436,6 +538,35 @@ class HistorialFrame(ctk.CTkFrame):
             text=f"Archivo  -  {display_path}    Duración  -  {duration}"
         )
         self.label_detail_meta2.configure(text=f"Fecha  -  {created}")
+
+        # Check if the record has a playable audio file (any supported format)
+        _, ext = os.path.splitext(file_path.lower())
+        audio_extensions = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".aac", ".opus"}
+        has_audio = ext in audio_extensions and os.path.exists(file_path)
+        
+        self.player_frame.pack_forget()
+        self.split_details.pack_forget()
+        
+        # Always pack the player frame to keep the UI layout identical and stable
+        if has_audio:
+            dur_secs = obtener_duracion_audio(file_path)
+            self.slider_history.configure(to=dur_secs if dur_secs > 0 else 100, state="normal")
+            self.btn_play_history.configure(state="normal")
+            self.btn_rewind_history.configure(state="normal")
+            self.btn_forward_history.configure(state="normal")
+            self.lbl_time_history.configure(text="00:00 / 00:00")
+            self.player_frame.pack(fill=tk.X, pady=(0, 10))
+            self.update_history_player_ui()
+        else:
+            self.slider_history.configure(to=100, state="disabled")
+            self.slider_history.set(0)
+            self.btn_play_history.configure(state="disabled", text="▶")
+            self.btn_rewind_history.configure(state="disabled")
+            self.btn_forward_history.configure(state="disabled")
+            self.lbl_time_history.configure(text="Audio no disponible")
+            self.player_frame.pack(fill=tk.X, pady=(0, 10))
+            
+        self.split_details.pack(fill=tk.BOTH, expand=True)
 
         # Fill transcript
         self.txt_transcription.configure(state="normal")
@@ -454,6 +585,9 @@ class HistorialFrame(ctk.CTkFrame):
     # ------------------------------------------------------------------
 
     def load_history(self):
+        # Reset search bar text
+        self.search_var.set("")
+        
         self.records = db.get_all_transcriptions()
 
         for c in self._card_widgets:
@@ -468,6 +602,25 @@ class HistorialFrame(ctk.CTkFrame):
         self.details_frame.pack_forget()
         self.placeholder_frame.pack(fill=tk.BOTH, expand=True)
         self.selected_record = None
+
+    def _on_search_change(self, *args):
+        query = self.search_var.get().strip().lower()
+        
+        for card in self._card_widgets:
+            card.pack_forget()
+            
+        for i, rec in enumerate(self.records):
+            card = self._card_widgets[i]
+            
+            name = rec.get("file_name", "").lower()
+            trans = rec.get("transcription", "").lower()
+            summ = rec.get("summary", "").lower()
+            
+            match = (not query) or (query in name) or (query in trans) or (query in summ)
+            
+            if match:
+                card.pack(fill=tk.X, padx=6, pady=(4, 0))
+
 
     def update_summary_ui(self):
         if not self.selected_record:
@@ -588,24 +741,9 @@ class HistorialFrame(ctk.CTkFrame):
         if not self.selected_record:
             return
         text = self.txt_transcription.get("1.0", tk.END).strip()
-        if not text:
-            messagebox.showwarning("Advertencia", "No hay transcripción para exportar.")
-            return
+        from funcionalidad import exportar_transcripcion
+        exportar_transcripcion(text)
 
-        initial = os.path.splitext(self.selected_record["file_name"])[0] + "_transcripcion.txt"
-        out = filedialog.asksaveasfilename(
-            defaultextension=".txt",
-            filetypes=[("Archivo de texto", "*.txt")],
-            title="Guardar transcripción como",
-            initialfile=initial
-        )
-        if out:
-            try:
-                with open(out, "w", encoding="utf-8") as f:
-                    f.write(text)
-                messagebox.showinfo("Información", f"Transcripción guardada en {out}.")
-            except Exception as e:
-                messagebox.showerror("Error", f"No se pudo guardar el archivo: {e}")
 
     def rename_record(self):
         if not self.selected_record:
@@ -656,3 +794,98 @@ class HistorialFrame(ctk.CTkFrame):
     def show_toast(self, text):
         self.set_status(f"✓ {text}")
         self.after(2500, lambda: self.set_status(""))
+
+    def _play_pause_history(self):
+        if not self.selected_record:
+            return
+        
+        file_path = self.selected_record["file_path"]
+        
+        if reproductor.audio_actual != file_path:
+            self._stop_history_playback()
+            try:
+                reproductor.iniciar(file_path)
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo reproducir el audio: {e}")
+                return
+        else:
+            if reproductor.reproduciendo:
+                reproductor.pausar()
+            else:
+                reproductor.reanudar()
+                
+        self.update_history_player_ui()
+
+    def _stop_history_playback(self):
+        reproductor.detener()
+        self.update_history_player_ui()
+
+    def _seek_history(self, seconds):
+        if not self.selected_record:
+            return
+        file_path = self.selected_record["file_path"]
+        if reproductor.audio_actual == file_path:
+            if seconds > 0:
+                reproductor.adelantar(seconds)
+            else:
+                reproductor.retroceder(abs(seconds))
+            self.update_history_player_ui()
+
+    def _on_slider_change(self, value):
+        if self.selected_record and reproductor.audio_actual == self.selected_record["file_path"]:
+            mins = int(value // 60)
+            secs = int(value % 60)
+            total_mins = int(reproductor.duracion_total // 60)
+            total_secs = int(reproductor.duracion_total % 60)
+            self.lbl_time_history.configure(
+                text=f"{mins:02d}:{secs:02d} / {total_mins:02d}:{total_secs:02d}"
+            )
+
+    def _on_slider_release(self, event):
+        self._slider_dragging = False
+        if self.selected_record and reproductor.audio_actual == self.selected_record["file_path"]:
+            new_pos = self.slider_history.get()
+            reproductor.posicion_actual = new_pos
+            import pygame
+            if reproductor.reproduciendo:
+                pygame.mixer.music.play(start=new_pos)
+                reproductor.tiempo_inicio = time.time() - new_pos
+            else:
+                pygame.mixer.music.set_pos(new_pos)
+
+    def update_history_player_ui(self):
+        if not self.selected_record:
+            return
+            
+        file_path = self.selected_record["file_path"]
+        is_current = (reproductor.audio_actual == file_path)
+        
+        if is_current:
+            if reproductor.reproduciendo:
+                self.btn_play_history.configure(text="⏸")
+            else:
+                self.btn_play_history.configure(text="▶")
+            
+            curr = reproductor.obtener_tiempo_actual()
+            self.lbl_time_history.configure(text=reproductor.obtener_tiempo_formateado())
+            
+            if not self._slider_dragging:
+                self.slider_history.set(curr)
+        else:
+            self.btn_play_history.configure(text="▶")
+            self.lbl_time_history.configure(text="00:00 / 00:00")
+            self.slider_history.set(0)
+
+    def _tick_history_player(self):
+        if not self.winfo_exists():
+            return
+            
+        if self.selected_record:
+            file_path = self.selected_record["file_path"]
+            if reproductor.audio_actual == file_path:
+                import pygame
+                if reproductor.reproduciendo and not pygame.mixer.music.get_busy():
+                    reproductor.detener()
+                self.update_history_player_ui()
+                
+        self.after(100, self._tick_history_player)

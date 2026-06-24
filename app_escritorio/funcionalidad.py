@@ -216,20 +216,121 @@ def contar_palabras_y_inaudibles(texto):
     return palabras_sin_inaudibles, inaudibles
 
 
+def parse_time_to_srt(time_str: str) -> str:
+    parts = time_str.split(":")
+    mins = int(parts[0])
+    secs = int(parts[1])
+    hours = mins // 60
+    mins = mins % 60
+    return f"{hours:02d}:{mins:02d}:{secs:02d},000"
+
+def parse_time_to_vtt(time_str: str) -> str:
+    parts = time_str.split(":")
+    mins = int(parts[0])
+    secs = int(parts[1])
+    hours = mins // 60
+    mins = mins % 60
+    return f"{hours:02d}:{mins:02d}:{secs:02d}.000"
+
+def text_to_srt(text: str) -> str:
+    import re
+    lines = text.strip().split("\n")
+    srt_parts = []
+    index = 1
+    
+    # Matches [MM:SS - MM:SS] or [HH:MM:SS - HH:MM:SS]
+    pattern = re.compile(r"^\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]\s*(.*)$")
+    
+    for line in lines:
+        match = pattern.match(line.strip())
+        if match:
+            start_str, end_str, content = match.groups()
+            try:
+                start_srt = parse_time_to_srt(start_str)
+                end_srt = parse_time_to_srt(end_str)
+                srt_parts.append(f"{index}\n{start_srt} --> {end_srt}\n{content}\n")
+                index += 1
+            except Exception:
+                pass
+    return "\n".join(srt_parts)
+
+def text_to_vtt(text: str) -> str:
+    import re
+    lines = text.strip().split("\n")
+    vtt_parts = ["WEBVTT\n"]
+    
+    pattern = re.compile(r"^\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]\s*(.*)$")
+    
+    for line in lines:
+        match = pattern.match(line.strip())
+        if match:
+            start_str, end_str, content = match.groups()
+            try:
+                start_vtt = parse_time_to_vtt(start_str)
+                end_vtt = parse_time_to_vtt(end_str)
+                vtt_parts.append(f"\n{start_vtt} --> {end_vtt}\n{content}\n")
+            except Exception:
+                pass
+    return "\n".join(vtt_parts)
+
 def exportar_transcripcion(transcripcion_resultado):
-    if not transcripcion_resultado:
-        messagebox.showwarning("Advertencia", "No hay transcripcion para exportar.")
+    if not transcripcion_resultado or not transcripcion_resultado.strip():
+        messagebox.showwarning("Advertencia", "No hay transcripción para exportar.")
         return
+        
     output_file = filedialog.asksaveasfilename(
         defaultextension=".txt",
-        filetypes=[("Archivo de texto", "*.txt")],
-        title="Guardar transcripcion como",
+        filetypes=[
+            ("Archivo de texto", "*.txt"),
+            ("Documento de Word", "*.docx"),
+            ("Subtítulos SRT", "*.srt"),
+            ("Subtítulos VTT", "*.vtt")
+        ],
+        title="Guardar transcripción como",
     )
-    if output_file:
-        with open(output_file, "w", encoding="utf-8") as f:
-            f.write(transcripcion_resultado)
-        messagebox.showinfo("Informacion", f"Transcripcion guardada en {output_file}.")
-        logger.info(f"Transcripcion guardada en {output_file}.")
+    
+    if not output_file:
+        return
+        
+    _, ext = os.path.splitext(output_file.lower())
+    
+    try:
+        if ext == ".docx":
+            import docx
+            doc = docx.Document()
+            doc.add_heading("Transcripción de AudioText", 0)
+            for paragraph in transcripcion_resultado.split("\n"):
+                if paragraph.strip():
+                    doc.add_paragraph(paragraph)
+            doc.save(output_file)
+        elif ext == ".srt":
+            srt_content = text_to_srt(transcripcion_resultado)
+            if not srt_content.strip():
+                messagebox.showwarning(
+                    "Advertencia", 
+                    "No se detectaron marcas de tiempo [MM:SS - MM:SS] en el texto.\n\n"
+                    "Se guardará como archivo de texto plano pero con extensión .srt."
+                )
+                srt_content = transcripcion_resultado
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(srt_content)
+        elif ext == ".vtt":
+            vtt_content = text_to_vtt(transcripcion_resultado)
+            if len(vtt_content.strip()) <= 7: # only contains WEBVTT\n
+                messagebox.showwarning(
+                    "Advertencia", 
+                    "No se detectaron marcas de tiempo [MM:SS - MM:SS] en el texto.\n\n"
+                    "Se guardará como archivo de texto plano pero con extensión .vtt."
+                )
+                vtt_content = "WEBVTT\n\n" + transcripcion_resultado
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(vtt_content)
+        else: # .txt
+            with open(output_file, "w", encoding="utf-8") as f:
+                f.write(transcripcion_resultado)
+                
+        messagebox.showinfo("Información", f"Transcripción guardada en {output_file}.")
+        logger.info(f"Transcripción guardada en {output_file}.")
 
         try:
             if platform.system() == "Darwin":
@@ -238,11 +339,14 @@ def exportar_transcripcion(transcripcion_resultado):
                 os.startfile(output_file)
             else:
                 subprocess.call(("xdg-open", output_file))
-
             logger.info(f"Archivo abierto: {output_file}")
         except Exception as e:
-            messagebox.showerror("Error", f"No se pudo abrir el archivo: {str(e)}")
             logger.error(f"Error al abrir el archivo: {str(e)}")
+            
+    except Exception as e:
+        messagebox.showerror("Error de exportación", f"No se pudo exportar el archivo:\n\n{e}")
+        logger.error(f"Error al exportar archivo: {e}")
+
 
 
 def borrar_archivo(lista_archivos, lista_archivos_paths):
@@ -261,6 +365,12 @@ def borrar_archivo(lista_archivos, lista_archivos_paths):
     return False
 
 
+def format_time(seconds: float) -> str:
+    mins = int(seconds // 60)
+    secs = int(seconds % 60)
+    return f"{mins:02d}:{secs:02d}"
+
+
 def iniciar_transcripcion_thread(
     lista_archivos,
     text_area,
@@ -273,6 +383,7 @@ def iniciar_transcripcion_thread(
     combobox_idioma_entrada,
     combobox_idioma_salida,
     diarizar_var=None,
+    marcas_tiempo_var=None,
     spinner=None,
     frame_progress=None,
 ):
@@ -309,6 +420,7 @@ def iniciar_transcripcion_thread(
         idioma_entrada_val = combobox_idioma_entrada.get()
         idioma_salida_val = combobox_idioma_salida.get()
         diarizar_val = bool(diarizar_var.get()) if diarizar_var is not None else False
+        timestamps_val = bool(marcas_tiempo_var.get()) if marcas_tiempo_var is not None else False
         
         # Safe check for diarization availability on main GUI thread
         if diarizar_val and not diarizer.is_available():
@@ -343,13 +455,15 @@ def iniciar_transcripcion_thread(
                 idioma_entrada_val,
                 idioma_salida_val,
                 diarizar_val,
+                timestamps_val,
             ),
             kwargs={"spinner": spinner, "frame_progress": frame_progress},
             daemon=True,
         ).start()
 
 
-def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar=False, status_cb=None):
+
+def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar=False, status_cb=None, timestamps=False):
     """Transcribe a single file offline with faster-whisper.
 
     Whisper decodes the file itself (no ffmpeg conversion) and applies its own
@@ -375,6 +489,18 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
         transcripcion_final = diarizer.diarize_file(
             audio_file, language=idioma_entrada, progress_cb=progress_cb
         )
+    elif timestamps:
+        segments = transcriber.transcribe_file_segments(
+            audio_file,
+            language=idioma_entrada,
+            translate=translate,
+            progress_cb=progress_cb,
+            should_continue=should_continue,
+        )
+        parts = []
+        for start, end, text in segments:
+            parts.append(f"[{format_time(start)} - {format_time(end)}] {text}")
+        transcripcion_final = "\n".join(parts)
     else:
         transcripcion_final = transcriber.transcribe_file(
             audio_file,
@@ -409,9 +535,11 @@ def iniciar_transcripcion(
     idioma_entrada_val,
     idioma_salida_val,
     diarizar_val=False,
+    timestamps_val=False,
     spinner=None,
     frame_progress=None,
 ):
+
 
     seleccion = lista_archivos.curselection()
     if not seleccion:
@@ -508,7 +636,7 @@ def iniciar_transcripcion(
 
         try:
             resultado = procesar_audio(
-                audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar, status_cb
+                audio_file, idioma_entrada, translate, progress_bar, ventana, diarizar, status_cb, timestamps=timestamps_val
             )
 
             if config.transcripcion_activa:

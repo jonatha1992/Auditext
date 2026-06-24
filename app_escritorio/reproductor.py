@@ -19,8 +19,16 @@ class ReproductorAudio:
     def iniciar(self, ruta_archivo):
         self.audio_actual = ruta_archivo
         self.duracion_total = obtener_duracion_audio(ruta_archivo)
-        pygame.mixer.music.load(ruta_archivo)
-        pygame.mixer.music.play()
+        try:
+            pygame.mixer.music.load(ruta_archivo)
+            pygame.mixer.music.play()
+        except pygame.error:
+            # Fallback to WAV conversion if pygame can't decode it directly
+            wav_path = convertir_a_wav(ruta_archivo)
+            self.audio_actual = wav_path
+            self.duracion_total = obtener_duracion_audio(wav_path)
+            pygame.mixer.music.load(wav_path)
+            pygame.mixer.music.play()
         self.reproduciendo = True
         self.tiempo_inicio = time.time()
         self.tiempo_pausa = 0
@@ -160,20 +168,12 @@ def reproducir(
 
     try:
         reproductor.iniciar(ruta_archivo)
-    except pygame.error:
-        try:
-            wav_path = convertir_a_wav(ruta_archivo)
-            reproductor.iniciar(wav_path)
-            messagebox.showinfo(
-                "Conversión",
-                f"El archivo se ha convertido a WAV para su reproducción: {wav_path}",
-            )
-        except Exception as e:
-            messagebox.showerror(
-                "Error de conversión",
-                f"No se pudo convertir ni reproducir el archivo: {str(e)}",
-            )
-            return
+    except Exception as e:
+        messagebox.showerror(
+            "Error de reproducción",
+            f"No se pudo reproducir el archivo: {str(e)}",
+        )
+        return
 
     # CTkButton uses .configure(), not .config()
     boton_pausar_reanudar.configure(text="⏸", state="normal")

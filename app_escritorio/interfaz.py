@@ -52,6 +52,8 @@ def crear_interfaz(ventana):
     lista_archivos_paths = {}
     transcripcion_resultado = ""
     diarizar_var = tk.BooleanVar(master=ventana, value=False)
+    timestamps_var = tk.BooleanVar(master=ventana, value=False)
+
 
     _setup_theme(ventana)
 
@@ -86,6 +88,10 @@ def crear_interfaz(ventana):
         view_envivo.pack_forget()
         view_historial.pack_forget()
         view_ajustes.pack_forget()
+
+        # Stop history playback when leaving the view
+        if hasattr(view_historial, "_stop_history_playback"):
+            view_historial._stop_history_playback()
 
         # Reset button colors
         btn_archivos.configure(fg_color="transparent" if view_name != "archivos" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "archivos" else COLOR_TEXT_FG)
@@ -379,8 +385,16 @@ def crear_interfaz(ventana):
         font=("Segoe UI", 12), text_color=COLOR_TEXT_FG,
         fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, border_color=COLOR_BORDER
     )
-    check_diarizar.grid(row=0, column=2, rowspan=2, padx=(32, 16), pady=12, sticky=tk.E)
+    check_diarizar.grid(row=0, column=2, padx=(32, 16), pady=(12, 4), sticky=tk.E)
+
+    check_timestamps = ctk.CTkCheckBox(
+        card_options, text="Incluir marcas de tiempo", variable=timestamps_var,
+        font=("Segoe UI", 12), text_color=COLOR_TEXT_FG,
+        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, border_color=COLOR_BORDER
+    )
+    check_timestamps.grid(row=1, column=2, padx=(32, 16), pady=(4, 12), sticky=tk.E)
     card_options.grid_columnconfigure(2, weight=1)
+
 
     # Action Buttons Row
     buttons_frame = ctk.CTkFrame(view_archivos, fg_color="transparent")
@@ -539,6 +553,7 @@ def crear_interfaz(ventana):
             combobox_idioma_entrada,
             combobox_idioma_salida,
             diarizar_var,
+            marcas_tiempo_var=timestamps_var,
             spinner=spinner,
             frame_progress=frame_progress,
         ),
@@ -574,8 +589,10 @@ def crear_interfaz(ventana):
     Tooltip(boton_borrar, "Eliminá el archivo seleccionado de la lista (no borra el archivo del disco).")
     Tooltip(boton_transcribir, "Iniciá la transcripción del archivo seleccionado usando el modelo Whisper offline. Podés detenerlo en cualquier momento.")
     Tooltip(boton_resumir, "Generá un resumen con IA (Gemini) del texto transcrito que aparece en el área de texto. Necesita conexión a internet.")
-    Tooltip(boton_exportar, "Guardá el texto transcrito como archivo .txt en la ubicación que elijas.")
+    Tooltip(boton_exportar, "Guardá el texto transcrito como archivo .txt, documento de Word (.docx) o subtítulos (.srt, .vtt).")
     Tooltip(boton_limpiar, "Limpiá el área de texto de transcripciones anteriores.")
+    Tooltip(check_timestamps, "Inserta marcas de tiempo [MM:SS - MM:SS] al inicio de cada segmento transcrito.")
+
 
     # ----------------------------------------------------
     # PLAYER CARD (Card B)
@@ -795,12 +812,15 @@ def crear_interfaz(ventana):
             label_salida.grid_forget()
             combobox_idioma_salida.grid_forget()
             check_diarizar.grid_forget()
+            check_timestamps.grid_forget()
 
             label_entrada.grid(row=0, column=0, padx=16, pady=(8, 2), sticky=tk.W)
             combobox_idioma_entrada.grid(row=1, column=0, padx=16, pady=(0, 6), sticky=tk.W)
             label_salida.grid(row=2, column=0, padx=16, pady=(6, 2), sticky=tk.W)
             combobox_idioma_salida.grid(row=3, column=0, padx=16, pady=(0, 6), sticky=tk.W)
-            check_diarizar.grid(row=4, column=0, padx=16, pady=(8, 12), sticky=tk.W)
+            check_diarizar.grid(row=4, column=0, padx=16, pady=(8, 4), sticky=tk.W)
+            check_timestamps.grid(row=5, column=0, padx=16, pady=(4, 12), sticky=tk.W)
+
 
             card_options.grid_columnconfigure(0, weight=1)
             card_options.grid_columnconfigure(1, weight=0)
@@ -834,12 +854,15 @@ def crear_interfaz(ventana):
             label_salida.grid_forget()
             combobox_idioma_salida.grid_forget()
             check_diarizar.grid_forget()
+            check_timestamps.grid_forget()
 
             label_entrada.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
             combobox_idioma_entrada.grid(row=1, column=0, padx=(16, 12), pady=(0, 12), sticky=tk.W)
             label_salida.grid(row=0, column=1, padx=(4, 4), pady=(8, 2), sticky=tk.W)
             combobox_idioma_salida.grid(row=1, column=1, padx=(4, 12), pady=(0, 12), sticky=tk.W)
-            check_diarizar.grid(row=0, column=2, rowspan=2, padx=(32, 16), pady=12, sticky=tk.E)
+            check_diarizar.grid(row=0, column=2, padx=(32, 16), pady=(12, 4), sticky=tk.E)
+            check_timestamps.grid(row=1, column=2, padx=(32, 16), pady=(4, 12), sticky=tk.E)
+
 
             card_options.grid_columnconfigure(0, weight=0)
             card_options.grid_columnconfigure(1, weight=0)

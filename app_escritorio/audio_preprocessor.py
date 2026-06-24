@@ -111,9 +111,9 @@ def preprocess(
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-    except subprocess.CalledProcessError as exc:
+    except (subprocess.CalledProcessError, OSError) as exc:
         logger.error(
-            "ffmpeg preprocessing failed for %s: %s", input_path, exc.stderr
+            "ffmpeg preprocessing failed for %s: %s", input_path, exc
         )
         # Fallback: return the original file unchanged.
         if os.path.exists(tmp_wav):
