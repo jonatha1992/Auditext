@@ -2,15 +2,15 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 import threading
-import summarizer
-from funcionalidad import *
-from reproductor import *
+from infrastructure.services import summarizer
+from presentation.controllers.funcionalidad import *
+from infrastructure.audio.reproductor import *
 from config import idiomas
-from live_frame import LiveFrame
-from spinner import Spinner
-from ajustes_frame import AjustesFrame
-from historial_frame import HistorialFrame
-from tooltip import Tooltip
+from .live_frame import LiveFrame
+from .spinner import Spinner
+from .ajustes_frame import AjustesFrame
+from .historial_frame import HistorialFrame
+from .tooltip import Tooltip
 
 # Design System Colors matching the mockup
 COLOR_BG = "#0B0C10"          # Deep dark window background
@@ -47,12 +47,28 @@ def _setup_theme(ventana):
 
 
 def crear_interfaz(ventana):
+    # Defensive fallback initialization for testing/standalone runs (SOLID)
+    import config
+    from infrastructure.repositories.sqlite_repository import SQLiteTranscriptionRepository
+    from infrastructure.services.onnx_transcriber import OfflineTranscriptionService
+
+    if config.repository is None:
+        config.repository = SQLiteTranscriptionRepository(config.DB_PATH)
+        config.repository.init_db()
+    if config.transcription_service is None:
+        config.transcription_service = OfflineTranscriptionService(model_size=config.MODEL_SIZE)
+
     ventana.geometry("1200x700")
     archivo_procesando = tk.StringVar()
     lista_archivos_paths = {}
     transcripcion_resultado = ""
     diarizar_var = tk.BooleanVar(master=ventana, value=False)
-    timestamps_var = tk.BooleanVar(master=ventana, value=False)
+    timestamps_var = tk.BooleanVar(master=ventana, value=True)
+    _last_file_path: str | None = None
+
+    def _on_file_done(fp: str) -> None:
+        nonlocal _last_file_path
+        _last_file_path = fp
 
 
     _setup_theme(ventana)
@@ -380,12 +396,7 @@ def crear_interfaz(ventana):
     combobox_idioma_salida.set("Spanish")
     combobox_idioma_salida.grid(row=1, column=1, padx=(4, 12), pady=(0, 12), sticky=tk.W)
 
-    check_diarizar = ctk.CTkCheckBox(
-        card_options, text="Diferenciar hablantes", variable=diarizar_var,
-        font=("Segoe UI", 12), text_color=COLOR_TEXT_FG,
-        fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, border_color=COLOR_BORDER
-    )
-    check_diarizar.grid(row=0, column=2, padx=(32, 16), pady=(12, 4), sticky=tk.E)
+
 
     check_timestamps = ctk.CTkCheckBox(
         card_options, text="Incluir marcas de tiempo", variable=timestamps_var,
@@ -472,6 +483,9 @@ def crear_interfaz(ventana):
         def run():
             try:
                 resumen = summarizer.summarize(texto)
+                # Guardar el resumen en la BD si hay un archivo asociado
+                if _last_file_path:
+                    db.update_summary(_last_file_path, resumen)
                 ventana.after(0, lambda r=resumen: mostrar_resumen_modal(r))
             except Exception as e:
                 err_msg = str(e)
@@ -556,6 +570,7 @@ def crear_interfaz(ventana):
             marcas_tiempo_var=timestamps_var,
             spinner=spinner,
             frame_progress=frame_progress,
+            on_file_done=_on_file_done,
         ),
     )
     boton_transcribir.pack(side=tk.LEFT, padx=(0, 8))
@@ -717,7 +732,11 @@ def crear_interfaz(ventana):
             nuevo_tiempo = slider_progreso.get()
             reproductor.posicion_actual = nuevo_tiempo
             if reproductor.reproduciendo:
-                pygame.mixer.music.play(start=nuevo_tiempo)
+                if pygame.mixer.get_init():
+                    try:
+                        pygame.mixer.music.play(start=nuevo_tiempo)
+                    except pygame.error:
+                        pass
                 reproductor.tiempo_inicio = time.time() - nuevo_tiempo
             else:
                 label_tiempo.configure(text=reproductor.obtener_tiempo_formateado())
@@ -740,11 +759,17 @@ def crear_interfaz(ventana):
         if boton_adelantar.cget("state") == "normal":
             boton_adelantar.invoke()
 
+    def toggle_fullscreen(event=None):
+        is_fs = ventana.attributes("-fullscreen")
+        ventana.attributes("-fullscreen", not is_fs)
+        return "break"
+
     # Keyboard bindings
     ventana.bind("<Alt-p>", hotkey_play_pause)
     ventana.bind("<Alt-P>", hotkey_play_pause)
     ventana.bind("<Alt-Left>", hotkey_retroceder)
     ventana.bind("<Alt-Right>", hotkey_adelantar)
+    ventana.bind("<F11>", toggle_fullscreen)
 
     # ----------------------------------------------------
     # VIEW 2: LIVE TRANSCRIPTION (EN VIVO)
@@ -803,7 +828,8 @@ def crear_interfaz(ventana):
             # 1-Column Layout: Stack Listbox and Transcript vertically
             left_col.pack_forget()
             right_col.pack_forget()
-            left_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 10))
+            left_col.configure(width=new_width - 48, height=180)
+            left_col.pack(side=tk.TOP, fill=tk.BOTH, expand=False, pady=(0, 10))
             right_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
 
             # Vertical Option Card Grid Layout
@@ -811,22 +837,19 @@ def crear_interfaz(ventana):
             combobox_idioma_entrada.grid_forget()
             label_salida.grid_forget()
             combobox_idioma_salida.grid_forget()
-            check_diarizar.grid_forget()
             check_timestamps.grid_forget()
 
             label_entrada.grid(row=0, column=0, padx=16, pady=(8, 2), sticky=tk.W)
             combobox_idioma_entrada.grid(row=1, column=0, padx=16, pady=(0, 6), sticky=tk.W)
             label_salida.grid(row=2, column=0, padx=16, pady=(6, 2), sticky=tk.W)
             combobox_idioma_salida.grid(row=3, column=0, padx=16, pady=(0, 6), sticky=tk.W)
-            check_diarizar.grid(row=4, column=0, padx=16, pady=(8, 4), sticky=tk.W)
             check_timestamps.grid(row=5, column=0, padx=16, pady=(4, 12), sticky=tk.W)
-
 
             card_options.grid_columnconfigure(0, weight=1)
             card_options.grid_columnconfigure(1, weight=0)
             card_options.grid_columnconfigure(2, weight=0)
 
-            # Wrapped Action Buttons Frame
+            # Wrapped Action Buttons Frame (Grid)
             boton_seleccionar.pack_forget()
             boton_borrar.pack_forget()
             boton_transcribir.pack_forget()
@@ -834,17 +857,23 @@ def crear_interfaz(ventana):
             boton_exportar.pack_forget()
             boton_limpiar.pack_forget()
 
-            boton_seleccionar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
-            boton_borrar.pack(side=tk.LEFT, padx=(0, 6), pady=4)
-            boton_transcribir.pack(side=tk.LEFT, padx=(0, 6), pady=4)
-            boton_resumir.pack(side=tk.LEFT, padx=(0, 6), pady=4)
-            boton_limpiar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
-            boton_exportar.pack(side=tk.RIGHT, padx=(0, 6), pady=4)
+            boton_seleccionar.grid(row=0, column=1, padx=6, pady=4)
+            boton_borrar.grid(row=0, column=2, padx=6, pady=4)
+            boton_transcribir.grid(row=0, column=3, padx=6, pady=4)
+            boton_resumir.grid(row=1, column=1, padx=6, pady=4)
+            boton_limpiar.grid(row=1, column=2, padx=6, pady=4)
+            boton_exportar.grid(row=1, column=3, padx=6, pady=4)
+
+            buttons_frame.grid_columnconfigure(0, weight=1)
+            buttons_frame.grid_columnconfigure(1, weight=0)
+            buttons_frame.grid_columnconfigure(2, weight=0)
+            buttons_frame.grid_columnconfigure(3, weight=0)
+            buttons_frame.grid_columnconfigure(4, weight=1)
         else:
             # 2-Column Layout: fixed left, expanding right
             left_col.pack_forget()
             right_col.pack_forget()
-            left_col.configure(width=340)
+            left_col.configure(width=340, height=columns_frame.winfo_height())
             left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
             right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(12, 0))
 
@@ -853,28 +882,25 @@ def crear_interfaz(ventana):
             combobox_idioma_entrada.grid_forget()
             label_salida.grid_forget()
             combobox_idioma_salida.grid_forget()
-            check_diarizar.grid_forget()
             check_timestamps.grid_forget()
 
             label_entrada.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
             combobox_idioma_entrada.grid(row=1, column=0, padx=(16, 12), pady=(0, 12), sticky=tk.W)
             label_salida.grid(row=0, column=1, padx=(4, 4), pady=(8, 2), sticky=tk.W)
             combobox_idioma_salida.grid(row=1, column=1, padx=(4, 12), pady=(0, 12), sticky=tk.W)
-            check_diarizar.grid(row=0, column=2, padx=(32, 16), pady=(12, 4), sticky=tk.E)
             check_timestamps.grid(row=1, column=2, padx=(32, 16), pady=(4, 12), sticky=tk.E)
-
 
             card_options.grid_columnconfigure(0, weight=0)
             card_options.grid_columnconfigure(1, weight=0)
             card_options.grid_columnconfigure(2, weight=1)
 
             # Single Horizontal Row for Buttons
-            boton_seleccionar.pack_forget()
-            boton_borrar.pack_forget()
-            boton_transcribir.pack_forget()
-            boton_resumir.pack_forget()
-            boton_exportar.pack_forget()
-            boton_limpiar.pack_forget()
+            boton_seleccionar.grid_forget()
+            boton_borrar.grid_forget()
+            boton_transcribir.grid_forget()
+            boton_resumir.grid_forget()
+            boton_exportar.grid_forget()
+            boton_limpiar.grid_forget()
 
             boton_seleccionar.pack(side=tk.LEFT, padx=(0, 8))
             boton_borrar.pack(side=tk.LEFT, padx=(0, 8))
@@ -882,6 +908,12 @@ def crear_interfaz(ventana):
             boton_resumir.pack(side=tk.LEFT, padx=(0, 8))
             boton_exportar.pack(side=tk.RIGHT, padx=(8, 0))
             boton_limpiar.pack(side=tk.RIGHT)
+
+            buttons_frame.grid_columnconfigure(0, weight=0)
+            buttons_frame.grid_columnconfigure(1, weight=0)
+            buttons_frame.grid_columnconfigure(2, weight=0)
+            buttons_frame.grid_columnconfigure(3, weight=0)
+            buttons_frame.grid_columnconfigure(4, weight=0)
 
     def on_view_configure(event):
         if event.widget != view_archivos:

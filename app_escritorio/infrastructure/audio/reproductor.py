@@ -3,7 +3,7 @@ import time
 import os
 import config
 from tkinter import messagebox
-from funcionalidad import obtener_duracion_audio, convertir_a_wav
+from presentation.controllers.funcionalidad import obtener_duracion_audio, convertir_a_wav
 import gc
 
 
@@ -19,16 +19,20 @@ class ReproductorAudio:
     def iniciar(self, ruta_archivo):
         self.audio_actual = ruta_archivo
         self.duracion_total = obtener_duracion_audio(ruta_archivo)
-        try:
-            pygame.mixer.music.load(ruta_archivo)
-            pygame.mixer.music.play()
-        except pygame.error:
-            # Fallback to WAV conversion if pygame can't decode it directly
-            wav_path = convertir_a_wav(ruta_archivo)
-            self.audio_actual = wav_path
-            self.duracion_total = obtener_duracion_audio(wav_path)
-            pygame.mixer.music.load(wav_path)
-            pygame.mixer.music.play()
+        if pygame.mixer.get_init():
+            try:
+                pygame.mixer.music.load(ruta_archivo)
+                pygame.mixer.music.play()
+            except pygame.error:
+                # Fallback to WAV conversion if pygame can't decode it directly
+                try:
+                    wav_path = convertir_a_wav(ruta_archivo)
+                    self.audio_actual = wav_path
+                    self.duracion_total = obtener_duracion_audio(wav_path)
+                    pygame.mixer.music.load(wav_path)
+                    pygame.mixer.music.play()
+                except Exception as e:
+                    config.logger.error(f"Error al reproducir audio tras fallback a WAV: {e}")
         self.reproduciendo = True
         self.tiempo_inicio = time.time()
         self.tiempo_pausa = 0
@@ -36,19 +40,31 @@ class ReproductorAudio:
 
     def pausar(self):
         if self.reproduciendo:
-            pygame.mixer.music.pause()
+            if pygame.mixer.get_init():
+                try:
+                    pygame.mixer.music.pause()
+                except pygame.error:
+                    pass
             self.reproduciendo = False
             self.posicion_actual = self.obtener_tiempo_actual()
 
     def reanudar(self):
         if not self.reproduciendo:
-            pygame.mixer.music.unpause()
+            if pygame.mixer.get_init():
+                try:
+                    pygame.mixer.music.unpause()
+                except pygame.error:
+                    pass
             self.reproduciendo = True
             self.tiempo_inicio = time.time() - self.posicion_actual
 
     def detener(self):
-        pygame.mixer.music.stop()
-        pygame.mixer.music.unload()
+        if pygame.mixer.get_init():
+            try:
+                pygame.mixer.music.stop()
+                pygame.mixer.music.unload()
+            except pygame.error:
+                pass
         self.audio_actual = None  # was: del self.audio_actual (caused AttributeError on next check)
         self.reproduciendo = False
         self.tiempo_inicio = 0
@@ -60,19 +76,29 @@ class ReproductorAudio:
         self.posicion_actual = min(
             self.duracion_total, self.obtener_tiempo_actual() + segundos
         )
+        if pygame.mixer.get_init():
+            try:
+                if self.reproduciendo:
+                    pygame.mixer.music.play(start=self.posicion_actual)
+                else:
+                    pygame.mixer.music.set_pos(self.posicion_actual)
+            except pygame.error:
+                pass
         if self.reproduciendo:
-            pygame.mixer.music.play(start=self.posicion_actual)
             self.tiempo_inicio = time.time() - self.posicion_actual
-        else:
-            pygame.mixer.music.set_pos(self.posicion_actual)
 
     def retroceder(self, segundos):
         self.posicion_actual = max(0, self.obtener_tiempo_actual() - segundos)
+        if pygame.mixer.get_init():
+            try:
+                if self.reproduciendo:
+                    pygame.mixer.music.play(start=self.posicion_actual)
+                else:
+                    pygame.mixer.music.set_pos(self.posicion_actual)
+            except pygame.error:
+                pass
         if self.reproduciendo:
-            pygame.mixer.music.play(start=self.posicion_actual)
             self.tiempo_inicio = time.time() - self.posicion_actual
-        else:
-            pygame.mixer.music.set_pos(self.posicion_actual)
 
     def obtener_tiempo_actual(self):
         if self.reproduciendo:
@@ -83,7 +109,14 @@ class ReproductorAudio:
     def obtener_tiempo_formateado(self):
         tiempo_actual = int(self.obtener_tiempo_actual())
         tiempo_total = int(self.duracion_total)
-        return f"{time.strftime('%M:%S', time.gmtime(tiempo_actual))} / {time.strftime('%M:%S', time.gmtime(tiempo_total))}"
+        def _fmt(s):
+            h = s // 3600
+            m = (s % 3600) // 60
+            sec = s % 60
+            if h > 0:
+                return f"{h}:{m:02d}:{sec:02d}"
+            return f"{m:02d}:{sec:02d}"
+        return f"{_fmt(tiempo_actual)} / {_fmt(tiempo_total)}"
 
 
 reproductor = ReproductorAudio()
@@ -102,7 +135,20 @@ def actualizar_tiempo(label, boton_pausar_reanudar, label_reproduccion, boton_ad
 
     def actualizar():
         global _after_id
-        if reproductor.reproduciendo and not pygame.mixer.music.get_busy():
+        mixer_busy = False
+        if pygame.mixer.get_init():
+            try:
+                mixer_busy = pygame.mixer.music.get_busy()
+            except pygame.error:
+                pass
+
+        should_stop = False
+        if pygame.mixer.get_init():
+            should_stop = not mixer_busy
+        else:
+            should_stop = reproductor.obtener_tiempo_actual() >= reproductor.duracion_total
+
+        if reproductor.reproduciendo and should_stop:
             detener_reproduccion(
                 boton_pausar_reanudar,
                 label_reproduccion,
@@ -253,7 +299,11 @@ def detener_reproduccion(
         slider_progreso.pack_forget()
     if frame_slider:
         frame_slider.pack_forget()
-    pygame.mixer.music.unload()
+    if pygame.mixer.get_init():
+        try:
+            pygame.mixer.music.unload()
+        except pygame.error:
+            pass
     gc.collect()
 
 

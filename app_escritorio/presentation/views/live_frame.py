@@ -12,12 +12,12 @@ import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
-import transcriber
-import summarizer
+from infrastructure.services import summarizer
+import config
 from config import logger
-from spinner import Spinner
+from .spinner import Spinner
 
-SAMPLE_RATE = transcriber.SAMPLE_RATE
+SAMPLE_RATE = config.SAMPLE_RATE
 CHUNK_SECONDS = 5
 CAPTURE_BLOCK_SECONDS = 0.5
 SILENCE_THRESHOLD = 1e-4
@@ -31,6 +31,15 @@ LANGUAGES = {
     "Deutsch": "de",
     "Italiano": "it",
 }
+
+def detect_system_language() -> str | None:
+    import locale
+    try:
+        loc = locale.getdefaultlocale()[0] or ""
+    except Exception:
+        loc = ""
+    code = loc.split("_")[0].lower()[:2] if loc else ""
+    return code if code in LANGUAGES.values() else None
 
 # BCP-47 tags for Google Web Speech API (same engine as Google Docs voice typing)
 GOOGLE_STT_LANG = {
@@ -451,7 +460,7 @@ class Transcriber:
             self._status_queue.put(f"Error micrófono: {exc}")
 
     def _capture_process(self, block):
-        import process_loopback
+        from infrastructure.audio import process_loopback
         self._status_queue.put(f"Escuchando App (PID {self._source_val})")
         sub_block = int(SAMPLE_RATE * 0.05)
         accumulated = []
@@ -474,25 +483,31 @@ class Transcriber:
         have = 0
         while not self._stop.is_set():
             try:
-                buf.append(self._audio_q.get(timeout=0.5))
+                chunk = self._audio_q.get(timeout=0.5)
             except queue.Empty:
                 continue
-            have += len(buf[-1])
-            if have < target:
-                continue
+            try:
+                buf.append(chunk)
+                have += len(chunk)
+                if have < target:
+                    continue
 
-            audio = np.concatenate(buf)
-            buf, have = [], 0
-            if is_silent(audio):
-                continue
+                audio = np.concatenate(buf)
+                buf, have = [], 0
+                if is_silent(audio):
+                    continue
 
-            lang = self._language if self._language is not None else self._locked_language
-            texts, detected = transcriber.transcribe_array(audio, language=lang, translate=self._translate)
-            if self._language is None and self._locked_language is None and detected:
-                self._locked_language = detected
-                self._status_queue.put(f"Idioma detectado: {detected}")
-            for text in texts:
-                self._emit(text)
+                lang = self._language if self._language is not None else self._locked_language
+                texts, detected = transcriber.transcribe_array(audio, language=lang, translate=self._translate)
+                if self._language is None and self._locked_language is None and detected:
+                    self._locked_language = detected
+                    self._status_queue.put(f"Idioma detectado: {detected}")
+                for text in texts:
+                    self._emit(text)
+            except Exception as exc:
+                logger.exception("Consumer loop error: %s", exc)
+                self._status_queue.put(f"Error transcripción: {exc}")
+                buf, have = [], 0
 
     def _run(self):
         _cloud_modes = {"google_stt", "windows_stt"}
@@ -542,6 +557,7 @@ class LiveFrame(ctk.CTkFrame):
         self.record_var = tk.BooleanVar(value=True)
         self.worker = Transcriber(self.text_queue, self.status_queue)
         self.out_dir = DEFAULT_DIR
+        self._controls_disabled = False
 
         # Header
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -654,7 +670,7 @@ class LiveFrame(ctk.CTkFrame):
         )
         self.label_idioma.grid(row=0, column=2, padx=(8, 4), pady=(8, 2), sticky=tk.W)
 
-        _sys = transcriber.detect_system_language()
+        _sys = detect_system_language()
         _default_lang = next(
             (label for label, code in LANGUAGES.items() if code == _sys), "Auto"
         )
@@ -698,13 +714,10 @@ class LiveFrame(ctk.CTkFrame):
 
         # Responsive layout adjustment logic
         self.last_live_width = [0]
-        
-        def on_live_configure(event):
-            if event.widget != self:
-                return
-            new_w = event.width
-            if new_w < 400: # Ignorar anchos de inicialización pequeños
-                return
+        self._resize_after_id = None
+
+        def _apply_live_layout(new_w):
+            self._resize_after_id = None
             if new_w == self.last_live_width[0]:
                 return
             self.last_live_width[0] = new_w
@@ -731,6 +744,25 @@ class LiveFrame(ctk.CTkFrame):
                 card_config.grid_columnconfigure(2, weight=0)
                 card_config.grid_columnconfigure(3, weight=0)
                 card_config.grid_columnconfigure(4, weight=0)
+
+                # Responsive toolbar buttons (Grid)
+                self.toggle_btn.pack_forget()
+                self.btn_save.pack_forget()
+                self.btn_clear.pack_forget()
+                self.summary_btn.pack_forget()
+                self.btn_open_folder.pack_forget()
+
+                self.toggle_btn.grid(row=0, column=1, padx=6, pady=4)
+                self.btn_save.grid(row=0, column=2, padx=6, pady=4)
+                self.btn_clear.grid(row=0, column=3, padx=6, pady=4)
+                self.summary_btn.grid(row=1, column=1, padx=6, pady=4)
+                self.btn_open_folder.grid(row=1, column=2, columnspan=2, padx=6, pady=4)
+
+                toolbar.grid_columnconfigure(0, weight=1)
+                toolbar.grid_columnconfigure(1, weight=0)
+                toolbar.grid_columnconfigure(2, weight=0)
+                toolbar.grid_columnconfigure(3, weight=0)
+                toolbar.grid_columnconfigure(4, weight=1)
             else:
                 self.label_fuente.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
                 self.source_combo.grid(row=1, column=0, padx=(16, 8), pady=(0, 12), sticky=tk.W)
@@ -745,6 +777,35 @@ class LiveFrame(ctk.CTkFrame):
                 card_config.grid_columnconfigure(2, weight=0)
                 card_config.grid_columnconfigure(3, weight=0)
                 card_config.grid_columnconfigure(4, weight=1)
+
+                # Reset toolbar buttons (Pack)
+                self.toggle_btn.grid_forget()
+                self.btn_save.grid_forget()
+                self.btn_clear.grid_forget()
+                self.summary_btn.grid_forget()
+                self.btn_open_folder.grid_forget()
+
+                self.toggle_btn.pack(side=tk.LEFT)
+                self.btn_save.pack(side=tk.LEFT, padx=(8, 0))
+                self.btn_clear.pack(side=tk.LEFT, padx=(8, 0))
+                self.summary_btn.pack(side=tk.LEFT, padx=(8, 0))
+                self.btn_open_folder.pack(side=tk.LEFT, padx=(8, 0))
+
+                toolbar.grid_columnconfigure(0, weight=0)
+                toolbar.grid_columnconfigure(1, weight=0)
+                toolbar.grid_columnconfigure(2, weight=0)
+                toolbar.grid_columnconfigure(3, weight=0)
+                toolbar.grid_columnconfigure(4, weight=0)
+
+        def on_live_configure(event):
+            if event.widget != self:
+                return
+            new_w = event.width
+            if new_w < 400: # Ignorar anchos de inicialización pequeños
+                return
+            if self._resize_after_id is not None:
+                self.after_cancel(self._resize_after_id)
+            self._resize_after_id = self.after(150, lambda w=new_w: _apply_live_layout(w))
 
         self.bind("<Configure>", on_live_configure)
 
@@ -999,7 +1060,7 @@ class LiveFrame(ctk.CTkFrame):
 
     def _refresh_sources(self):
         try:
-            import process_loopback
+            from infrastructure.audio import process_loopback
             apps = process_loopback.list_audio_apps()
         except Exception:
             apps = []
@@ -1202,15 +1263,17 @@ class LiveFrame(ctk.CTkFrame):
         db_friendly_name = safe_name
         db_lang = self.worker._locked_language or self.worker._language or ""
 
-        import db
+        from core.domain.entities import TranscriptionRecord
         try:
-            db.save_transcription(
-                file_path=db_path,
-                file_name=db_friendly_name,
-                duration=duration_str,
-                transcription=text,
-                summary="",
-                language=db_lang
+            config.repository.save(
+                TranscriptionRecord(
+                    file_path=db_path,
+                    file_name=db_friendly_name,
+                    duration=duration_str,
+                    transcription=text,
+                    summary="",
+                    language=db_lang
+                )
             )
             self._set_status(f"Guardado: {safe_name}")
             messagebox.showinfo("Éxito", f"Grabación guardada como '{safe_name}' y añadida al historial.")
@@ -1220,7 +1283,11 @@ class LiveFrame(ctk.CTkFrame):
 
     def _append(self, text: str):
         at_bottom = self.output.yview()[1] >= 0.999
-        self.output.insert(tk.END, text + "\n")
+        val = self.output.get("1.0", "end-1c")
+        if val and not val.endswith(("\n", " ", "\t")):
+            self.output.insert(tk.END, " " + text)
+        else:
+            self.output.insert(tk.END, text)
         if at_bottom:
             self.output.see(tk.END)
 
@@ -1256,6 +1323,18 @@ class LiveFrame(ctk.CTkFrame):
 
         # Reactive sync of toggle button and spinner based on worker state
         if self.worker.is_running():
+            if not getattr(self, "_controls_disabled", False):
+                self._controls_disabled = True
+                self.source_combo.configure(state="disabled")
+                self.lang_combo.configure(state="disabled")
+                self.translate_check.configure(state="disabled")
+                self.record_check.configure(state="disabled")
+                self.btn_change_folder.configure(state="disabled")
+                self.btn_refresh.configure(state="disabled")
+                self.btn_save.configure(state="disabled")
+                self.summary_btn.configure(state="disabled")
+                self.btn_clear.configure(state="disabled")
+
             if self.worker._stop.is_set():
                 self.is_animating = False
                 if self.spinner.is_spinning:
@@ -1294,6 +1373,18 @@ class LiveFrame(ctk.CTkFrame):
                         text_color=color
                     )
         else:
+            if getattr(self, "_controls_disabled", False):
+                self._controls_disabled = False
+                self.source_combo.configure(state="readonly")
+                self.lang_combo.configure(state="readonly")
+                self.translate_check.configure(state="normal")
+                self.record_check.configure(state="normal")
+                self.btn_change_folder.configure(state="normal")
+                self.btn_refresh.configure(state="normal")
+                self.btn_save.configure(state="normal")
+                self.summary_btn.configure(state="normal")
+                self.btn_clear.configure(state="normal")
+
             self.is_animating = False
             if self.spinner.is_spinning:
                 self.spinner.stop()

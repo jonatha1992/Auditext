@@ -10,7 +10,7 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 os.chdir(os.path.dirname(os.path.abspath(__file__)))
 
-import audio_preprocessor
+from infrastructure.audio import audio_preprocessor
 from faster_whisper import WhisperModel
 
 MODEL_SIZE = "small"

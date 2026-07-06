@@ -16,7 +16,7 @@ FFMPEG_BIN = os.path.join("..", "ffmpeg", "bin")
 
 # --- Collect packages that bundle data files ---
 ctk_datas, ctk_bins, ctk_hiddens = collect_all("customtkinter")
-sb_datas, sb_bins, sb_hiddens = collect_all("speechbrain")
+fw_datas = collect_data_files("faster_whisper")
 
 a = Analysis(
     ["main.py"],
@@ -24,13 +24,11 @@ a = Analysis(
     binaries=[
         (os.path.join(FFMPEG_BIN, "ffmpeg.exe"), "ffmpeg/bin"),
         (os.path.join(FFMPEG_BIN, "ffprobe.exe"), "ffmpeg/bin"),
-    ] + ctk_bins + sb_bins,
+    ] + ctk_bins,
     datas=[
         ("icons/icono.ico", "icons"),
-        ("pretrained_models", "pretrained_models"),
         (WHISPER_SMALL, "models/whisper-small"),
-        (SILERO_VAD, "torch_hub/snakers4_silero-vad_master"),
-    ] + ctk_datas + sb_datas,
+    ] + ctk_datas + fw_datas,
     hiddenimports=[
         # Audio capture
         "soundcard",
@@ -53,18 +51,7 @@ a = Analysis(
         "scipy.signal",
         "scipy.ndimage",
         "noisereduce",
-        # Diarization
-        "simple_diarizer",
-        "simple_diarizer.diarizer",
-        "simple_diarizer.cluster",
-        "simple_diarizer.utils",
-        "torchaudio",
-        "torchaudio.backend",
-        "sklearn",
-        "sklearn.cluster",
-        "sklearn.cluster._agglomerative",
-        "sklearn.utils._cython_blas",
-        "sklearn.neighbors._partition_nodes",
+
         # Media
         "mutagen",
         "mutagen.mp3",
@@ -80,7 +67,7 @@ a = Analysis(
         "dotenv",
         "speech_recognition",
         "pyaudio",
-    ] + ctk_hiddens + sb_hiddens,
+    ] + ctk_hiddens,
     hookspath=["hooks"],
     hooksconfig={},
     runtime_hooks=["hooks/rthook_frozen.py"],
@@ -89,14 +76,19 @@ a = Analysis(
         "IPython",
         "jupyter",
         "notebook",
-        "pandas",
         "cv2",
         "tkinter.test",
-        "unittest",
         "xmlrpc",
         "ftplib",
         "imaplib",
         "smtplib",
+        "torch",
+        "torchaudio",
+        "torchvision",
+        "speechbrain",
+        "whisperx",
+        "pyannote",
+        "simple_diarizer",
     ],
     noarchive=False,
     optimize=0,
@@ -113,8 +105,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=True,
-    upx_exclude=["vcruntime140.dll", "msvcp140.dll", "python3*.dll"],
+    upx=False,
     console=False,
     disable_windowed_traceback=False,
     argv_emulation=False,
@@ -129,7 +120,6 @@ coll = COLLECT(
     a.binaries,
     a.datas,
     strip=False,
-    upx=True,
-    upx_exclude=["vcruntime140.dll", "msvcp140.dll", "python3*.dll"],
+    upx=False,
     name="AudioText",
 )

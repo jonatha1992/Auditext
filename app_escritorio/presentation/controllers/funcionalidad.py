@@ -11,10 +11,7 @@ from tkinter import messagebox, filedialog
 
 from mutagen import File
 
-import transcriber
-import diarizer
 import config
-import db
 from config import (
     logger,
     report_error,
@@ -62,8 +59,8 @@ def convertir_a_wav(audio_path):
     """
     try:
         logger.info(f"Intentando convertir: {audio_path}")
-        audio_format = audio_path.split(".")[-1]
-        output_path = audio_path.replace(audio_format, "wav")
+        base, _ = os.path.splitext(audio_path)
+        output_path = base + ".wav"
 
         if os.path.exists(output_path):
             logger.info(f"El archivo WAV ya existe: {output_path}")
@@ -148,7 +145,7 @@ def seleccionar_archivos(lista_archivos, lista_archivos_paths):
                 
             file_name = os.path.basename(file_path)
             duracion = obtener_duracion_audio(file_path)
-            duracion_str = time.strftime("%M:%S", time.gmtime(duracion))
+            duracion_str = format_duration(duracion)
             item = f"{file_name} ({duracion_str})"
             
             logger.info(f"Procesando archivo para lista: path={file_path}, name={file_name}, duration={duracion_str}")
@@ -218,18 +215,20 @@ def contar_palabras_y_inaudibles(texto):
 
 def parse_time_to_srt(time_str: str) -> str:
     parts = time_str.split(":")
-    mins = int(parts[0])
-    secs = int(parts[1])
-    hours = mins // 60
-    mins = mins % 60
+    if len(parts) == 3:
+        hours, mins, secs = int(parts[0]), int(parts[1]), int(parts[2])
+    else:
+        hours = 0
+        mins, secs = int(parts[0]), int(parts[1])
     return f"{hours:02d}:{mins:02d}:{secs:02d},000"
 
 def parse_time_to_vtt(time_str: str) -> str:
     parts = time_str.split(":")
-    mins = int(parts[0])
-    secs = int(parts[1])
-    hours = mins // 60
-    mins = mins % 60
+    if len(parts) == 3:
+        hours, mins, secs = int(parts[0]), int(parts[1]), int(parts[2])
+    else:
+        hours = 0
+        mins, secs = int(parts[0]), int(parts[1])
     return f"{hours:02d}:{mins:02d}:{secs:02d}.000"
 
 def text_to_srt(text: str) -> str:
@@ -239,7 +238,7 @@ def text_to_srt(text: str) -> str:
     index = 1
     
     # Matches [MM:SS - MM:SS] or [HH:MM:SS - HH:MM:SS]
-    pattern = re.compile(r"^\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]\s*(.*)$")
+    pattern = re.compile(r"^\[((?:\d{1,2}:)?\d{1,2}:\d{2})\s*-\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\]\s*(.*)$")
     
     for line in lines:
         match = pattern.match(line.strip())
@@ -259,7 +258,7 @@ def text_to_vtt(text: str) -> str:
     lines = text.strip().split("\n")
     vtt_parts = ["WEBVTT\n"]
     
-    pattern = re.compile(r"^\[(\d{1,2}:\d{2})\s*-\s*(\d{1,2}:\d{2})\]\s*(.*)$")
+    pattern = re.compile(r"^\[((?:\d{1,2}:)?\d{1,2}:\d{2})\s*-\s*((?:\d{1,2}:)?\d{1,2}:\d{2})\]\s*(.*)$")
     
     for line in lines:
         match = pattern.match(line.strip())
@@ -365,10 +364,19 @@ def borrar_archivo(lista_archivos, lista_archivos_paths):
     return False
 
 
-def format_time(seconds: float) -> str:
-    mins = int(seconds // 60)
-    secs = int(seconds % 60)
-    return f"{mins:02d}:{secs:02d}"
+def format_duration(seconds: float) -> str:
+    """Format seconds as MM:SS or H:MM:SS for durations >= 1 hour."""
+    total = int(seconds)
+    hours = total // 3600
+    minutes = (total % 3600) // 60
+    secs = total % 60
+    if hours > 0:
+        return f"{hours}:{minutes:02d}:{secs:02d}"
+    else:
+        return f"{minutes:02d}:{secs:02d}"
+
+
+format_time = format_duration
 
 
 def iniciar_transcripcion_thread(
@@ -386,8 +394,9 @@ def iniciar_transcripcion_thread(
     marcas_tiempo_var=None,
     spinner=None,
     frame_progress=None,
+    on_file_done=None,
 ):
-    from reproductor import reproductor
+    from infrastructure.audio.reproductor import reproductor
 
     if reproductor.reproduciendo:
         messagebox.showwarning(
@@ -419,7 +428,7 @@ def iniciar_transcripcion_thread(
         # Read GUI variables safely on the main GUI thread before spawning the background thread
         idioma_entrada_val = combobox_idioma_entrada.get()
         idioma_salida_val = combobox_idioma_salida.get()
-        diarizar_val = bool(diarizar_var.get()) if diarizar_var is not None else False
+        diarizar_val = False
         timestamps_val = bool(marcas_tiempo_var.get()) if marcas_tiempo_var is not None else False
         
         # Safe check for diarization availability on main GUI thread
@@ -457,7 +466,7 @@ def iniciar_transcripcion_thread(
                 diarizar_val,
                 timestamps_val,
             ),
-            kwargs={"spinner": spinner, "frame_progress": frame_progress},
+            kwargs={"spinner": spinner, "frame_progress": frame_progress, "on_file_done": on_file_done},
             daemon=True,
         ).start()
 
@@ -490,7 +499,7 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
             audio_file, language=idioma_entrada, progress_cb=progress_cb
         )
     elif timestamps:
-        segments = transcriber.transcribe_file_segments(
+        segments = config.transcription_service.transcribe_file_segments(
             audio_file,
             language=idioma_entrada,
             translate=translate,
@@ -502,7 +511,7 @@ def procesar_audio(audio_file, idioma_entrada, translate, progress_bar, ventana,
             parts.append(f"[{format_time(start)} - {format_time(end)}] {text}")
         transcripcion_final = "\n".join(parts)
     else:
-        transcripcion_final = transcriber.transcribe_file(
+        transcripcion_final = config.transcription_service.transcribe_file(
             audio_file,
             language=idioma_entrada,
             translate=translate,
@@ -538,6 +547,7 @@ def iniciar_transcripcion(
     timestamps_val=False,
     spinner=None,
     frame_progress=None,
+    on_file_done=None,
 ):
 
 
@@ -548,7 +558,7 @@ def iniciar_transcripcion(
         )
         return
 
-    diarizar = diarizar_val
+    diarizar = False
 
     archivos_seleccionados = [lista_archivos.get(i) for i in seleccion]
     total_archivos = len(archivos_seleccionados)
@@ -576,10 +586,10 @@ def iniciar_transcripcion(
     ventana.after(0, lambda: boton_transcribir.configure(text="⏹   Detener"))
 
     # Pre-cargar el modelo si no está en memoria y avisar al usuario
-    if transcriber._model is None:
+    if config.transcription_service._model is None:
         archivo_procesando.set("Cargando modelo de transcripcion (solo la primera vez)...")
         try:
-            transcriber.get_model()
+            config.transcription_service._get_model()
         except Exception as e:
             logger.error(f"Error al cargar el modelo: {str(e)}")
 
@@ -592,7 +602,17 @@ def iniciar_transcripcion(
         )
 
         # Consultar si el archivo ya fue transcrito
-        transcripcion_guardada = db.get_transcription(audio_file)
+        record = config.repository.get(audio_file)
+        if record:
+            transcripcion_guardada = {
+                "file_name": record.file_name,
+                "duration": record.duration,
+                "transcription": record.transcription,
+                "summary": record.summary,
+                "language": record.language
+            }
+        else:
+            transcripcion_guardada = None
         if transcripcion_guardada:
             # Preguntar si desea cargar la transcripción existente o volver a procesar
             respuesta = _ask_on_main_thread(
@@ -622,17 +642,33 @@ def iniciar_transcripcion(
 
         archivo_procesando.set(f"Procesando: {archivo} ({index + 1}/{total_archivos})")
         logger.info(f"Procesando archivo: {audio_file}")
+        _t_start = time.time()
+        _t_transcribe_start = None
 
         def status_cb(fraction):
-            if fraction < 0.05:
-                status = "Cargando..."
-            elif fraction < 0.55:
-                status = f"Transcribiendo ({int((fraction - 0.05) / 0.5 * 100)}%)"
-            elif fraction < 0.95:
-                status = f"Separando voces ({int((fraction - 0.55) / 0.4 * 100)}%)"
+            nonlocal _t_transcribe_start
+            pct = int(fraction * 100)
+            
+            if fraction > 0.1001 and _t_transcribe_start is None:
+                _t_transcribe_start = time.time()
+                
+            if _t_transcribe_start is not None and fraction > 0.1001:
+                audio_fraction = min(1.0, (fraction - 0.1) / 0.8)
+                if audio_fraction > 0.02:
+                    elapsed_transcribing = time.time() - _t_transcribe_start
+                    total_est = elapsed_transcribing / audio_fraction
+                    remaining = total_est * (1.0 - audio_fraction)
+                    if remaining > 120:
+                        eta = f"~{int(remaining // 60)} min"
+                    elif remaining > 60:
+                        eta = "~1 min"
+                    else:
+                        eta = f"~{int(remaining)} seg"
+                else:
+                    eta = "calculando..."
             else:
-                status = "Finalizando..."
-            archivo_procesando.set(f"{status}: {archivo} ({index + 1}/{total_archivos})")
+                eta = "cargando..."
+            archivo_procesando.set(f"Transcribiendo {pct}% ({eta}): {archivo} ({index + 1}/{total_archivos})")
 
         try:
             resultado = procesar_audio(
@@ -650,14 +686,20 @@ def iniciar_transcripcion(
                 ))
 
                 # Guardar en base de datos (no toca UI — seguro desde thread)
-                db.save_transcription(
-                    audio_file,
-                    resultado["filename"],
-                    archivo.split("(")[-1].replace(")", "").strip(),
-                    resultado["transcripcion"],
-                    summary="",
-                    language=idioma_entrada
+                from core.domain.entities import TranscriptionRecord
+                saved_path = config.repository.save(
+                    TranscriptionRecord(
+                        file_path=audio_file,
+                        file_name=resultado["filename"],
+                        duration=archivo.split("(")[-1].replace(")", "").strip(),
+                        transcription=resultado["transcripcion"],
+                        summary="",
+                        language=idioma_entrada or ""
+                    )
                 )
+
+                if on_file_done:
+                    ventana.after(0, lambda fp=saved_path: on_file_done(fp))
 
             frac = ((index + 1) / total_archivos) * 100
             ventana.after(0, lambda v=frac: progress_bar.configure(value=v))

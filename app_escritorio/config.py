@@ -10,7 +10,6 @@ os.environ.setdefault("OMP_NUM_THREADS", str(_model_threads))
 os.environ.setdefault("CT2_INTER_THREADS", "1")
 os.environ.setdefault("CT2_INTRA_THREADS", str(_model_threads))
 from logging.handlers import RotatingFileHandler
-import datetime
 
 # Base directory for external files (logs, ffmpeg)
 if getattr(sys, "frozen", False):
@@ -72,6 +71,13 @@ def report_error(context, exc, user_msg=None):
     return user_msg or "Ocurrio un error. Revisa la bitacora (logs/error_log.txt)."
 
 
+# Global dependency container (SOLID)
+repository = None
+transcription_service = None
+DB_PATH = os.path.join(base_dir, "auditext.db")
+MODEL_SIZE = "small"
+SAMPLE_RATE = 16000
+
 # Variables globales
 transcripcion_activa = False
 transcripcion_en_curso = False
@@ -97,10 +103,6 @@ idiomas = {
 
 
 
-def check_dependencies():
-    current_date = datetime.date.today()
-    expiration_date = datetime.date(2025, 1, 3)
-    return current_date >= expiration_date
 
 
 # Inicialización

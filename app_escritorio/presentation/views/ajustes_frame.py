@@ -3,9 +3,8 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import filedialog, messagebox
 import customtkinter as ctk
-import transcriber
-import db
-import live_frame
+import config
+from . import live_frame
 
 class AjustesFrame(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
@@ -60,7 +59,7 @@ class AjustesFrame(ctk.CTkFrame):
         self.model_combo.pack(anchor=tk.W, padx=16, pady=(0, 12))
         
         # Set current model value
-        current_model = transcriber.MODEL_SIZE
+        current_model = config.MODEL_SIZE
         for label, val in models.items():
             if val == current_model:
                 self.model_combo.set(label)
@@ -139,10 +138,10 @@ class AjustesFrame(ctk.CTkFrame):
             "large-v3 (Máxima precisión, muy pesado)": "large-v3"
         }
         val = models.get(selected_label, "small")
-        if transcriber.MODEL_SIZE != val:
-            transcriber.MODEL_SIZE = val
-            with transcriber._model_lock:
-                transcriber._model = None  # Force reload on next get_model() call
+        if config.MODEL_SIZE != val:
+            config.MODEL_SIZE = val
+            config.transcription_service.model_size = val
+            config.transcription_service._model = None  # Force reload on next run
             self.label_model_status.configure(text=f"Modelo actual en memoria: {val} (se recargará al transcribir)")
 
     def on_browse_path(self):
@@ -157,22 +156,11 @@ class AjustesFrame(ctk.CTkFrame):
 
     def refresh_db_stats(self):
         try:
-            db_path = Path("auditext.db")
-            if not db_path.exists():
-                db_path = Path("app_escritorio/auditext.db")
+            import config
+            stats = config.repository.get_stats()
+            count = stats.get("total_records", 0)
+            size_kb = stats.get("size_kb", 0.0)
             
-            size_kb = db_path.stat().st_size / 1024 if db_path.exists() else 0
-            
-            # Count records
-            count = db.get_total_transcriptions_count() if hasattr(db, 'get_total_transcriptions_count') else 0
-            if count == 0:
-                # Fallback if get_total_transcriptions_count is missing
-                conn = db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM transcripciones")
-                count = cursor.fetchone()[0]
-                conn.close()
-
             self.label_db_stats.configure(
                 text=f"• Total de archivos en caché: {count}\n• Tamaño de la base de datos: {size_kb:.1f} KB"
             )
@@ -187,11 +175,9 @@ class AjustesFrame(ctk.CTkFrame):
         )
         if confirm:
             try:
-                conn = db.get_connection()
-                cursor = conn.cursor()
-                cursor.execute("DELETE FROM transcripciones")
-                conn.commit()
-                conn.close()
+                import config
+                config.repository.clear()
+                self.refresh_db_stats()
                 messagebox.showinfo("Éxito", "El historial fue eliminado por completo.")
                 self.refresh_db_stats()
             except Exception as e:

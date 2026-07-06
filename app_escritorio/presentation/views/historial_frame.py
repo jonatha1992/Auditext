@@ -3,12 +3,11 @@ import threading
 import tkinter as tk
 from tkinter import messagebox, filedialog
 import customtkinter as ctk
-import db
-import summarizer
-from spinner import Spinner
-from reproductor import reproductor
-from funcionalidad import obtener_duracion_audio
-from tooltip import Tooltip
+from infrastructure.services import summarizer
+from .spinner import Spinner
+from infrastructure.audio.reproductor import reproductor
+from presentation.controllers.funcionalidad import obtener_duracion_audio
+from .tooltip import Tooltip
 
 
 COLOR_BG          = "#0B0C10"
@@ -109,7 +108,101 @@ class HistorialFrame(ctk.CTkFrame):
         self._slider_dragging = False
         self._build_ui()
         self.load_history()
+        
+        # Responsive layout adjustment logic
+        self.last_historial_width = [0]
+        self._resize_after_id = None
+        self.bind("<Configure>", self._on_historial_configure)
+        
         self.after(100, self._tick_history_player)
+
+    def _on_historial_configure(self, event):
+        if event.widget != self:
+            return
+        new_w = event.width
+        if new_w < 400:
+            return
+        if self._resize_after_id is not None:
+            self.after_cancel(self._resize_after_id)
+        self._resize_after_id = self.after(150, lambda w=new_w: self._apply_layout(w))
+
+    def _apply_layout(self, new_w):
+        self._resize_after_id = None
+        if new_w == self.last_historial_width[0]:
+            return
+        self.last_historial_width[0] = new_w
+
+        if new_w < 850:
+            # 1-Column Layout: Stack left_col (list) and right_col (details) vertically
+            self.left_col.pack_forget()
+            self.right_col.pack_forget()
+            
+            # Constrain height of left_col to 180 so details gets vertical space
+            self.left_col.configure(width=new_w - 48, height=180)
+            self.left_col.pack(side=tk.TOP, fill=tk.BOTH, expand=False, pady=(0, 10))
+            self.right_col.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(10, 0))
+
+            # Stack transcript panel and summary panel vertically
+            self.pane_text.pack_forget()
+            self.pane_summary.pack_forget()
+            self.pane_text.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(0, 8))
+            self.pane_summary.pack(side=tk.TOP, fill=tk.BOTH, expand=True, pady=(8, 0))
+
+            # Wrapped Action Buttons Frame (Grid)
+            self.btn_rename.pack_forget()
+            self.btn_copy_text.pack_forget()
+            self.btn_copy_summary.pack_forget()
+            self.btn_export.pack_forget()
+            self.btn_delete.pack_forget()
+
+            self.btn_rename.grid(row=0, column=1, padx=6, pady=4)
+            self.btn_copy_text.grid(row=0, column=2, padx=6, pady=4)
+            self.btn_copy_summary.grid(row=0, column=3, padx=6, pady=4)
+            self.btn_export.grid(row=1, column=1, padx=6, pady=4)
+            self.btn_delete.grid(row=1, column=2, columnspan=2, padx=6, pady=4)
+
+            self.action_row.grid_columnconfigure(0, weight=1)
+            self.action_row.grid_columnconfigure(1, weight=0)
+            self.action_row.grid_columnconfigure(2, weight=0)
+            self.action_row.grid_columnconfigure(3, weight=0)
+            self.action_row.grid_columnconfigure(4, weight=1)
+        else:
+            # 2-Column Layout: fixed left, expanding right
+            self.left_col.pack_forget()
+            self.right_col.pack_forget()
+            
+            # Body height is not fixed, let left_col stretch vertically
+            master_height = self.left_col.master.winfo_height() if self.left_col.master else 500
+            if master_height < 50:
+                master_height = 500
+            self.left_col.configure(width=260, height=master_height)
+            self.left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 14))
+            self.right_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+            # Side-by-side transcript and summary panels
+            self.pane_text.pack_forget()
+            self.pane_summary.pack_forget()
+            self.pane_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, 8))
+            self.pane_summary.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(8, 0))
+
+            # Single Horizontal Row for Buttons
+            self.btn_rename.grid_forget()
+            self.btn_copy_text.grid_forget()
+            self.btn_copy_summary.grid_forget()
+            self.btn_export.grid_forget()
+            self.btn_delete.grid_forget()
+
+            self.btn_rename.pack(side=tk.LEFT, padx=(0, 4))
+            self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 4))
+            self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 4))
+            self.btn_export.pack(side=tk.LEFT, padx=(0, 4))
+            self.btn_delete.pack(side=tk.RIGHT)
+
+            self.action_row.grid_columnconfigure(0, weight=0)
+            self.action_row.grid_columnconfigure(1, weight=0)
+            self.action_row.grid_columnconfigure(2, weight=0)
+            self.action_row.grid_columnconfigure(3, weight=0)
+            self.action_row.grid_columnconfigure(4, weight=0)
 
     # ------------------------------------------------------------------
     # UI BUILD
@@ -588,7 +681,20 @@ class HistorialFrame(ctk.CTkFrame):
         # Reset search bar text
         self.search_var.set("")
         
-        self.records = db.get_all_transcriptions()
+        import config
+        records_entities = config.repository.get_all()
+        self.records = [
+            {
+                "file_path": rec.file_path,
+                "file_name": rec.file_name,
+                "duration": rec.duration,
+                "transcription": rec.transcription,
+                "summary": rec.summary,
+                "language": rec.language,
+                "created_at": rec.created_at
+            }
+            for rec in records_entities
+        ]
 
         for c in self._card_widgets:
             c.destroy()
@@ -696,7 +802,11 @@ class HistorialFrame(ctk.CTkFrame):
 
         if self.selected_record:
             file_path = self.selected_record["file_path"]
-            db.update_summary(file_path, summary)
+            import config
+            record = config.repository.get(file_path)
+            if record:
+                record.summary = summary
+                config.repository.save(record)
             self.selected_record["summary"] = summary
             for r in self.records:
                 if r["file_path"] == file_path:
@@ -741,7 +851,7 @@ class HistorialFrame(ctk.CTkFrame):
         if not self.selected_record:
             return
         text = self.txt_transcription.get("1.0", tk.END).strip()
-        from funcionalidad import exportar_transcripcion
+        from presentation.controllers.funcionalidad import exportar_transcripcion
         exportar_transcripcion(text)
 
 
@@ -753,8 +863,8 @@ class HistorialFrame(ctk.CTkFrame):
         new_name = dialog.result
         if not new_name or new_name == current_name:
             return
-        file_path = self.selected_record["file_path"]
-        if db.rename_transcription(file_path, new_name):
+        import config
+        if config.repository.rename(file_path, new_name):
             self.selected_record["file_name"] = new_name
             for r in self.records:
                 if r["file_path"] == file_path:
@@ -782,11 +892,13 @@ class HistorialFrame(ctk.CTkFrame):
             parent=self
         )
         if confirm:
-            if db.delete_transcription(self.selected_record["file_path"]):
+            try:
+                import config
+                config.repository.delete(self.selected_record["file_path"])
                 self.show_toast("Registro eliminado")
                 self.load_history()
-            else:
-                messagebox.showerror("Error", "No se pudo eliminar el registro de la base de datos.")
+            except Exception as e:
+                messagebox.showerror("Error", f"No se pudo eliminar el registro: {e}")
 
     def set_status(self, text):
         self.label_status.configure(text=text)
@@ -833,12 +945,17 @@ class HistorialFrame(ctk.CTkFrame):
 
     def _on_slider_change(self, value):
         if self.selected_record and reproductor.audio_actual == self.selected_record["file_path"]:
-            mins = int(value // 60)
-            secs = int(value % 60)
-            total_mins = int(reproductor.duracion_total // 60)
-            total_secs = int(reproductor.duracion_total % 60)
+            curr = int(value)
+            total = int(reproductor.duracion_total)
+            def _fmt(s):
+                h = s // 3600
+                m = (s % 3600) // 60
+                sec = s % 60
+                if h > 0:
+                    return f"{h}:{m:02d}:{sec:02d}"
+                return f"{m:02d}:{sec:02d}"
             self.lbl_time_history.configure(
-                text=f"{mins:02d}:{secs:02d} / {total_mins:02d}:{total_secs:02d}"
+                text=f"{_fmt(curr)} / {_fmt(total)}"
             )
 
     def _on_slider_release(self, event):
@@ -847,11 +964,16 @@ class HistorialFrame(ctk.CTkFrame):
             new_pos = self.slider_history.get()
             reproductor.posicion_actual = new_pos
             import pygame
+            if pygame.mixer.get_init():
+                try:
+                    if reproductor.reproduciendo:
+                        pygame.mixer.music.play(start=new_pos)
+                    else:
+                        pygame.mixer.music.set_pos(new_pos)
+                except pygame.error:
+                    pass
             if reproductor.reproduciendo:
-                pygame.mixer.music.play(start=new_pos)
                 reproductor.tiempo_inicio = time.time() - new_pos
-            else:
-                pygame.mixer.music.set_pos(new_pos)
 
     def update_history_player_ui(self):
         if not self.selected_record:
@@ -884,7 +1006,20 @@ class HistorialFrame(ctk.CTkFrame):
             file_path = self.selected_record["file_path"]
             if reproductor.audio_actual == file_path:
                 import pygame
-                if reproductor.reproduciendo and not pygame.mixer.music.get_busy():
+                mixer_busy = False
+                if pygame.mixer.get_init():
+                    try:
+                        mixer_busy = pygame.mixer.music.get_busy()
+                    except pygame.error:
+                        pass
+                
+                should_stop = False
+                if pygame.mixer.get_init():
+                    should_stop = not mixer_busy
+                else:
+                    should_stop = reproductor.obtener_tiempo_actual() >= reproductor.duracion_total
+
+                if reproductor.reproduciendo and should_stop:
                     reproductor.detener()
                 self.update_history_player_ui()
                 

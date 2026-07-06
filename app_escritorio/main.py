@@ -1,3 +1,22 @@
+import sys
+
+# Patch sys.stdout and sys.stderr when running in windowed mode (console=False)
+# to prevent AttributeError when third-party libraries (like torch.hub) try to write to them.
+class _DummyWriter:
+    def write(self, data):
+        pass
+    def flush(self):
+        pass
+
+if sys.stdout is None:
+    sys.stdout = _DummyWriter()
+if sys.stderr is None:
+    sys.stderr = _DummyWriter()
+if sys.__stdout__ is None:
+    sys.__stdout__ = sys.stdout
+if sys.__stderr__ is None:
+    sys.__stderr__ = sys.stderr
+
 import tkinter as tk
 from tkinter import messagebox
 import customtkinter as ctk
@@ -5,12 +24,11 @@ import customtkinter as ctk
 # Monkey-patch config to configure on all customtkinter widgets for backwards compatibility
 ctk.CTkBaseClass.config = lambda self, **kwargs: self.configure(**kwargs)
 
-from interfaz import crear_interfaz, centrar_ventana
-from config import check_dependencies, logger
-from reproductor import pygame
+from presentation.views.interfaz import crear_interfaz, centrar_ventana
+from config import logger
+import pygame
 import os
 import sys
-import db
 
 
 def resource_path(relative_path):
@@ -24,14 +42,24 @@ def resource_path(relative_path):
 
 def main():
     try:
-        # Inicializar la base de datos SQLite
-        db.init_db()
-        logger.info("[DIAG] db.init_db OK")
+        # Inicializar e inyectar dependencias (SOLID / Inyección de dependencias)
+        from infrastructure.repositories.sqlite_repository import SQLiteTranscriptionRepository
+        from infrastructure.services.onnx_transcriber import OfflineTranscriptionService
+        import config
+        
+        config.repository = SQLiteTranscriptionRepository(config.DB_PATH)
+        config.repository.init_db()
+        
+        config.transcription_service = OfflineTranscriptionService(model_size=config.MODEL_SIZE)
+        logger.info("[DIAG] Dependencias inyectadas exitosamente en config.")
 
-        # Inicializar pygame mixer
+        # Inicializar pygame mixer de forma segura
         logger.info("[DIAG] Iniciando pygame.mixer.init...")
-        pygame.mixer.init()
-        logger.info("[DIAG] pygame.mixer.init OK")
+        try:
+            pygame.mixer.init()
+            logger.info("[DIAG] pygame.mixer.init OK")
+        except Exception as e:
+            logger.warning("[DIAG] pygame.mixer.init fallo (se desactivara la reproduccion): %s", e)
 
         # Configurar CustomTkinter
         logger.info("[DIAG] Configurando CustomTkinter...")
@@ -51,13 +79,16 @@ def main():
             logger.warning("Icono no encontrado, se usa el icono por defecto.")
         widgets = crear_interfaz(ventana)
 
-        # Centrar la ventana en la pantalla
-        centrar_ventana(ventana)
+        # Iniciar maximizada por defecto (pantalla completa con barra de tareas)
+        try:
+            ventana.state("zoomed")
+        except Exception:
+            centrar_ventana(ventana)
 
         # Protocolo para cierre limpio de la ventana
         def on_closing():
             try:
-                from reproductor import reproductor
+                from infrastructure.audio.reproductor import reproductor
                 reproductor.detener()
             except Exception:
                 pass
