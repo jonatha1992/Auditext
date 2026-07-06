@@ -223,3 +223,14 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
             self.logger.info("Base de datos de transcripciones vaciada completamente.")
         except Exception as e:
             self.logger.error(f"Error al vaciar la base de datos: {e}")
+
+    def update_summary(self, file_path: str, summary: str) -> None:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("UPDATE transcripciones SET summary = ? WHERE file_path = ?", (summary, file_path))
+            conn.commit()
+            conn.close()
+            self.logger.info(f"Resumen actualizado para: {file_path}")
+        except Exception as e:
+            self.logger.error(f"Error al actualizar resumen: {e}")

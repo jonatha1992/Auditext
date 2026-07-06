@@ -473,6 +473,20 @@ def crear_interfaz(ventana):
                 "con tu clave para habilitar el resumen.",
             )
             return
+
+        # Check if a summary already exists in the database
+        if _last_file_path:
+            record = config.repository.get(_last_file_path)
+            if record and record.summary and record.summary.strip():
+                use_cached = messagebox.askyesno(
+                    "Resumen guardado",
+                    "Ya existe un resumen guardado para este archivo.\n\n"
+                    "¿Querés usar el resumen guardado? (sin costo)\n\n"
+                    "Seleccioná NO para regenerarlo con IA (consume API).",
+                )
+                if use_cached:
+                    mostrar_resumen_modal(record.summary)
+                    return
             
         boton_resumir.configure(state="disabled")
         archivo_procesando.set("Resumiendo con IA usando Gemini...")
@@ -485,7 +499,7 @@ def crear_interfaz(ventana):
                 resumen = summarizer.summarize(texto)
                 # Guardar el resumen en la BD si hay un archivo asociado
                 if _last_file_path:
-                    db.update_summary(_last_file_path, resumen)
+                    config.repository.update_summary(_last_file_path, resumen)
                 ventana.after(0, lambda r=resumen: mostrar_resumen_modal(r))
             except Exception as e:
                 err_msg = str(e)

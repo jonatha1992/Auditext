@@ -38,6 +38,11 @@ class TranscriptionRepository(ABC):
         """Clear all records from the repository."""
         pass
 
+    @abstractmethod
+    def update_summary(self, file_path: str, summary: str) -> None:
+        """Update the summary field of a transcription record."""
+        pass
+
 
 class TranscriptionService(ABC):
     @abstractmethod
