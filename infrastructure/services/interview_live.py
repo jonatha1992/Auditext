@@ -195,7 +195,7 @@ class InterviewLiveSession:
         if not is_configured():
             raise InterviewLiveError(
                 "Falta GEMINI_API_KEY / GEMINI_API_KEY1. "
-                "Configurala en app_escritorio/.env (podés sumar KEY2 / KEY3)."
+                "Configurala en .env (podés sumar KEY2 / KEY3)."
             )
         self._stop.clear()
         self._thread = threading.Thread(target=self._thread_main, daemon=True)

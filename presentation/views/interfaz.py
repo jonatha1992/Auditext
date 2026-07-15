@@ -469,7 +469,7 @@ def crear_interfaz(ventana):
         if not summarizer.is_configured():
             messagebox.showinfo(
                 "Resumen no configurado",
-                "Falta GEMINI_API_KEY. Crea un archivo .env en el directorio app_escritorio "
+                "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
             )
             return

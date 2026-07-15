@@ -773,7 +773,7 @@ class HistorialFrame(ctk.CTkFrame):
         if not summarizer.is_configured():
             messagebox.showinfo(
                 "Resumen no configurado",
-                "Falta GEMINI_API_KEY. Crea un archivo .env en app_escritorio "
+                "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
             )
             return

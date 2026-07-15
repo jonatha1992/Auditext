@@ -1210,7 +1210,7 @@ class LiveFrame(ctk.CTkFrame):
                 if not interview_live.is_configured():
                     messagebox.showinfo(
                         "Modo entrevista",
-                        "Falta GEMINI_API_KEY en app_escritorio/.env "
+                        "Falta GEMINI_API_KEY en .env "
                         "(podés sumar GEMINI_API_KEY_2 / _3).",
                     )
                     return
@@ -1364,7 +1364,7 @@ class LiveFrame(ctk.CTkFrame):
         if not summarizer.is_configured():
             messagebox.showinfo(
                 "Resumen no configurado",
-                "Falta GEMINI_API_KEY. Crea un archivo .env en app_escritorio "
+                "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
             )
             return
