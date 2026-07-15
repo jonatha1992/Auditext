@@ -55,10 +55,16 @@ Texto reciente del ENTREVISTADOR (STT en inglés, puede tener ruido):
 {utterance}
 ---
 
+Conversación reciente, separada por rol:
+---
+{history}
+---
+
 Respondé SOLO un JSON válido, sin markdown:
-{{"pregunta_es":"glosa clara en español de lo que dijo/preguntó","respuestas":["respuesta hablada corta en inglés 1","respuesta hablada corta en inglés 2"]}}
+{{"pregunta_es":"glosa clara en español","respuestas":["respuesta recomendada en inglés","alternativa breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"],"frase_puente":"frase breve en inglés para ganar tiempo o pedir aclaración"}}
 
 Reglas: exactamente 2 respuestas, 1-2 oraciones cada una, naturales para decir en voz alta.
+Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
 Si el texto es ruido o no aporta, devolve pregunta_es vacía y respuestas [].
 """
 
@@ -67,6 +73,8 @@ Si el texto es ruido o no aporta, devolve pregunta_es vacía y respuestas [].
 class InterviewAssist:
     pregunta_es: str
     respuestas: list[str]
+    ideas_clave: list[str] | None = None
+    frase_puente: str = ""
 
 
 class InterviewLiveError(Exception):
@@ -106,16 +114,26 @@ def parse_assist_text(text: str) -> InterviewAssist | None:
     if not isinstance(respuestas_raw, list):
         respuestas_raw = [respuestas_raw]
     respuestas = [str(r).strip() for r in respuestas_raw if str(r).strip()][:2]
+    ideas_raw = data.get("ideas_clave") or []
+    if not isinstance(ideas_raw, list):
+        ideas_raw = [ideas_raw]
+    ideas = [str(v).strip() for v in ideas_raw if str(v).strip()][:3]
+    frase_puente = str(data.get("frase_puente") or "").strip()
     if not pregunta and not respuestas:
         return None
-    return InterviewAssist(pregunta_es=pregunta, respuestas=respuestas)
+    return InterviewAssist(pregunta, respuestas, ideas, frase_puente)
 
 
 def is_configured() -> bool:
     return gemini_keys.is_configured()
 
 
-def coach_assist(context: str, utterance: str, api_key: str | None = None) -> InterviewAssist | None:
+def coach_assist(
+    context: str,
+    utterance: str,
+    api_key: str | None = None,
+    conversation_history: str = "",
+) -> InterviewAssist | None:
     """Sync generate_content coach call (JSON). Tries keys + model fallbacks."""
     utterance = (utterance or "").strip()
     if len(utterance.split()) < 3:
@@ -128,6 +146,7 @@ def coach_assist(context: str, utterance: str, api_key: str | None = None) -> In
     prompt = _COACH_PROMPT.format(
         context=(context or "").strip() or "(sin contexto)",
         utterance=utterance,
+        history=(conversation_history or "").strip() or "(sin historial previo)",
     )
     models = []
     for m in COACH_MODELS:
@@ -188,6 +207,17 @@ class InterviewLiveSession:
         self._api_key: str | None = None
         self._coach_lock = asyncio.Lock()
         self._coach_task: asyncio.Task | None = None
+        self._history: list[str] = []
+        self._history_lock = threading.Lock()
+
+    def add_candidate_turn(self, text: str) -> None:
+        """Add microphone speech to context without mixing speaker roles."""
+        clean = (text or "").strip()
+        if not clean:
+            return
+        with self._history_lock:
+            self._history.append(f"CANDIDATO: {clean}")
+            self._history = self._history[-12:]
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -358,7 +388,7 @@ class InterviewLiveSession:
                 await session.send_realtime_input(
                     audio=types.Blob(data=chunk, mime_type="audio/pcm;rate=16000")
                 )
-            except Exception as exc:
+            except Exception:
                 if self._stop.is_set():
                     return
                 raise
@@ -389,6 +419,9 @@ class InterviewLiveSession:
             buf = self._utterance_buf.strip()
             self._utterance_buf = ""
             if buf and self._api_key:
+                with self._history_lock:
+                    self._history.append(f"ENTREVISTADOR: {buf}")
+                    self._history = self._history[-12:]
                 # Debounce overlapping coach calls: cancel previous if still running
                 if self._coach_task and not self._coach_task.done():
                     self._coach_task.cancel()
@@ -400,8 +433,14 @@ class InterviewLiveSession:
                 return
             self._on_status("Generando sugerencias...")
             try:
+                with self._history_lock:
+                    history = "\n".join(self._history[-12:])
                 assist = await asyncio.to_thread(
-                    coach_assist, self._context, utterance, self._api_key
+                    coach_assist,
+                    self._context,
+                    utterance,
+                    self._api_key,
+                    history,
                 )
                 if assist:
                     self._on_assist(assist)

@@ -97,6 +97,11 @@ def main():
                     widgets["live_frame"].stop_worker()
             except Exception:
                 pass
+            try:
+                if widgets and "interview_frame" in widgets:
+                    widgets["interview_frame"].stop_session()
+            except Exception:
+                pass
             ventana.destroy()
 
         ventana.protocol("WM_DELETE_WINDOW", on_closing)

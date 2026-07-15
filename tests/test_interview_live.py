@@ -122,6 +122,16 @@ class TestInterviewHelpers(unittest.TestCase):
             parse_assist_text('{"pregunta_es":"","respuestas":[]}')
         )
 
+    def test_parse_fluency_support(self):
+        assist = parse_assist_text(
+            '{"pregunta_es":"Contame sobre vos",'
+            '"respuestas":["I am a developer.","My background is in Python."],'
+            '"ideas_clave":["mencionar experiencia","dar un resultado"],'
+            '"frase_puente":"That is a great question."}'
+        )
+        self.assertEqual(assist.ideas_clave, ["mencionar experiencia", "dar un resultado"])
+        self.assertEqual(assist.frase_puente, "That is a great question.")
+
 
 if __name__ == "__main__":
     unittest.main()

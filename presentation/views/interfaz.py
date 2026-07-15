@@ -7,6 +7,7 @@ from presentation.controllers.funcionalidad import *
 from infrastructure.audio.reproductor import *
 from config import idiomas
 from .live_frame import LiveFrame
+from .interview_frame import InterviewFrame
 from .spinner import Spinner
 from .ajustes_frame import AjustesFrame
 from .historial_frame import HistorialFrame
@@ -102,16 +103,23 @@ def crear_interfaz(ventana):
     def switch_view(view_name):
         view_archivos.pack_forget()
         view_envivo.pack_forget()
+        view_entrevista.pack_forget()
         view_historial.pack_forget()
         view_ajustes.pack_forget()
 
         # Stop history playback when leaving the view
         if hasattr(view_historial, "_stop_history_playback"):
             view_historial._stop_history_playback()
+        if view_name != "entrevista" and (
+            view_entrevista.worker.is_running()
+            or view_entrevista.candidate_listener.is_running()
+        ):
+            view_entrevista.finish_session()
 
         # Reset button colors
         btn_archivos.configure(fg_color="transparent" if view_name != "archivos" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "archivos" else COLOR_TEXT_FG)
         btn_envivo.configure(fg_color="transparent" if view_name != "envivo" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "envivo" else COLOR_TEXT_FG)
+        btn_entrevista.configure(fg_color="transparent" if view_name != "entrevista" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "entrevista" else COLOR_TEXT_FG)
         btn_historial.configure(fg_color="transparent" if view_name != "historial" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "historial" else COLOR_TEXT_FG)
         btn_ajustes.configure(fg_color="transparent" if view_name != "ajustes" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "ajustes" else COLOR_TEXT_FG)
 
@@ -122,6 +130,9 @@ def crear_interfaz(ventana):
             # Refresh devices or parameters if needed
             if hasattr(view_envivo, "refresh_devices"):
                 view_envivo.refresh_devices()
+        elif view_name == "entrevista":
+            view_entrevista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            view_entrevista.refresh_devices()
         elif view_name == "historial":
             view_historial.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             view_historial.load_history()
@@ -145,6 +156,14 @@ def crear_interfaz(ventana):
     )
     btn_envivo.pack(fill=tk.X, padx=12, pady=4)
 
+    btn_entrevista = ctk.CTkButton(
+        sidebar_frame, text="🎯   Entrevista", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, width=176, height=40, corner_radius=8,
+        command=lambda: switch_view("entrevista")
+    )
+    btn_entrevista.pack(fill=tk.X, padx=12, pady=4)
+
     btn_historial = ctk.CTkButton(
         sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
@@ -161,6 +180,7 @@ def crear_interfaz(ventana):
 
     Tooltip(btn_archivos, "Transcribí archivos de audio (MP3, WAV, M4A, FLAC) a texto de forma offline.")
     Tooltip(btn_envivo, "Transcribí en tiempo real lo que reproduce el sistema o el micrófono.")
+    Tooltip(btn_entrevista, "Seguí la conversación y recibí ayuda para responder con fluidez.")
     Tooltip(btn_historial, "Revisá, buscá y exportá transcripciones guardadas anteriormente.")
     Tooltip(btn_ajustes, "Configuración de la app: base de datos, modelo, carpetas.")
 
@@ -179,11 +199,13 @@ def crear_interfaz(ventana):
             
             btn_archivos.configure(text="📁", anchor=tk.CENTER, width=44)
             btn_envivo.configure(text="🎙", anchor=tk.CENTER, width=44)
+            btn_entrevista.configure(text="🎯", anchor=tk.CENTER, width=44)
             btn_historial.configure(text="📜", anchor=tk.CENTER, width=44)
             btn_ajustes.configure(text="⚙", anchor=tk.CENTER, width=44)
             
             btn_archivos.pack_configure(padx=8)
             btn_envivo.pack_configure(padx=8)
+            btn_entrevista.pack_configure(padx=8)
             btn_historial.pack_configure(padx=8)
             btn_ajustes.pack_configure(padx=8)
             
@@ -199,11 +221,13 @@ def crear_interfaz(ventana):
             
             btn_archivos.configure(text="📁   Archivos", anchor=tk.W, width=176)
             btn_envivo.configure(text="🎙   En vivo", anchor=tk.W, width=176)
+            btn_entrevista.configure(text="🎯   Entrevista", anchor=tk.W, width=176)
             btn_historial.configure(text="📜   Historial", anchor=tk.W, width=176)
             btn_ajustes.configure(text="⚙   Ajustes", anchor=tk.W, width=176)
             
             btn_archivos.pack_configure(padx=12)
             btn_envivo.pack_configure(padx=12)
+            btn_entrevista.pack_configure(padx=12)
             btn_historial.pack_configure(padx=12)
             btn_ajustes.pack_configure(padx=12)
             
@@ -792,13 +816,18 @@ def crear_interfaz(ventana):
     # Initially hidden, packed dynamically via switch_view
 
     # ----------------------------------------------------
-    # VIEW 3: SETTINGS (AJUSTES)
+    # VIEW 3: INTERVIEW COACH
+    # ----------------------------------------------------
+    view_entrevista = InterviewFrame(right_content)
+
+    # ----------------------------------------------------
+    # VIEW 4: SETTINGS (AJUSTES)
     # ----------------------------------------------------
     view_ajustes = AjustesFrame(right_content)
     # Initially hidden, packed dynamically via switch_view
 
     # ----------------------------------------------------
-    # VIEW 4: HISTORY (HISTORIAL)
+    # VIEW 5: HISTORY (HISTORIAL)
     # ----------------------------------------------------
     view_historial = HistorialFrame(right_content)
     # Initially hidden, packed dynamically via switch_view
@@ -961,6 +990,7 @@ def crear_interfaz(ventana):
         "label_reproduccion": label_reproduccion,
         "label_tiempo": label_tiempo,
         "live_frame": view_envivo,
+        "interview_frame": view_entrevista,
         "historial_frame": view_historial,
         "spinner": spinner,
         "frame_progress": frame_progress,

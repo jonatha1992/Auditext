@@ -5,11 +5,14 @@ totalmente offline usando [faster-whisper](https://github.com/SYSTRAN/faster-whi
 Incluye modo de captura en vivo (loopback), historial local, resumen con Gemini
 (opcional, online) y modo entrevista con IA.
 
+> Consulta el [PRD del producto](docs/PRD.md) y la
+> [decisión de separar Entrevista de En vivo](docs/decisions/001-separate-interview-experience.md).
+
 ## 🚀 Características
 
 - ✅ **Transcripción offline** con Whisper modelo `small` en CPU (int8)
 - ✅ **Captura en vivo** de audio del sistema (loopback WASAPI)
-- ✅ **Modo entrevista** con Gemini Live + coach de preguntas
+- ✅ **Módulo Entrevista** con captura separada del entrevistador y tu micrófono, contexto conversacional y coach de fluidez
 - ✅ **Resumen opcional** con Gemini (online, bajo demanda)
 - ✅ **Historial local** en SQLite con búsqueda y exportación
 - ✅ **Reproductor** de audio incorporado
