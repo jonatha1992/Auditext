@@ -90,9 +90,7 @@ pretrained_models/
 # Session audio recordings in data/
 data/audios/
 
-# Config templates
-.env.example
-CLAUDE.md
+
 .claude/settings.local.json
 
 # Agent skill cache
