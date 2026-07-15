@@ -66,5 +66,20 @@ class TestOfflineTranscriptionService(unittest.TestCase):
         self.assertGreater(len(progress_calls), 0)
         self.assertEqual(progress_calls[-1], 1.0)
 
+    def test_transcribe_array_without_torch(self):
+        self.assertTrue(os.path.exists(self.audio_path), f"Audio file not found: {self.audio_path}")
+        sys.modules["torch"] = None
+
+        from faster_whisper import decode_audio
+        audio = decode_audio(self.audio_path, sampling_rate=16000)
+
+        texts, detected_lang = self.service.transcribe_array(audio, language="es")
+
+        self.assertIsNotNone(texts)
+        self.assertGreater(len(texts), 0)
+        self.assertTrue(any("Hola" in t for t in texts))
+        self.assertEqual(detected_lang, "es")
+
 if __name__ == "__main__":
     unittest.main()
+

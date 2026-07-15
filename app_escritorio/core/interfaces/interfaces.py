@@ -68,3 +68,19 @@ class TranscriptionService(ABC):
     ) -> list[tuple[float, float, str]]:
         """Transcribe an audio or video file offline and return segments with timestamps."""
         pass
+
+    @abstractmethod
+    def get_model(self) -> Any:
+        """Retrieve or pre-load the underlying transcription model."""
+        pass
+
+    @abstractmethod
+    def transcribe_array(
+        self,
+        audio: Any,
+        language: str | None = None,
+        translate: bool = False,
+    ) -> tuple[list[str], str | None]:
+        """Transcribe an in-memory audio array and return the segment texts and detected language."""
+        pass
+

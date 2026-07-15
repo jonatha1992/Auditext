@@ -1,12 +1,8 @@
 """Optional online transcript summarization via Google Gemini.
 
-This is the ONLY online feature in the app. It runs solely on demand (the
-"Resumir" button); transcription itself stays fully offline. When no API key
-is configured, or the network/API fails, summarization degrades gracefully
-with a clear message instead of crashing.
-
-The API key is read from the GEMINI_API_KEY environment variable, loaded from
-a gitignored .env file. The key is never hardcoded.
+Online features (Resumir + Modo entrevista) share the Gemini key pool from
+`.env`. Transcription itself stays fully offline. When no API key is configured,
+or the network/API fails, summarization degrades gracefully with a clear message.
 """
 
 from __future__ import annotations
@@ -16,9 +12,11 @@ import os
 from dotenv import load_dotenv
 
 from config import logger
+from infrastructure.services import gemini_keys
 
 load_dotenv()
 
+# Back-compat for any code that still reads this module-level name.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
 
@@ -52,7 +50,7 @@ class SummaryError(Exception):
 
 def is_configured() -> bool:
     """True when an API key is present, so the UI can enable/disable the action."""
-    return bool(GEMINI_API_KEY)
+    return gemini_keys.is_configured()
 
 
 def summarize(text: str) -> str:
@@ -60,7 +58,8 @@ def summarize(text: str) -> str:
     text = (text or "").strip()
     if not text:
         raise SummaryError("No hay texto para resumir.")
-    if not GEMINI_API_KEY:
+    gemini_keys.pool.reload()
+    if not gemini_keys.is_configured():
         raise SummaryError("Falta GEMINI_API_KEY. Configurala en el archivo .env.")
 
     try:
@@ -70,42 +69,56 @@ def summarize(text: str) -> str:
             "Falta el paquete google-genai (pip install google-genai)."
         ) from exc
 
-    client = genai.Client(api_key=GEMINI_API_KEY)
     contents = _PROMPT_TEMPLATE + text
-
-    # Try primary model first, then fallbacks if quota is exhausted.
     models_to_try = [GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != GEMINI_MODEL]
     last_exc = None
 
-    for model in models_to_try:
-        try:
-            response = client.models.generate_content(model=model, contents=contents)
-            summary = (response.text or "").strip()
-            if not summary:
-                raise SummaryError("La API devolvio un resumen vacio.")
-            if model != GEMINI_MODEL:
-                logger.info("Resumen generado con modelo de respaldo: %s", model)
-            return summary
-        except SummaryError:
-            raise
-        except Exception as exc:
-            detail = str(exc).lower()
-            is_quota = "429" in detail or "quota" in detail or "resource_exhausted" in detail
-            if is_quota:
-                logger.warning("Cuota agotada para %s, intentando siguiente modelo...", model)
-                last_exc = exc
-                continue
-            # Non-quota error: log and classify immediately
-            logger.exception("Fallo el resumen con Gemini (%s): %s", model, exc)
-            if "api key" in detail or "permission" in detail or "401" in detail or "403" in detail:
-                raise SummaryError("Clave de API invalida o sin permisos. Revisa GEMINI_API_KEY en .env.") from exc
-            if "deadline" in detail or "connection" in detail or "timeout" in detail or "network" in detail:
-                raise SummaryError("Sin conexion con la API. Revisa tu red.") from exc
-            raise SummaryError("Error al contactar la API. Revisa la bitacora (logs/error_log.txt).") from exc
+    # Outer: keys. Inner: models. Quota on a key → next key; quota on model → next model.
+    while True:
+        key = gemini_keys.pool.current()
+        if not key:
+            break
+        client = genai.Client(api_key=key)
+        key_quota_hit = False
+        for model in models_to_try:
+            try:
+                response = client.models.generate_content(model=model, contents=contents)
+                summary = (response.text or "").strip()
+                if not summary:
+                    raise SummaryError("La API devolvio un resumen vacio.")
+                if model != GEMINI_MODEL:
+                    logger.info("Resumen generado con modelo de respaldo: %s", model)
+                return summary
+            except SummaryError:
+                raise
+            except Exception as exc:
+                detail = str(exc).lower()
+                if gemini_keys.pool.is_quota_error(exc):
+                    logger.warning(
+                        "Cuota agotada para %s (%s), intentando siguiente...",
+                        model,
+                        gemini_keys.pool.current_label(),
+                    )
+                    last_exc = exc
+                    # If all models on this key fail quota, rotate key
+                    if model == models_to_try[-1]:
+                        gemini_keys.pool.mark_exhausted(key)
+                        key_quota_hit = True
+                    continue
+                logger.exception("Fallo el resumen con Gemini (%s): %s", model, exc)
+                if "api key" in detail or "permission" in detail or "401" in detail or "403" in detail:
+                    gemini_keys.pool.mark_exhausted(key)
+                    key_quota_hit = True
+                    last_exc = exc
+                    break
+                if "deadline" in detail or "connection" in detail or "timeout" in detail or "network" in detail:
+                    raise SummaryError("Sin conexion con la API. Revisa tu red.") from exc
+                raise SummaryError("Error al contactar la API. Revisa la bitacora (logs/error_log.txt).") from exc
+        if not key_quota_hit:
+            break
 
-    # All models returned quota errors
-    logger.exception("Cuota agotada en todos los modelos: %s", last_exc)
+    logger.exception("Cuota agotada en todas las keys/modelos: %s", last_exc)
     raise SummaryError(
-        "Cuota agotada en todos los modelos disponibles. "
-        "Revisá tu plan en ai.google.dev o esperá unos minutos para reintentar."
+        "Cuota agotada en todas las API keys / modelos disponibles. "
+        "Sumá GEMINI_API_KEY_2 en .env o esperá unos minutos."
     ) from last_exc

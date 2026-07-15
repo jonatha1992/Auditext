@@ -1,6 +1,6 @@
 import os
 import sys
-from typing import Callable
+from typing import Callable, Any
 from core.interfaces.interfaces import TranscriptionService
 from faster_whisper import WhisperModel
 import config
@@ -11,7 +11,7 @@ class OfflineTranscriptionService(TranscriptionService):
         self.logger = logger
         self._model = None
 
-    def _get_model(self) -> WhisperModel:
+    def get_model(self) -> WhisperModel:
         if self._model is None:
             self.logger.info(f"Cargando modelo local de Whisper ({self.model_size})...")
             
@@ -46,7 +46,7 @@ class OfflineTranscriptionService(TranscriptionService):
         should_continue: Callable[[], bool] | None = None,
     ) -> str:
         try:
-            model = self._get_model()
+            model = self.get_model()
             task = "translate" if translate else "transcribe"
             
             self.logger.info(f"Iniciando transcripción local offline: {file_path} (idioma={language}, tarea={task})")
@@ -95,7 +95,7 @@ class OfflineTranscriptionService(TranscriptionService):
         should_continue: Callable[[], bool] | None = None,
     ) -> list[tuple[float, float, str]]:
         try:
-            model = self._get_model()
+            model = self.get_model()
             task = "translate" if translate else "transcribe"
             
             self.logger.info(f"Iniciando transcripción por segmentos local offline: {file_path} (idioma={language}, tarea={task})")
@@ -132,4 +132,26 @@ class OfflineTranscriptionService(TranscriptionService):
             return results
         except Exception as e:
             self.logger.error(f"Fallo en la transcripción por segmentos local: {e}")
+            raise e
+
+    def transcribe_array(
+        self,
+        audio: Any,
+        language: str | None = None,
+        translate: bool = False,
+    ) -> tuple[list[str], str | None]:
+        try:
+            model = self.get_model()
+            task = "translate" if translate else "transcribe"
+            segments, info = model.transcribe(
+                audio,
+                language=language,
+                task=task,
+                vad_filter=True,
+                condition_on_previous_text=False,
+            )
+            texts = [seg.text.strip() for seg in segments if seg.text.strip()]
+            return texts, info.language
+        except Exception as e:
+            self.logger.error(f"Fallo en la transcripción de array: {e}")
             raise e

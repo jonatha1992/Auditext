@@ -13,6 +13,7 @@ from tkinter import filedialog, messagebox
 import customtkinter as ctk
 
 from infrastructure.services import summarizer
+from infrastructure.services import interview_live
 import config
 from config import logger
 from .spinner import Spinner
@@ -129,6 +130,10 @@ class Transcriber:
         self._source_val = None
         self._translate = False
         self._save_audio = True
+        self._interview_mode = False
+        self._interview_context = ""
+        self._live_session: interview_live.InterviewLiveSession | None = None
+        self._assist_queue: "queue.Queue | None" = None
         self._audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
         self.num_bars = 60
         self.last_bands = [0.0] * 60
@@ -140,7 +145,18 @@ class Transcriber:
         self.current_transcript_path = None
         self.current_wav_path = None
 
-    def start(self, language=None, out_dir: Path = DEFAULT_DIR, source_type="loopback", source_val=None, translate=False, save_audio=True):
+    def start(
+        self,
+        language=None,
+        out_dir: Path = DEFAULT_DIR,
+        source_type="loopback",
+        source_val=None,
+        translate=False,
+        save_audio=True,
+        interview_mode=False,
+        interview_context="",
+        assist_queue=None,
+    ):
         if self._thread and self._thread.is_alive():
             return
         self._language = language
@@ -150,6 +166,10 @@ class Transcriber:
         self._source_val = source_val
         self._translate = translate
         self._save_audio = save_audio
+        self._interview_mode = bool(interview_mode)
+        self._interview_context = interview_context or ""
+        self._assist_queue = assist_queue
+        self._live_session = None
         self._stop.clear()
         import time
         self.start_time = time.time()
@@ -165,6 +185,12 @@ class Transcriber:
 
     def stop(self):
         self._stop.set()
+        live = self._live_session
+        if live is not None:
+            try:
+                live.stop()
+            except Exception:
+                logger.exception("Failed stopping interview Live session")
         import time
         if getattr(self, "start_time", None):
             self.duration_seconds = time.time() - self.start_time
@@ -366,10 +392,16 @@ class Transcriber:
 
     def _push(self, mono):
         try:
-            self._audio_q.put_nowait(mono)
-            if self._wav_file:
-                pcm_data = (mono * 32767).clip(-32768, 32767).astype(np.int16)
-                self._wav_file.writeframes(pcm_data.tobytes())
+            if self._interview_mode and self._live_session is not None:
+                pcm = interview_live.float32_to_pcm16(mono)
+                self._live_session.send_audio(pcm)
+                if self._wav_file:
+                    self._wav_file.writeframes(pcm)
+            else:
+                self._audio_q.put_nowait(mono)
+                if self._wav_file:
+                    pcm_data = (mono * 32767).clip(-32768, 32767).astype(np.int16)
+                    self._wav_file.writeframes(pcm_data.tobytes())
         except queue.Full:
             pass
 
@@ -498,7 +530,12 @@ class Transcriber:
                     continue
 
                 lang = self._language if self._language is not None else self._locked_language
-                texts, detected = transcriber.transcribe_array(audio, language=lang, translate=self._translate)
+                if config.transcription_service is not None:
+                    texts, detected = config.transcription_service.transcribe_array(
+                        audio, language=lang, translate=self._translate
+                    )
+                else:
+                    raise RuntimeError("El servicio de transcripción no está inicializado en config.")
                 if self._language is None and self._locked_language is None and detected:
                     self._locked_language = detected
                     self._status_queue.put(f"Idioma detectado: {detected}")
@@ -512,12 +549,32 @@ class Transcriber:
     def _run(self):
         _cloud_modes = {"google_stt", "windows_stt"}
         try:
+            if self._interview_mode:
+                if self._source_type in _cloud_modes:
+                    self._status_queue.put(
+                        "Modo entrevista usa audio del sistema; cambiá la fuente."
+                    )
+                    return
+                self._open_log()
+                self._start_live_session()
+                producer = threading.Thread(target=self._producer, daemon=True)
+                producer.start()
+                producer.join()
+                if self._live_session is not None:
+                    self._live_session.stop()
+                    self._live_session = None
+                self._status_queue.put("Inactivo")
+                return
+
             if self._source_type in _cloud_modes:
                 mode_label = "Google STT" if self._source_type == "google_stt" else "Windows STT"
                 self._status_queue.put(f"Conectando con {mode_label}...")
             else:
                 self._status_queue.put("Cargando modelo...")
-                transcriber.get_model()
+                if config.transcription_service is not None:
+                    config.transcription_service.get_model()
+                else:
+                    raise RuntimeError("El servicio de transcripción no está inicializado en config.")
             self._open_log()
 
             producer = threading.Thread(target=self._producer, daemon=True)
@@ -536,6 +593,12 @@ class Transcriber:
             logger.exception("Fallo la transcripcion en vivo: %s", exc)
             self._status_queue.put(f"Error: {exc}")
         finally:
+            if self._live_session is not None:
+                try:
+                    self._live_session.stop()
+                except Exception:
+                    pass
+                self._live_session = None
             if self._log_file:
                 self._log_file.close()
                 self._log_file = None
@@ -546,6 +609,34 @@ class Transcriber:
                     pass
                 self._wav_file = None
 
+    def _start_live_session(self):
+        def on_transcript(text: str):
+            self._emit(text)
+
+        def on_assist(assist: interview_live.InterviewAssist):
+            if self._assist_queue is not None:
+                self._assist_queue.put(assist)
+
+        def on_status(msg: str):
+            self._status_queue.put(msg)
+
+        session = interview_live.InterviewLiveSession(
+            context=self._interview_context,
+            on_transcript=on_transcript,
+            on_assist=on_assist,
+            on_status=on_status,
+        )
+        self._live_session = session
+        session.start()
+        # Brief wait so asyncio loop is up before producer floods PCM
+        import time
+        for _ in range(50):
+            if self._stop.is_set():
+                return
+            if session._loop is not None and session._audio_q is not None:
+                break
+            time.sleep(0.05)
+
 
 class LiveFrame(ctk.CTkFrame):
     def __init__(self, parent):
@@ -553,11 +644,14 @@ class LiveFrame(ctk.CTkFrame):
 
         self.text_queue: "queue.Queue[str]" = queue.Queue()
         self.status_queue: "queue.Queue[str]" = queue.Queue()
+        self.assist_queue: "queue.Queue" = queue.Queue()
         self.translate_var = tk.BooleanVar(value=False)
         self.record_var = tk.BooleanVar(value=True)
+        self.interview_var = tk.BooleanVar(value=False)
         self.worker = Transcriber(self.text_queue, self.status_queue)
         self.out_dir = DEFAULT_DIR
         self._controls_disabled = False
+        self._suggestion_btns: list = []
 
         # Header
         header = ctk.CTkFrame(self, fg_color="transparent")
@@ -702,6 +796,14 @@ class LiveFrame(ctk.CTkFrame):
         )
         self.record_check.pack(anchor=tk.W)
 
+        self.interview_check = ctk.CTkCheckBox(
+            rec_frame, text="🎯 Modo entrevista", variable=self.interview_var,
+            font=("Segoe UI", 12), text_color="#FFFFFF",
+            fg_color="#7000FF", hover_color="#5900CC", border_color="#2A2B36",
+            command=self._on_interview_toggle,
+        )
+        self.interview_check.pack(anchor=tk.W, pady=(6, 0))
+
         self.btn_change_folder = ctk.CTkButton(
             rec_frame, text="📂 Cambiar carpeta", font=("Segoe UI", 11),
             fg_color="transparent", text_color="#8A8F9E", hover_color="#1A1B26",
@@ -830,6 +932,65 @@ class LiveFrame(ctk.CTkFrame):
             font=("Segoe UI", 11), text_color="#8A8F9E", justify=tk.CENTER
         )
         self.path_label.pack(pady=(4, 10))
+
+        # Interview coach panel (hidden until Modo entrevista)
+        self.interview_panel = ctk.CTkFrame(
+            self, fg_color="#15161E", corner_radius=12, border_color="#2A2B36", border_width=1
+        )
+        ctx_label = ctk.CTkLabel(
+            self.interview_panel, text="CONTEXTO (CV / puesto / empresa)",
+            font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
+        )
+        ctx_label.pack(anchor=tk.W, padx=12, pady=(10, 2))
+        self.context_box = ctk.CTkTextbox(
+            self.interview_panel, height=72, fg_color="#11121A", text_color="#FFFFFF",
+            font=("Segoe UI", 11), corner_radius=8, border_width=0
+        )
+        self.context_box.pack(fill=tk.X, padx=12, pady=(0, 6))
+        self.context_box.insert(
+            "1.0",
+            "Pegá acá tu CV, el puesto y la empresa. Se usa al Iniciar.",
+        )
+
+        coach_row = ctk.CTkFrame(self.interview_panel, fg_color="transparent")
+        coach_row.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
+        coach_row.grid_columnconfigure(0, weight=1)
+        coach_row.grid_columnconfigure(1, weight=1)
+
+        left = ctk.CTkFrame(coach_row, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 6))
+        ctk.CTkLabel(
+            left, text="PREGUNTA (ES)", font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
+        ).pack(anchor=tk.W)
+        self.pregunta_box = ctk.CTkTextbox(
+            left, height=90, fg_color="#11121A", text_color="#FFFFFF",
+            font=("Segoe UI", 12), corner_radius=8, border_width=0
+        )
+        self.pregunta_box.pack(fill=tk.BOTH, expand=True, pady=(2, 0))
+
+        right = ctk.CTkFrame(coach_row, fg_color="transparent")
+        right.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        ctk.CTkLabel(
+            right, text="SUGERENCIAS (EN) — click para copiar",
+            font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
+        ).pack(anchor=tk.W)
+        self._suggestion_btns = []
+        for i in range(2):
+            btn = ctk.CTkButton(
+                right,
+                text=f"Respuesta {i + 1} aparecerá acá",
+                font=("Segoe UI", 11),
+                fg_color="#1A1B26",
+                text_color="#FFFFFF",
+                hover_color="#2A2B36",
+                anchor="w",
+                height=40,
+                corner_radius=8,
+                command=lambda idx=i: self._copy_suggestion(idx),
+            )
+            btn._reply_text = ""
+            btn.pack(fill=tk.X, pady=(4 if i else 2, 0))
+            self._suggestion_btns.append(btn)
 
         # Output text box
         text_card = ctk.CTkFrame(self, fg_color="#15161E", corner_radius=12, border_color="#2A2B36", border_width=1)
@@ -1044,16 +1205,92 @@ class LiveFrame(ctk.CTkFrame):
         if self.worker.is_running():
             self.worker.stop()
         else:
-            source_info = self._source_map.get(self.source_var.get(), ("loopback", None))
-            self.worker.start(
-                language=LANGUAGES[self.lang_var.get()],
-                out_dir=self.out_dir,
-                source_type=source_info[0],
-                source_val=source_info[1],
-                translate=self.translate_var.get(),
-                save_audio=self.record_var.get(),
-            )
+            interview = self.interview_var.get()
+            if interview:
+                if not interview_live.is_configured():
+                    messagebox.showinfo(
+                        "Modo entrevista",
+                        "Falta GEMINI_API_KEY en app_escritorio/.env "
+                        "(podés sumar GEMINI_API_KEY_2 / _3).",
+                    )
+                    return
+                source_info = self._source_map.get(self.source_var.get(), ("loopback", None))
+                if source_info[0] in {"google_stt", "windows_stt"}:
+                    messagebox.showinfo(
+                        "Modo entrevista",
+                        "Usá 'Todo el sistema' o una App (Meet/Zoom). "
+                        "Google/Windows STT solo escuchan el micrófono.",
+                    )
+                    return
+                context = self.context_box.get("1.0", tk.END).strip()
+                placeholder = "Pegá acá tu CV, el puesto y la empresa. Se usa al Iniciar."
+                if context == placeholder:
+                    context = ""
+                self.worker.start(
+                    language="en",
+                    out_dir=self.out_dir,
+                    source_type=source_info[0],
+                    source_val=source_info[1],
+                    translate=False,
+                    save_audio=self.record_var.get(),
+                    interview_mode=True,
+                    interview_context=context,
+                    assist_queue=self.assist_queue,
+                )
+            else:
+                source_info = self._source_map.get(self.source_var.get(), ("loopback", None))
+                self.worker.start(
+                    language=LANGUAGES[self.lang_var.get()],
+                    out_dir=self.out_dir,
+                    source_type=source_info[0],
+                    source_val=source_info[1],
+                    translate=self.translate_var.get(),
+                    save_audio=self.record_var.get(),
+                )
             self.toggle_btn.configure(text="⏹   Detener")
+
+    def _on_interview_toggle(self):
+        on = self.interview_var.get()
+        if on:
+            self.interview_panel.pack(
+                fill=tk.X, padx=24, pady=(0, 6), before=self.output.master
+            )
+            # Prefer system audio + English
+            if self.source_var.get() in (GOOGLE_STT_LABEL, WINDOWS_STT_LABEL):
+                self.source_var.set(WHOLE_SYSTEM_LABEL)
+            self.lang_var.set("English")
+            self.translate_var.set(False)
+            self.translate_check.configure(state="disabled")
+            self.lang_combo.configure(state="disabled")
+        else:
+            self.interview_panel.pack_forget()
+            if not self.worker.is_running():
+                self.translate_check.configure(state="normal")
+                self.lang_combo.configure(state="readonly")
+
+    def _copy_suggestion(self, idx: int):
+        if idx < 0 or idx >= len(self._suggestion_btns):
+            return
+        text = getattr(self._suggestion_btns[idx], "_reply_text", "") or ""
+        if not text:
+            return
+        try:
+            self.clipboard_clear()
+            self.clipboard_append(text)
+            self._set_status(f"Copiada respuesta {idx + 1}")
+        except Exception as exc:
+            logger.exception("Clipboard copy failed: %s", exc)
+
+    def _apply_assist(self, assist: interview_live.InterviewAssist):
+        self.pregunta_box.delete("1.0", tk.END)
+        if assist.pregunta_es:
+            self.pregunta_box.insert("1.0", assist.pregunta_es)
+        for i, btn in enumerate(self._suggestion_btns):
+            reply = assist.respuestas[i] if i < len(assist.respuestas) else ""
+            btn._reply_text = reply
+            btn.configure(
+                text=reply if reply else f"Respuesta {i + 1} aparecerá acá"
+            )
 
     def refresh_devices(self):
         self._refresh_sources()
@@ -1108,6 +1345,16 @@ class LiveFrame(ctk.CTkFrame):
 
     def _clear(self):
         self.output.delete("1.0", tk.END)
+        if hasattr(self, "pregunta_box"):
+            self.pregunta_box.delete("1.0", tk.END)
+        for i, btn in enumerate(getattr(self, "_suggestion_btns", [])):
+            btn._reply_text = ""
+            btn.configure(text=f"Respuesta {i + 1} aparecerá acá")
+        while not self.assist_queue.empty():
+            try:
+                self.assist_queue.get_nowait()
+            except queue.Empty:
+                break
 
     def _summarize(self):
         text = self.output.get("1.0", tk.END).strip()
@@ -1320,6 +1567,9 @@ class LiveFrame(ctk.CTkFrame):
                 self._set_status(msg)
         while not self.text_queue.empty():
             self._append(self.text_queue.get_nowait())
+        while not self.assist_queue.empty():
+            assist = self.assist_queue.get_nowait()
+            self._apply_assist(assist)
 
         # Reactive sync of toggle button and spinner based on worker state
         if self.worker.is_running():
@@ -1329,11 +1579,14 @@ class LiveFrame(ctk.CTkFrame):
                 self.lang_combo.configure(state="disabled")
                 self.translate_check.configure(state="disabled")
                 self.record_check.configure(state="disabled")
+                self.interview_check.configure(state="disabled")
                 self.btn_change_folder.configure(state="disabled")
                 self.btn_refresh.configure(state="disabled")
                 self.btn_save.configure(state="disabled")
                 self.summary_btn.configure(state="disabled")
                 self.btn_clear.configure(state="disabled")
+                if hasattr(self, "context_box"):
+                    self.context_box.configure(state="disabled")
 
             if self.worker._stop.is_set():
                 self.is_animating = False
@@ -1376,14 +1629,21 @@ class LiveFrame(ctk.CTkFrame):
             if getattr(self, "_controls_disabled", False):
                 self._controls_disabled = False
                 self.source_combo.configure(state="readonly")
-                self.lang_combo.configure(state="readonly")
-                self.translate_check.configure(state="normal")
+                if self.interview_var.get():
+                    self.lang_combo.configure(state="disabled")
+                    self.translate_check.configure(state="disabled")
+                else:
+                    self.lang_combo.configure(state="readonly")
+                    self.translate_check.configure(state="normal")
                 self.record_check.configure(state="normal")
+                self.interview_check.configure(state="normal")
                 self.btn_change_folder.configure(state="normal")
                 self.btn_refresh.configure(state="normal")
                 self.btn_save.configure(state="normal")
                 self.summary_btn.configure(state="normal")
                 self.btn_clear.configure(state="normal")
+                if hasattr(self, "context_box"):
+                    self.context_box.configure(state="normal")
 
             self.is_animating = False
             if self.spinner.is_spinning:
