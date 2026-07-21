@@ -43,6 +43,16 @@ class TranscriptionRepository(ABC):
         """Update the summary field of a transcription record."""
         pass
 
+    @abstractmethod
+    def get_setting(self, key: str) -> str | None:
+        """Retrieve an application setting value by key, or None if not set."""
+        pass
+
+    @abstractmethod
+    def set_setting(self, key: str, value: str) -> None:
+        """Save or replace an application setting value."""
+        pass
+
 
 class TranscriptionService(ABC):
     @abstractmethod

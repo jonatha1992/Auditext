@@ -17,7 +17,6 @@ import customtkinter as ctk
 import config
 from config import logger
 from core.domain.entities import TranscriptionRecord
-from infrastructure.audio import process_loopback
 from infrastructure.services import interview_live
 from infrastructure.services.live_transcriber import (
     DEFAULT_DIR,
@@ -36,6 +35,17 @@ ACCENT = "#7000FF"
 ACCENT_HOVER = "#5900CC"
 SUCCESS = "#4EC98A"
 ERROR = "#E0506A"
+
+CONTEXT_SETTING_KEY = "interview_context"
+CONTEXT_PLACEHOLDER = "Pegá tu CV o el contexto de la sesión (puesto, empresa, tema a practicar...)."
+
+MODE_SETTING_KEY = "interview_assist_mode"
+MODE_LABELS = {
+    "Entrevista laboral": "entrevista",
+    "Práctica de idioma": "practica",
+    "Conversación general": "general",
+    "Prueba oral (práctica, solo ideas)": "prueba_oral",
+}
 
 
 class CandidateListener:
@@ -146,7 +156,9 @@ class InterviewFrame(ctk.CTkFrame):
         ).pack(anchor=tk.W, padx=24, pady=(0, 10))
 
     def _build_preparation(self) -> None:
-        self.prep = ctk.CTkFrame(
+        # Scrollable: the prep form outgrew small windows and the start button
+        # was getting clipped at the bottom.
+        self.prep = ctk.CTkScrollableFrame(
             self, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1
         )
         ctk.CTkLabel(
@@ -155,19 +167,45 @@ class InterviewFrame(ctk.CTkFrame):
         ).pack(anchor=tk.W, padx=18, pady=(16, 2))
         ctk.CTkLabel(
             self.prep,
-            text="El contexto personaliza las respuestas. No se guarda automáticamente.",
+            text="El modo y el contexto personalizan las respuestas. Se guardan al iniciar la sesión.",
             font=("Segoe UI", 11), text_color=MUTED,
         ).pack(anchor=tk.W, padx=18, pady=(0, 10))
 
+        mode_row = ctk.CTkFrame(self.prep, fg_color="transparent")
+        mode_row.pack(fill=tk.X, padx=18, pady=(0, 10))
+        ctk.CTkLabel(
+            mode_row, text="MODO DE SESIÓN",
+            font=("Segoe UI Semibold", 9), text_color=MUTED,
+        ).pack(anchor=tk.W)
+        self.mode_var = tk.StringVar(value=self._load_saved_mode_label())
+        self.mode_combo = ctk.CTkComboBox(
+            mode_row, variable=self.mode_var, state="readonly",
+            values=list(MODE_LABELS),
+            fg_color=PANEL_DARK, border_color=BORDER, button_color=BORDER,
+            dropdown_fg_color=PANEL, dropdown_hover_color=ACCENT,
+        )
+        self.mode_combo.pack(fill=tk.X, pady=(4, 0))
+
+        context_header = ctk.CTkFrame(self.prep, fg_color="transparent")
+        context_header.pack(fill=tk.X, padx=18, pady=(0, 4))
+        ctk.CTkLabel(
+            context_header, text="CV / CONTEXTO",
+            font=("Segoe UI Semibold", 9), text_color=MUTED,
+        ).pack(side=tk.LEFT)
+        ctk.CTkButton(
+            context_header, text="Cargar CV desde archivo…",
+            command=self._upload_cv_file, width=180, height=24,
+            fg_color=PANEL_DARK, hover_color=ACCENT, border_color=BORDER,
+            border_width=1, font=("Segoe UI", 11),
+        ).pack(side=tk.RIGHT)
+
         self.context_box = ctk.CTkTextbox(
-            self.prep, height=150, fg_color=PANEL_DARK, text_color=TEXT,
+            self.prep, height=110, fg_color=PANEL_DARK, text_color=TEXT,
             border_width=1, border_color=BORDER, corner_radius=8,
             font=("Segoe UI", 12),
         )
         self.context_box.pack(fill=tk.X, padx=18, pady=(0, 14))
-        self.context_box.insert(
-            "1.0", "Pegá tu CV y agregá el puesto, la empresa y los puntos que querés destacar."
-        )
+        self.context_box.insert("1.0", self._load_saved_context() or CONTEXT_PLACEHOLDER)
 
         sources = ctk.CTkFrame(self.prep, fg_color="transparent")
         sources.pack(fill=tk.X, padx=18)
@@ -331,6 +369,8 @@ class InterviewFrame(ctk.CTkFrame):
     def refresh_devices(self) -> None:
         self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
         try:
+            from infrastructure.audio import process_loopback
+
             for name, pid in process_loopback.list_audio_apps():
                 self._source_map[f"💻  App: {name} (PID {pid})"] = ("app", pid)
         except Exception:
@@ -352,14 +392,97 @@ class InterviewFrame(ctk.CTkFrame):
         if self.mic_var.get() not in self._microphone_map:
             self.mic_var.set(labels[0])
 
+    def _upload_cv_file(self) -> None:
+        from tkinter import filedialog
+
+        path = filedialog.askopenfilename(
+            title="Seleccionar CV",
+            filetypes=[
+                ("Documentos (PDF, Word, texto)", "*.pdf;*.docx;*.txt;*.md"),
+                ("PDF", "*.pdf"),
+                ("Word", "*.docx"),
+                ("Texto", "*.txt;*.md"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            text = self._extract_cv_text(path)
+        except Exception as exc:
+            logger.exception("Failed extracting CV text from %s: %s", path, exc)
+            messagebox.showerror("CV", f"No se pudo leer el archivo:\n{exc}")
+            return
+        if not text.strip():
+            messagebox.showwarning(
+                "CV", "El archivo no tiene texto extraíble (¿PDF escaneado como imagen?)."
+            )
+            return
+        self.context_box.delete("1.0", tk.END)
+        self.context_box.insert("1.0", text.strip())
+        self._save_context(text.strip())
+
+    @staticmethod
+    def _extract_cv_text(path: str) -> str:
+        lower = path.lower()
+        if lower.endswith(".pdf"):
+            from pypdf import PdfReader
+
+            reader = PdfReader(path)
+            return "\n".join((page.extract_text() or "") for page in reader.pages)
+        if lower.endswith(".docx"):
+            import docx
+
+            document = docx.Document(path)
+            return "\n".join(p.text for p in document.paragraphs)
+        with open(path, encoding="utf-8", errors="ignore") as fh:
+            return fh.read()
+
+    def _load_saved_mode_label(self) -> str:
+        default_label = next(iter(MODE_LABELS))
+        if config.repository is None:
+            return default_label
+        try:
+            saved = config.repository.get_setting(MODE_SETTING_KEY)
+        except Exception as exc:
+            logger.exception("Failed loading saved assist mode: %s", exc)
+            return default_label
+        for label, mode in MODE_LABELS.items():
+            if mode == saved:
+                return label
+        return default_label
+
+    def _load_saved_context(self) -> str | None:
+        if config.repository is None:
+            return None
+        try:
+            saved = config.repository.get_setting(CONTEXT_SETTING_KEY)
+            return saved.strip() or None if saved else None
+        except Exception as exc:
+            logger.exception("Failed loading saved interview context: %s", exc)
+            return None
+
+    def _save_context(self, context: str) -> None:
+        if config.repository is None:
+            return
+        try:
+            config.repository.set_setting(CONTEXT_SETTING_KEY, context)
+        except Exception as exc:
+            logger.exception("Failed saving interview context: %s", exc)
+
     def start_session(self) -> None:
         if not interview_live.is_configured():
             messagebox.showinfo("Entrevista", "Configurá una clave Gemini en Ajustes antes de iniciar.")
             return
         context = self.context_box.get("1.0", tk.END).strip()
-        placeholder = "Pegá tu CV y agregá el puesto, la empresa y los puntos que querés destacar."
-        if context == placeholder:
+        if context == CONTEXT_PLACEHOLDER:
             context = ""
+        self._save_context(context)
+        assist_mode = MODE_LABELS.get(self.mode_var.get(), "entrevista")
+        if config.repository is not None:
+            try:
+                config.repository.set_setting(MODE_SETTING_KEY, assist_mode)
+            except Exception as exc:
+                logger.exception("Failed saving assist mode: %s", exc)
         source_type, source_value = self._source_map.get(self.source_var.get(), ("loopback", None))
         self._session_ended = False
         self.show_active()
@@ -368,7 +491,8 @@ class InterviewFrame(ctk.CTkFrame):
             language="en", out_dir=self.out_dir, source_type=source_type,
             source_val=source_value, translate=False,
             save_audio=self.record_var.get(), interview_mode=True,
-            interview_context=context, assist_queue=self.assist_queue,
+            interview_context=context, interview_assist_mode=assist_mode,
+            assist_queue=self.assist_queue,
         )
         self.candidate_listener.start(self._microphone_map.get(self.mic_var.get()))
 
@@ -377,16 +501,72 @@ class InterviewFrame(ctk.CTkFrame):
         self._session_ended = True
         self.show_closing()
         self._set_status("Finalizada")
+        # Worker thread finalizes the WAV header on close; give it a moment
+        # before registering the file in the history DB.
+        self.after(1500, self._register_in_history)
+
+    def _register_in_history(self) -> None:
+        """Save the finished session to the DB so Historial can list/play it."""
+        if config.repository is None:
+            return
+        import os
+        import datetime as dt
+
+        wav = getattr(self.worker, "current_wav_path", None)
+        txt = getattr(self.worker, "current_transcript_path", None)
+        # 44 bytes = bare WAV header; anything at or below it has no audio.
+        has_audio = bool(wav) and os.path.exists(wav) and os.path.getsize(wav) > 44
+        has_txt = bool(txt) and os.path.exists(txt)
+        if not has_audio and not has_txt:
+            return
+        transcript = ""
+        if has_txt:
+            try:
+                with open(txt, encoding="utf-8") as fh:
+                    transcript = fh.read().strip()
+            except Exception as exc:
+                logger.exception("Failed reading interview transcript: %s", exc)
+        secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
+        try:
+            config.repository.save(
+                TranscriptionRecord(
+                    file_path=str(wav if has_audio else txt),
+                    file_name=f"Entrevista {dt.datetime.now():%Y-%m-%d %H.%M}",
+                    duration=f"{secs // 60:02d}:{secs % 60:02d}",
+                    transcription=transcript,
+                    language="en",
+                )
+            )
+            self._set_status("Guardada en Historial")
+        except Exception as exc:
+            logger.exception("Failed saving interview to history: %s", exc)
 
     def stop_session(self) -> None:
         self.worker.stop()
         self.candidate_listener.stop()
 
-    def _append(self, box, role: str, text: str) -> None:
-        box.insert(tk.END, ("\n" if box.get("1.0", "end-1c") else "") + text)
+    # Widget line cap: full transcript is always in transcript_*.txt, so trimming
+    # the on-screen tail keeps the UI thread fast during long sessions.
+    _BOX_MAX_LINES = 1200
+    _BOX_TRIM_LINES = 300
+
+    def _append_batch(self, box, role: str, source: "queue.Queue[str]") -> None:
+        items = []
+        while not source.empty():
+            items.append(source.get_nowait())
+        if not items:
+            return
+        prefix = "" if box.get("1.0", "1.1") == "" else "\n"
+        box.insert(tk.END, prefix + "\n".join(items))
+        try:
+            if int(str(box.index("end-1c")).split(".")[0]) > self._BOX_MAX_LINES:
+                box.delete("1.0", f"{self._BOX_TRIM_LINES}.0")
+        except Exception:
+            pass
         box.see(tk.END)
         if role == "candidate":
-            self.worker.add_candidate_turn(text)
+            for text in items:
+                self.worker.add_candidate_turn(text)
 
     def _apply_assist(self, assist) -> None:
         self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
@@ -466,10 +646,8 @@ class InterviewFrame(ctk.CTkFrame):
     def _drain_queues(self) -> None:
         while not self.status_queue.empty():
             self._set_status(self.status_queue.get_nowait())
-        while not self.interviewer_queue.empty():
-            self._append(self.interviewer_box, "interviewer", self.interviewer_queue.get_nowait())
-        while not self.candidate_queue.empty():
-            self._append(self.candidate_box, "candidate", self.candidate_queue.get_nowait())
+        self._append_batch(self.interviewer_box, "interviewer", self.interviewer_queue)
+        self._append_batch(self.candidate_box, "candidate", self.candidate_queue)
         while not self.assist_queue.empty():
             self._apply_assist(self.assist_queue.get_nowait())
         self.after(100, self._drain_queues)

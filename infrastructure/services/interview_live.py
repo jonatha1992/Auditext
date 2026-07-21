@@ -31,26 +31,61 @@ LIVE_MODELS = [
     "gemini-2.5-flash-native-audio-preview-09-2025",
 ]
 
+# Latency-sensitive: lite models first, thinking disabled (see _coach_config).
 COACH_MODELS = [
+    os.getenv("GEMINI_COACH_MODEL", "").strip() or "gemini-2.5-flash-lite",
+    "gemini-flash-lite-latest",
     os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash",
     "gemini-2.0-flash-lite",
-    "gemini-2.5-flash",
-    "gemini-flash-lite-latest",
 ]
 
-_LIVE_SYSTEM = """You are listening to an English job interviewer via system audio.
+_LIVE_SYSTEM = """You are listening to an English speaker via system audio.
 Stay silent / minimal. Do not coach out loud. The client app will handle coaching separately.
 Acknowledge briefly only if needed; prefer no spoken reply.
 """
 
-_COACH_PROMPT = """Sos coach de entrevista para un candidato hispanohablante.
+DEFAULT_ASSIST_MODE = "entrevista"
 
-Contexto del candidato:
+_MODE_INSTRUCTIONS = {
+    "entrevista": (
+        "Sos coach de entrevista laboral para un candidato hispanohablante. "
+        "El INTERLOCUTOR es el entrevistador. Las respuestas deben ayudar al candidato "
+        "a impresionar: profesionales, concretas, apoyadas en su CV/contexto. "
+        "ideas_clave: puntos del CV o de la experiencia del candidato relevantes al turno."
+    ),
+    "practica": (
+        "Sos asistente de práctica de idioma para un hispanohablante que practica inglés. "
+        "El INTERLOCUTOR puede ser un profesor, tutor o compañero de práctica. "
+        "Si pide un ejercicio o ejemplo (p. ej. 'try saying that'), las respuestas deben CUMPLIR "
+        "el ejercicio con frases naturales en inglés. Si pregunta algo, las respuestas la contestan. "
+        "ideas_clave: tips breves de vocabulario, gramática o pronunciación relevantes al turno."
+    ),
+    "general": (
+        "Sos copiloto de conversación para un hispanohablante que conversa en inglés. "
+        "El INTERLOCUTOR puede ser cualquiera (reunión, llamada, charla). "
+        "Las respuestas deben ser naturales, adecuadas al contexto pegado por el usuario. "
+        "ideas_clave: puntos del contexto o de la conversación útiles para el próximo turno."
+    ),
+    "prueba_oral": (
+        "Sos asistente de PRÁCTICA para pruebas orales. El usuario estudia respondiendo en voz alta; "
+        "el INTERLOCUTOR hace de examinador. El contexto pegado es el temario o material de estudio. "
+        "REGLA CENTRAL: NO des respuestas completas — el usuario debe formular con sus palabras. "
+        "ideas_clave es el campo principal: 3 o 4 conceptos o palabras clave del temario que responden "
+        "la pregunta, ordenados como esqueleto de respuesta. "
+        "respuestas: SOLO arranques de frase cortos (máximo 6 palabras, terminados en ...) en el idioma "
+        "en que habla el interlocutor, p. ej. 'El concepto central es...' o 'The main idea is...'. "
+        "pregunta_es: glosa clara de la pregunta del examinador."
+    ),
+}
+
+_COACH_PROMPT = """{role_instructions}
+
+Contexto pegado por el usuario (CV, puesto, tema de práctica, apuntes...):
 ---
 {context}
 ---
 
-Texto reciente del ENTREVISTADOR (STT en inglés, puede tener ruido):
+Texto reciente del INTERLOCUTOR (STT en inglés, puede tener ruido):
 ---
 {utterance}
 ---
@@ -61,11 +96,12 @@ Conversación reciente, separada por rol:
 ---
 
 Respondé SOLO un JSON válido, sin markdown:
-{{"pregunta_es":"glosa clara en español","respuestas":["respuesta recomendada en inglés","alternativa breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"],"frase_puente":"frase breve en inglés para ganar tiempo o pedir aclaración"}}
+{{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada en inglés","alternativa breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"],"frase_puente":"frase breve en inglés para ganar tiempo o pedir aclaración"}}
 
 Reglas: exactamente 2 respuestas, 1-2 oraciones cada una, naturales para decir en voz alta.
+Respondé SIEMPRE que el turno tenga contenido: pregunta, instrucción, ejercicio o comentario.
+Devolvé pregunta_es vacía y respuestas [] SOLO si el texto es ruido ininteligible.
 Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
-Si el texto es ruido o no aporta, devolve pregunta_es vacía y respuestas [].
 """
 
 
@@ -128,15 +164,43 @@ def is_configured() -> bool:
     return gemini_keys.is_configured()
 
 
+# Reuse one client per key: avoids TLS/session setup on every coach call.
+_client_cache: dict[str, object] = {}
+
+
+def _get_client(genai, api_key: str):
+    client = _client_cache.get(api_key)
+    if client is None:
+        client = genai.Client(api_key=api_key)
+        _client_cache[api_key] = client
+    return client
+
+
+def _coach_config(model: str):
+    """Low-latency generation config. thinking_budget=0 skips the multi-second
+    default 'thinking' phase on 2.5+ models; 2.0 models reject the field."""
+    from google.genai import types
+
+    kwargs = dict(
+        temperature=0.4,
+        max_output_tokens=400,
+        response_mime_type="application/json",
+    )
+    if "2.0" not in model:
+        kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
+    return types.GenerateContentConfig(**kwargs)
+
+
 def coach_assist(
     context: str,
     utterance: str,
     api_key: str | None = None,
     conversation_history: str = "",
+    mode: str = DEFAULT_ASSIST_MODE,
 ) -> InterviewAssist | None:
     """Sync generate_content coach call (JSON). Tries keys + model fallbacks."""
     utterance = (utterance or "").strip()
-    if len(utterance.split()) < 3:
+    if len(utterance.split()) < 2:
         return None
     try:
         from google import genai
@@ -144,6 +208,7 @@ def coach_assist(
         return None
 
     prompt = _COACH_PROMPT.format(
+        role_instructions=_MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS[DEFAULT_ASSIST_MODE]),
         context=(context or "").strip() or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
@@ -164,10 +229,12 @@ def coach_assist(
 
     last_exc = None
     for key in keys:
-        client = genai.Client(api_key=key)
+        client = _get_client(genai, key)
         for model in models:
             try:
-                resp = client.models.generate_content(model=model, contents=prompt)
+                resp = client.models.generate_content(
+                    model=model, contents=prompt, config=_coach_config(model)
+                )
                 return parse_assist_text(resp.text or "")
             except Exception as exc:
                 last_exc = exc
@@ -194,8 +261,10 @@ class InterviewLiveSession:
         on_transcript: Callable[[str], None],
         on_assist: Callable[[InterviewAssist], None],
         on_status: Callable[[str], None],
+        mode: str = DEFAULT_ASSIST_MODE,
     ):
         self._context = (context or "").strip() or "(sin contexto del candidato)"
+        self._mode = mode if mode in _MODE_INSTRUCTIONS else DEFAULT_ASSIST_MODE
         self._on_transcript = on_transcript
         self._on_assist = on_assist
         self._on_status = on_status
@@ -207,6 +276,7 @@ class InterviewLiveSession:
         self._api_key: str | None = None
         self._coach_lock = asyncio.Lock()
         self._coach_task: asyncio.Task | None = None
+        self._pending_utterance: str | None = None
         self._history: list[str] = []
         self._history_lock = threading.Lock()
 
@@ -422,43 +492,49 @@ class InterviewLiveSession:
                 with self._history_lock:
                     self._history.append(f"ENTREVISTADOR: {buf}")
                     self._history = self._history[-12:]
-                # Debounce overlapping coach calls: cancel previous if still running
+                # Latest-wins: never cancel an in-flight coach call. If one is
+                # running, stash the newest utterance; _run_coach drains it.
                 if self._coach_task and not self._coach_task.done():
-                    self._coach_task.cancel()
-                self._coach_task = asyncio.create_task(self._run_coach(buf))
+                    self._pending_utterance = buf
+                else:
+                    self._coach_task = asyncio.create_task(self._run_coach(buf))
 
     async def _run_coach(self, utterance: str) -> None:
         async with self._coach_lock:
-            if self._stop.is_set() or not self._api_key:
-                return
-            self._on_status("Generando sugerencias...")
-            try:
-                with self._history_lock:
-                    history = "\n".join(self._history[-12:])
-                assist = await asyncio.to_thread(
-                    coach_assist,
-                    self._context,
-                    utterance,
-                    self._api_key,
-                    history,
-                )
-                if assist:
-                    self._on_assist(assist)
-                    self._on_status(
-                        f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
-                    )
+            while True:
+                if self._stop.is_set() or not self._api_key:
+                    return
+                await self._coach_once(utterance)
+                if self._pending_utterance is None:
+                    return
+                utterance, self._pending_utterance = self._pending_utterance, None
+
+    async def _coach_once(self, utterance: str) -> None:
+        self._on_status("Generando sugerencias...")
+        try:
+            with self._history_lock:
+                history = "\n".join(self._history[-6:])
+            assist = await asyncio.to_thread(
+                coach_assist,
+                self._context,
+                utterance,
+                self._api_key,
+                history,
+                self._mode,
+            )
+            if assist:
+                self._on_assist(assist)
+            self._on_status(
+                f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
+            )
+        except Exception as exc:
+            if gemini_keys.pool.is_quota_error(exc):
+                nxt = gemini_keys.pool.mark_exhausted(self._api_key)
+                if nxt:
+                    self._api_key = nxt
+                    self._on_status(f"Cuota coach: rotando a {gemini_keys.pool.current_label()}")
                 else:
-                    self._on_status(
-                        f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
-                    )
-            except Exception as exc:
-                if gemini_keys.pool.is_quota_error(exc):
-                    nxt = gemini_keys.pool.mark_exhausted(self._api_key)
-                    if nxt:
-                        self._api_key = nxt
-                        self._on_status(f"Cuota coach: rotando a {gemini_keys.pool.current_label()}")
-                    else:
-                        self._on_status("Cuota agotada en todas las keys (coach)")
-                else:
-                    logger.exception("Coach call failed: %s", exc)
-                    self._on_status(f"Error coach: {exc}")
+                    self._on_status("Cuota agotada en todas las keys (coach)")
+            else:
+                logger.exception("Coach call failed: %s", exc)
+                self._on_status(f"Error coach: {exc}")

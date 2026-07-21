@@ -23,3 +23,6 @@ SpeechRecognition>=3.17.0
 pyaudio>=0.2.14
 python-docx
 
+# CV upload in the interview tab (PDF text extraction).
+pypdf
+

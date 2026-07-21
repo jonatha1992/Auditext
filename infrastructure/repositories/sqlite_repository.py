@@ -28,6 +28,12 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS app_settings (
+                    key TEXT PRIMARY KEY,
+                    value TEXT
+                )
+            """)
             conn.commit()
             conn.close()
             self.logger.info("Base de datos SQLite inicializada exitosamente.")
@@ -234,3 +240,30 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
             self.logger.info(f"Resumen actualizado para: {file_path}")
         except Exception as e:
             self.logger.error(f"Error al actualizar resumen: {e}")
+
+    def get_setting(self, key: str) -> str | None:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("SELECT value FROM app_settings WHERE key = ?", (key,))
+            row = cursor.fetchone()
+            conn.close()
+            return row[0] if row else None
+        except Exception as e:
+            self.logger.error(f"Error al leer setting '{key}': {e}")
+            return None
+
+    def set_setting(self, key: str, value: str) -> None:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO app_settings (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+                (key, value),
+            )
+            conn.commit()
+            conn.close()
+            self.logger.info(f"Setting '{key}' guardado.")
+        except Exception as e:
+            self.logger.error(f"Error al guardar setting '{key}': {e}")

@@ -26,7 +26,10 @@ COLOR_BORDER = "#2A2B36"      # Card border outline
 
 
 def _setup_theme(ventana):
-    ventana.configure(fg_color=COLOR_BG)
+    try:
+        ventana.configure(fg_color=COLOR_BG)  # ctk.CTk (production window)
+    except tk.TclError:
+        ventana.configure(bg=COLOR_BG)  # plain tk.Tk (headless build check)
     style = ttk.Style(ventana)
     try:
         style.theme_use("clam")

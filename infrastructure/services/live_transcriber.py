@@ -127,6 +127,7 @@ class Transcriber:
         self._save_audio = True
         self._interview_mode = False
         self._interview_context = ""
+        self._interview_assist_mode = interview_live.DEFAULT_ASSIST_MODE
         self._live_session: interview_live.InterviewLiveSession | None = None
         self._assist_queue: "queue.Queue | None" = None
         self._audio_q: "queue.Queue[np.ndarray]" = queue.Queue(maxsize=200)
@@ -150,6 +151,7 @@ class Transcriber:
         save_audio=True,
         interview_mode=False,
         interview_context="",
+        interview_assist_mode=interview_live.DEFAULT_ASSIST_MODE,
         assist_queue=None,
     ):
         if self._thread and self._thread.is_alive():
@@ -163,6 +165,7 @@ class Transcriber:
         self._save_audio = save_audio
         self._interview_mode = bool(interview_mode)
         self._interview_context = interview_context or ""
+        self._interview_assist_mode = interview_assist_mode
         self._assist_queue = assist_queue
         self._live_session = None
         self._stop.clear()
@@ -625,6 +628,7 @@ class Transcriber:
             on_transcript=on_transcript,
             on_assist=on_assist,
             on_status=on_status,
+            mode=self._interview_assist_mode,
         )
         self._live_session = session
         session.start()
