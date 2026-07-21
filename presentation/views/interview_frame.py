@@ -35,6 +35,9 @@ ACCENT = "#7000FF"
 ACCENT_HOVER = "#5900CC"
 SUCCESS = "#4EC98A"
 ERROR = "#E0506A"
+INTERVIEWER = "#4DA3FF"
+CANDIDATE = "#4EC98A"
+REC = "#E0506A"
 
 CONTEXT_SETTING_KEY = "interview_context"
 CONTEXT_PLACEHOLDER = "Pegá tu CV o el contexto de la sesión (puesto, empresa, tema a practicar...)."
@@ -141,7 +144,7 @@ class InterviewFrame(ctk.CTkFrame):
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill=tk.X, padx=24, pady=(20, 8))
         ctk.CTkLabel(
-            header, text="Entrevista", font=("Segoe UI Semibold", 22),
+            header, text="🎯  Entrevista", font=("Segoe UI Semibold", 22),
             text_color=TEXT,
         ).pack(side=tk.LEFT)
         self.status_label = ctk.CTkLabel(
@@ -151,7 +154,7 @@ class InterviewFrame(ctk.CTkFrame):
         self.status_label.pack(side=tk.RIGHT)
         ctk.CTkLabel(
             self,
-            text="Escuchá al entrevistador, seguí el hilo y respondé con mayor fluidez.",
+            text="Escuchá al entrevistador, seguí el hilo y respondé con mayor fluidez. El audio se guarda para reproducirlo en Historial.",
             font=("Segoe UI", 12), text_color=MUTED,
         ).pack(anchor=tk.W, padx=24, pady=(0, 10))
 
@@ -162,20 +165,20 @@ class InterviewFrame(ctk.CTkFrame):
             self, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1
         )
         ctk.CTkLabel(
-            self.prep, text="1. Prepará la entrevista",
+            self.prep, text="①  Prepará la entrevista",
             font=("Segoe UI Semibold", 17), text_color=TEXT,
         ).pack(anchor=tk.W, padx=18, pady=(16, 2))
         ctk.CTkLabel(
             self.prep,
-            text="El modo y el contexto personalizan las respuestas. Se guardan al iniciar la sesión.",
+            text="Elegí el modo, pegá tu CV y listo. Al terminar, la entrevista queda en Historial con audio para escuchar.",
             font=("Segoe UI", 11), text_color=MUTED,
         ).pack(anchor=tk.W, padx=18, pady=(0, 10))
 
         mode_row = ctk.CTkFrame(self.prep, fg_color="transparent")
         mode_row.pack(fill=tk.X, padx=18, pady=(0, 10))
         ctk.CTkLabel(
-            mode_row, text="MODO DE SESIÓN",
-            font=("Segoe UI Semibold", 9), text_color=MUTED,
+            mode_row, text="🎛  MODO DE SESIÓN",
+            font=("Segoe UI Semibold", 9), text_color="#A78BFA",
         ).pack(anchor=tk.W)
         self.mode_var = tk.StringVar(value=self._load_saved_mode_label())
         self.mode_combo = ctk.CTkComboBox(
@@ -189,12 +192,12 @@ class InterviewFrame(ctk.CTkFrame):
         context_header = ctk.CTkFrame(self.prep, fg_color="transparent")
         context_header.pack(fill=tk.X, padx=18, pady=(0, 4))
         ctk.CTkLabel(
-            context_header, text="CV / CONTEXTO",
-            font=("Segoe UI Semibold", 9), text_color=MUTED,
+            context_header, text="📄  CV / CONTEXTO",
+            font=("Segoe UI Semibold", 9), text_color="#F6AD55",
         ).pack(side=tk.LEFT)
         ctk.CTkButton(
-            context_header, text="Cargar CV desde archivo…",
-            command=self._upload_cv_file, width=180, height=24,
+            context_header, text="📂  Cargar CV…",
+            command=self._upload_cv_file, width=140, height=24,
             fg_color=PANEL_DARK, hover_color=ACCENT, border_color=BORDER,
             border_width=1, font=("Segoe UI", 11),
         ).pack(side=tk.RIGHT)
@@ -212,12 +215,12 @@ class InterviewFrame(ctk.CTkFrame):
         sources.grid_columnconfigure(0, weight=1)
         sources.grid_columnconfigure(1, weight=1)
         ctk.CTkLabel(
-            sources, text="ENTREVISTADOR · AUDIO DEL SISTEMA",
-            font=("Segoe UI Semibold", 9), text_color=MUTED,
+            sources, text="🎧  ENTREVISTADOR · AUDIO DEL SISTEMA",
+            font=("Segoe UI Semibold", 9), text_color=INTERVIEWER,
         ).grid(row=0, column=0, sticky="w", padx=(0, 8))
         ctk.CTkLabel(
-            sources, text="VOS · MICRÓFONO",
-            font=("Segoe UI Semibold", 9), text_color=MUTED,
+            sources, text="🎤  VOS · MICRÓFONO",
+            font=("Segoe UI Semibold", 9), text_color=CANDIDATE,
         ).grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.source_var = tk.StringVar(value=WHOLE_SYSTEM_LABEL)
         self.source_combo = ctk.CTkComboBox(
@@ -238,21 +241,23 @@ class InterviewFrame(ctk.CTkFrame):
         consent.pack(fill=tk.X, padx=18, pady=14)
         ctk.CTkLabel(
             consent,
-            text="🌐 Gemini procesa el audio del entrevistador. Tu voz se transcribe localmente y se envía como texto para mantener el contexto.",
+            text="🌐  Gemini procesa el audio del entrevistador. Tu voz se transcribe localmente y se envía como texto para mantener el contexto.",
             wraplength=840, justify=tk.LEFT, font=("Segoe UI", 11), text_color=MUTED,
         ).pack(anchor=tk.W, padx=12, pady=10)
-        self.record_var = tk.BooleanVar(value=False)
+        # On by default so Historial can play the interview back.
+        self.record_var = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(
-            self.prep, text="Grabar audio del entrevistador (opcional)",
-            variable=self.record_var, fg_color=ACCENT, hover_color=ACCENT_HOVER,
+            self.prep,
+            text="🎙  Guardar audio del entrevistador (activado — podés reproducirlo en Historial)",
+            variable=self.record_var, fg_color=REC, hover_color="#C04058",
             border_color=BORDER, text_color=TEXT,
         ).pack(anchor=tk.W, padx=18)
         ctk.CTkLabel(
-            self.prep, text="Recomendado: usá auriculares para evitar eco entre el sistema y el micrófono.",
+            self.prep, text="🎧  Tip: usá auriculares para evitar eco entre el sistema y el micrófono.",
             font=("Segoe UI", 10), text_color=MUTED,
         ).pack(anchor=tk.W, padx=18, pady=(6, 12))
         ctk.CTkButton(
-            self.prep, text="Iniciar entrevista", command=self.start_session,
+            self.prep, text="▶  Iniciar entrevista", command=self.start_session,
             height=40, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             font=("Segoe UI Semibold", 12),
         ).pack(anchor=tk.E, padx=18, pady=(0, 18))
@@ -262,25 +267,30 @@ class InterviewFrame(ctk.CTkFrame):
         top = ctk.CTkFrame(self.active, fg_color="transparent")
         top.pack(fill=tk.X, padx=24, pady=(0, 8))
         ctk.CTkLabel(
-            top, text="2. Sesión activa", font=("Segoe UI Semibold", 16), text_color=TEXT
+            top, text="②  Sesión activa", font=("Segoe UI Semibold", 16), text_color=SUCCESS
         ).pack(side=tk.LEFT)
         ctk.CTkButton(
-            top, text="Detener", width=90, fg_color="#B8324A", hover_color="#96283D",
+            top, text="⏹  Detener", width=110, fg_color="#B8324A", hover_color="#96283D",
             command=self.finish_session,
         ).pack(side=tk.RIGHT)
 
         self.question_label = self._section(
-            self.active, "PREGUNTA EN ESPAÑOL", "Esperando al entrevistador...", 17
+            self.active, "🗣  PREGUNTA EN ESPAÑOL", "Esperando al entrevistador...", 17,
+            title_color="#F6AD55",
         )
         replies = ctk.CTkFrame(self.active, fg_color="transparent")
         replies.pack(fill=tk.X, padx=24, pady=6)
         replies.grid_columnconfigure(0, weight=1)
         replies.grid_columnconfigure(1, weight=1)
         self.reply_buttons = []
-        for i, title in enumerate(("RESPUESTA RECOMENDADA", "ALTERNATIVA BREVE")):
+        reply_titles = (
+            ("✨  RESPUESTA RECOMENDADA", ACCENT),
+            ("⚡  ALTERNATIVA BREVE", "#F6E05E"),
+        )
+        for i, (title, title_color) in enumerate(reply_titles):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
             card.grid(row=0, column=i, sticky="nsew", padx=(0, 6) if i == 0 else (6, 0))
-            ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=MUTED).pack(anchor=tk.W, padx=12, pady=(10, 4))
+            ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=title_color).pack(anchor=tk.W, padx=12, pady=(10, 4))
             btn = ctk.CTkButton(
                 card, text="Aparecerá cuando detectemos una pregunta", height=74,
                 anchor="w", fg_color=PANEL_DARK,
@@ -295,23 +305,39 @@ class InterviewFrame(ctk.CTkFrame):
         support.pack(fill=tk.X, padx=24, pady=6)
         support.grid_columnconfigure(0, weight=1)
         support.grid_columnconfigure(1, weight=1)
-        self.ideas_label = self._small_card(support, 0, "IDEAS CLAVE", "Se adaptarán a tu CV y al hilo de la conversación.")
+        self.ideas_label = self._small_card(
+            support, 0, "💡  IDEAS CLAVE",
+            "Se adaptarán a tu CV y al hilo de la conversación.",
+            title_color="#F6E05E",
+        )
+        bridge_card = ctk.CTkFrame(support, fg_color=PANEL, corner_radius=10, border_color=BORDER, border_width=1)
+        bridge_card.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        ctk.CTkLabel(
+            bridge_card, text="🛟  FRASE PUENTE",
+            font=("Segoe UI Semibold", 9), text_color="#63B3ED",
+        ).pack(anchor=tk.W, padx=12, pady=(9, 2))
         self.bridge_button = ctk.CTkButton(
-            support, text="Could you give me a moment to think?", height=58,
-            anchor="w", fg_color=PANEL, border_width=1,
-            border_color=BORDER, hover_color="#20212D",
+            bridge_card, text="Could you give me a moment to think?", height=46,
+            anchor="w", fg_color=PANEL_DARK, border_width=0,
+            hover_color="#20212D",
             command=self._copy_bridge,
         )
         self.bridge_button._bridge_text = "Could you give me a moment to think?"
-        self.bridge_button.grid(row=0, column=1, sticky="nsew", padx=(6, 0))
+        self.bridge_button.pack(fill=tk.X, padx=12, pady=(0, 10))
 
         transcripts = ctk.CTkFrame(self.active, fg_color="transparent")
         transcripts.pack(fill=tk.BOTH, expand=True, padx=24, pady=(6, 18))
         transcripts.grid_columnconfigure(0, weight=1)
         transcripts.grid_columnconfigure(1, weight=1)
         transcripts.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(transcripts, text="ENTREVISTADOR", font=("Segoe UI Semibold", 9), text_color=MUTED).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(transcripts, text="VOS", font=("Segoe UI Semibold", 9), text_color=MUTED).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        ctk.CTkLabel(
+            transcripts, text="🎧  ENTREVISTADOR", font=("Segoe UI Semibold", 9),
+            text_color=INTERVIEWER,
+        ).grid(row=0, column=0, sticky="w")
+        ctk.CTkLabel(
+            transcripts, text="🎤  VOS", font=("Segoe UI Semibold", 9),
+            text_color=CANDIDATE,
+        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
         self.interviewer_box = self._transcript_box(transcripts)
         self.interviewer_box.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(4, 0))
         self.candidate_box = self._transcript_box(transcripts)
@@ -319,27 +345,45 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _build_closing(self) -> None:
         self.closing = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
-        ctk.CTkLabel(self.closing, text="3. Entrevista finalizada", font=("Segoe UI Semibold", 18), text_color=TEXT).pack(pady=(24, 6))
+        ctk.CTkLabel(
+            self.closing, text="③  Entrevista lista",
+            font=("Segoe UI Semibold", 18), text_color=SUCCESS,
+        ).pack(pady=(24, 6))
         self.closing_summary = ctk.CTkLabel(self.closing, text="", font=("Segoe UI", 12), text_color=MUTED)
-        self.closing_summary.pack(pady=(0, 18))
+        self.closing_summary.pack(pady=(0, 8))
+        self.closing_hint = ctk.CTkLabel(
+            self.closing,
+            text="🎙  El audio se está guardando en Historial para que puedas escucharlo.",
+            font=("Segoe UI", 11), text_color=SUCCESS,
+        )
+        self.closing_hint.pack(pady=(0, 14))
         actions = ctk.CTkFrame(self.closing, fg_color="transparent")
         actions.pack(pady=(0, 24))
-        ctk.CTkButton(actions, text="Guardar conversación", command=self.save_session, fg_color=ACCENT, hover_color=ACCENT_HOVER).pack(side=tk.LEFT, padx=6)
-        ctk.CTkButton(actions, text="Nueva entrevista", command=self.reset_session, fg_color=PANEL_DARK, hover_color="#20212D").pack(side=tk.LEFT, padx=6)
-        ctk.CTkButton(actions, text="Descartar", command=self.discard_session, fg_color="transparent", border_width=1, border_color=BORDER).pack(side=tk.LEFT, padx=6)
+        ctk.CTkButton(
+            actions, text="💾  Guardar con nombre", command=self.save_session,
+            fg_color=ACCENT, hover_color=ACCENT_HOVER,
+        ).pack(side=tk.LEFT, padx=6)
+        ctk.CTkButton(
+            actions, text="🔄  Nueva entrevista", command=self.reset_session,
+            fg_color=PANEL_DARK, hover_color="#20212D",
+        ).pack(side=tk.LEFT, padx=6)
+        ctk.CTkButton(
+            actions, text="🗑  Descartar", command=self.discard_session,
+            fg_color="transparent", border_width=1, border_color=BORDER,
+        ).pack(side=tk.LEFT, padx=6)
 
-    def _section(self, parent, title, text, size):
+    def _section(self, parent, title, text, size, title_color: str = MUTED):
         card = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
         card.pack(fill=tk.X, padx=24, pady=6)
-        ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=MUTED).pack(anchor=tk.W, padx=14, pady=(10, 3))
+        ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=title_color).pack(anchor=tk.W, padx=14, pady=(10, 3))
         label = ctk.CTkLabel(card, text=text, wraplength=850, justify=tk.LEFT, anchor="w", font=("Segoe UI Semibold", size), text_color=TEXT)
         label.pack(fill=tk.X, padx=14, pady=(0, 12))
         return label
 
-    def _small_card(self, parent, column, title, text):
+    def _small_card(self, parent, column, title, text, title_color: str = MUTED):
         card = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=10, border_color=BORDER, border_width=1)
         card.grid(row=0, column=column, sticky="nsew", padx=(0, 6))
-        ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=MUTED).pack(anchor=tk.W, padx=12, pady=(9, 2))
+        ctk.CTkLabel(card, text=title, font=("Segoe UI Semibold", 9), text_color=title_color).pack(anchor=tk.W, padx=12, pady=(9, 2))
         label = ctk.CTkLabel(card, text=text, wraplength=390, justify=tk.LEFT, anchor="w", font=("Segoe UI", 11), text_color=TEXT)
         label.pack(fill=tk.X, padx=12, pady=(0, 10))
         return label
@@ -357,6 +401,10 @@ class InterviewFrame(ctk.CTkFrame):
         self.prep.pack_forget()
         self.closing.pack_forget()
         self.active.pack(fill=tk.BOTH, expand=True)
+        if self.record_var.get():
+            self._set_status("Grabando audio", REC)
+        else:
+            self._set_status("Sesión activa", ACCENT)
 
     def show_closing(self) -> None:
         self.prep.pack_forget()
@@ -364,7 +412,125 @@ class InterviewFrame(ctk.CTkFrame):
         self.closing.pack(fill=tk.X, padx=24, pady=(30, 20))
         interviewer_words = len(self.interviewer_box.get("1.0", tk.END).split())
         candidate_words = len(self.candidate_box.get("1.0", tk.END).split())
-        self.closing_summary.configure(text=f"Entrevistador: {interviewer_words} palabras · Vos: {candidate_words} palabras")
+        self.closing_summary.configure(
+            text=f"🎧 Entrevistador: {interviewer_words} palabras · 🎤 Vos: {candidate_words} palabras"
+        )
+        recording = bool(self.record_var.get())
+        self.closing_hint.configure(
+            text=(
+                "🎙  El audio se está guardando en Historial para que puedas escucharlo."
+                if recording
+                else "📄  Solo se guardará el texto. Activá «Guardar audio» la próxima vez para poder reproducir."
+            ),
+            text_color=SUCCESS if recording else MUTED,
+        )
+
+    def _combined_transcript(self) -> str:
+        interviewer = self.interviewer_box.get("1.0", tk.END).strip()
+        candidate = self.candidate_box.get("1.0", tk.END).strip()
+        if not interviewer and not candidate:
+            return ""
+        return f"ENTREVISTADOR\n{interviewer}\n\nCANDIDATO\n{candidate}\n"
+
+    def _audio_ready(self) -> tuple[bool, object | None]:
+        import os
+
+        wav = getattr(self.worker, "current_wav_path", None)
+        has_audio = bool(wav) and os.path.exists(wav) and os.path.getsize(wav) > 44
+        return has_audio, wav
+
+    def _register_in_history(self) -> None:
+        """Save the finished session to the DB so Historial can list/play it."""
+        if config.repository is None:
+            return
+        import os
+        import datetime as dt
+
+        has_audio, wav = self._audio_ready()
+        txt = getattr(self.worker, "current_transcript_path", None)
+        has_txt = bool(txt) and os.path.exists(txt)
+        transcript = self._combined_transcript()
+        if not transcript and has_txt:
+            try:
+                with open(txt, encoding="utf-8") as fh:
+                    transcript = fh.read().strip()
+            except Exception as exc:
+                logger.exception("Failed reading interview transcript: %s", exc)
+        if not has_audio and not transcript and not has_txt:
+            self._set_status("Sin audio ni texto para guardar", ERROR)
+            return
+        # Prefer WAV so Historial enables playback; fall back to transcript file.
+        if has_audio:
+            file_path = str(wav)
+        elif has_txt:
+            file_path = str(txt)
+        else:
+            self.out_dir.mkdir(parents=True, exist_ok=True)
+            stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+            file_path = str(self.out_dir / f"entrevista_{stamp}.txt")
+            Path(file_path).write_text(transcript, encoding="utf-8")
+        secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
+        try:
+            config.repository.save(
+                TranscriptionRecord(
+                    file_path=file_path,
+                    file_name=f"Entrevista {dt.datetime.now():%Y-%m-%d %H.%M}",
+                    duration=f"{secs // 60:02d}:{secs % 60:02d}",
+                    transcription=transcript,
+                    language="en",
+                )
+            )
+            self._set_status(
+                "Guardada en Historial (con audio)" if has_audio else "Guardada en Historial",
+                SUCCESS,
+            )
+            if hasattr(self, "closing_hint"):
+                self.closing_hint.configure(
+                    text=(
+                        "✅  Lista en Historial — abrí la pestaña y tocá ▶ para escuchar."
+                        if has_audio
+                        else "✅  Texto guardado en Historial (sin audio para reproducir)."
+                    ),
+                    text_color=SUCCESS if has_audio else MUTED,
+                )
+        except Exception as exc:
+            logger.exception("Failed saving interview to history: %s", exc)
+            self._set_status("Error al guardar", ERROR)
+
+    def save_session(self) -> None:
+        combined = self._combined_transcript()
+        if not combined:
+            messagebox.showwarning("Entrevista", "No hay conversación para guardar.")
+            return
+        dialog = ctk.CTkInputDialog(text="Nombre de la entrevista:", title="Guardar entrevista")
+        name = (dialog.get_input() or "").strip()
+        if not name:
+            return
+        safe = re.sub(r'[\\/*?:"<>|]', "_", name)
+        self.out_dir.mkdir(parents=True, exist_ok=True)
+        path = Path(self.out_dir) / f"{safe}.txt"
+        path.write_text(combined, encoding="utf-8")
+        has_audio, wav = self._audio_ready()
+        # Point Historial at the WAV when available so ▶ works.
+        file_path = str(wav) if has_audio else str(path)
+        secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
+        if config.repository is None:
+            messagebox.showerror("Entrevista", "No hay base de datos disponible.")
+            return
+        config.repository.save(TranscriptionRecord(
+            file_path=file_path,
+            file_name=safe,
+            duration=f"{secs // 60:02d}:{secs % 60:02d}",
+            transcription=combined,
+            language="en",
+        ))
+        self._set_status("Guardada", SUCCESS)
+        msg = (
+            "Guardada en Historial. Podés reproducir el audio con ▶."
+            if has_audio
+            else "Guardada en Historial (solo texto; no hay audio para reproducir)."
+        )
+        messagebox.showinfo("Entrevista", msg)
 
     def refresh_devices(self) -> None:
         self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
@@ -505,42 +671,6 @@ class InterviewFrame(ctk.CTkFrame):
         # before registering the file in the history DB.
         self.after(1500, self._register_in_history)
 
-    def _register_in_history(self) -> None:
-        """Save the finished session to the DB so Historial can list/play it."""
-        if config.repository is None:
-            return
-        import os
-        import datetime as dt
-
-        wav = getattr(self.worker, "current_wav_path", None)
-        txt = getattr(self.worker, "current_transcript_path", None)
-        # 44 bytes = bare WAV header; anything at or below it has no audio.
-        has_audio = bool(wav) and os.path.exists(wav) and os.path.getsize(wav) > 44
-        has_txt = bool(txt) and os.path.exists(txt)
-        if not has_audio and not has_txt:
-            return
-        transcript = ""
-        if has_txt:
-            try:
-                with open(txt, encoding="utf-8") as fh:
-                    transcript = fh.read().strip()
-            except Exception as exc:
-                logger.exception("Failed reading interview transcript: %s", exc)
-        secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
-        try:
-            config.repository.save(
-                TranscriptionRecord(
-                    file_path=str(wav if has_audio else txt),
-                    file_name=f"Entrevista {dt.datetime.now():%Y-%m-%d %H.%M}",
-                    duration=f"{secs // 60:02d}:{secs % 60:02d}",
-                    transcription=transcript,
-                    language="en",
-                )
-            )
-            self._set_status("Guardada en Historial")
-        except Exception as exc:
-            logger.exception("Failed saving interview to history: %s", exc)
-
     def stop_session(self) -> None:
         self.worker.stop()
         self.candidate_listener.stop()
@@ -596,28 +726,6 @@ class InterviewFrame(ctk.CTkFrame):
         self.clipboard_clear()
         self.clipboard_append(text)
         self._set_status("Frase copiada", SUCCESS)
-
-    def save_session(self) -> None:
-        interviewer = self.interviewer_box.get("1.0", tk.END).strip()
-        candidate = self.candidate_box.get("1.0", tk.END).strip()
-        if not interviewer and not candidate:
-            messagebox.showwarning("Entrevista", "No hay conversación para guardar.")
-            return
-        dialog = ctk.CTkInputDialog(text="Nombre de la entrevista:", title="Guardar entrevista")
-        name = (dialog.get_input() or "").strip()
-        if not name:
-            return
-        safe = re.sub(r'[\\/*?:"<>|]', "_", name)
-        self.out_dir.mkdir(parents=True, exist_ok=True)
-        path = Path(self.out_dir) / f"{safe}.txt"
-        combined = f"ENTREVISTADOR\n{interviewer}\n\nCANDIDATO\n{candidate}\n"
-        path.write_text(combined, encoding="utf-8")
-        config.repository.save(TranscriptionRecord(
-            file_path=str(path), file_name=safe, duration="00:00",
-            transcription=combined, language="en",
-        ))
-        self._set_status("Guardada", SUCCESS)
-        messagebox.showinfo("Entrevista", "La conversación se agregó al Historial.")
 
     def discard_session(self) -> None:
         temp = getattr(self.worker, "current_transcript_path", None)

@@ -15,13 +15,13 @@ class AjustesFrame(ctk.CTkFrame):
         header_frame.pack(fill=tk.X, padx=24, pady=(20, 10))
 
         label_titulo = ctk.CTkLabel(
-            header_frame, text="Ajustes",
+            header_frame, text="⚙  Ajustes",
             font=("Segoe UI Semibold", 22), text_color="#FFFFFF"
         )
         label_titulo.pack(anchor=tk.W)
 
         label_subtitulo = ctk.CTkLabel(
-            header_frame, text="Configurá los parámetros del sistema y el modelo de transcripción.",
+            header_frame, text="🛠  Configurá el modelo, las carpetas y el historial.",
             font=("Segoe UI", 12), text_color="#8A8F9E"
         )
         label_subtitulo.pack(anchor=tk.W, pady=(2, 0))
@@ -37,8 +37,8 @@ class AjustesFrame(ctk.CTkFrame):
         card_model.pack(fill=tk.X, pady=(0, 16))
 
         ctk.CTkLabel(
-            card_model, text="MODELO DE TRANSCRIPCIÓN (WHISPER)",
-            font=("Segoe UI Semibold", 11), text_color="#8A8F9E"
+            card_model, text="🧠  MODELO DE TRANSCRIPCIÓN (WHISPER)",
+            font=("Segoe UI Semibold", 11), text_color="#A78BFA"
         ).pack(anchor=tk.W, padx=16, pady=(16, 12))
 
         # Model options combo
@@ -78,8 +78,8 @@ class AjustesFrame(ctk.CTkFrame):
         card_live.pack(fill=tk.X, pady=(0, 16))
 
         ctk.CTkLabel(
-            card_live, text="CONFIGURACIÓN DE GRABACIONES EN VIVO",
-            font=("Segoe UI Semibold", 11), text_color="#8A8F9E"
+            card_live, text="🎙  CONFIGURACIÓN DE GRABACIONES EN VIVO",
+            font=("Segoe UI Semibold", 11), text_color="#4DA3FF"
         ).pack(anchor=tk.W, padx=16, pady=(16, 12))
 
         # Path browser row
@@ -96,9 +96,9 @@ class AjustesFrame(ctk.CTkFrame):
         self.path_entry.configure(state="readonly")
 
         btn_browse = ctk.CTkButton(
-            path_row, text="Examinar...", font=("Segoe UI Semibold", 12),
-            fg_color="#1A1B26", text_color="#FFFFFF", hover_color="#2A2B36",
-            width=90, height=36, corner_radius=8, command=self.on_browse_path
+            path_row, text="📂  Examinar…", font=("Segoe UI Semibold", 12),
+            fg_color="#1A1B26", text_color="#63B3ED", hover_color="#2A2B36",
+            width=110, height=36, corner_radius=8, command=self.on_browse_path
         )
         btn_browse.pack(side=tk.RIGHT)
 
@@ -109,8 +109,8 @@ class AjustesFrame(ctk.CTkFrame):
         card_db.pack(fill=tk.X, pady=(0, 16))
 
         ctk.CTkLabel(
-            card_db, text="HISTORIAL Y BASE DE DATOS",
-            font=("Segoe UI Semibold", 11), text_color="#8A8F9E"
+            card_db, text="🗄  HISTORIAL Y BASE DE DATOS",
+            font=("Segoe UI Semibold", 11), text_color="#F6AD55"
         ).pack(anchor=tk.W, padx=16, pady=(16, 12))
 
         self.label_db_stats = ctk.CTkLabel(
@@ -120,9 +120,9 @@ class AjustesFrame(ctk.CTkFrame):
         self.label_db_stats.pack(anchor=tk.W, padx=16, pady=(0, 12))
 
         btn_clear_db = ctk.CTkButton(
-            card_db, text="Limpiar Historial", font=("Segoe UI Semibold", 12),
+            card_db, text="🗑  Limpiar Historial", font=("Segoe UI Semibold", 12),
             fg_color="#1A1B26", text_color="#E53E3E", hover_color="#3D1D1D",
-            width=130, height=36, corner_radius=8, command=self.on_clear_db
+            width=160, height=36, corner_radius=8, command=self.on_clear_db
         )
         btn_clear_db.pack(anchor=tk.W, padx=16, pady=(0, 16))
 

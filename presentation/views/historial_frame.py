@@ -214,20 +214,20 @@ class HistorialFrame(ctk.CTkFrame):
         hdr.pack(fill=tk.X, padx=24, pady=(20, 4))
 
         ctk.CTkLabel(
-            hdr, text="Historial de transcripciones",
+            hdr, text="📜  Historial de transcripciones",
             font=("Segoe UI Semibold", 22), text_color=COLOR_TEXT_FG
         ).pack(side=tk.LEFT, anchor=tk.W)
 
         self.btn_refresh = ctk.CTkButton(
             hdr, text="↻   Actualizar", font=("Segoe UI Semibold", 12),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG,
+            fg_color=COLOR_PANEL_LIGHT, text_color="#63B3ED",
             hover_color=COLOR_BORDER, width=120, height=32, corner_radius=8,
             command=self.load_history
         )
         self.btn_refresh.pack(side=tk.RIGHT)
 
         ctk.CTkLabel(
-            self, text="Revisá, exportá y generá resúmenes de tus transcripciones pasadas.",
+            self, text="🔎  Revisá, exportá y generá resúmenes de tus transcripciones pasadas.",
             font=("Segoe UI", 12), text_color=COLOR_MUTED
         ).pack(anchor=tk.W, padx=24, pady=(0, 14))
 
@@ -241,8 +241,8 @@ class HistorialFrame(ctk.CTkFrame):
         self.left_col.pack_propagate(False)
 
         ctk.CTkLabel(
-            self.left_col, text="TRANSCRIPCIONES GUARDADAS",
-            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+            self.left_col, text="📂  TRANSCRIPCIONES GUARDADAS",
+            font=("Segoe UI Semibold", 10), text_color="#A78BFA"
         ).pack(anchor=tk.W, pady=(0, 6))
 
         # Search Bar
@@ -278,7 +278,7 @@ class HistorialFrame(ctk.CTkFrame):
         ctk.CTkLabel(
             self.placeholder_frame,
             text="📜\n\nSeleccioná una transcripción para ver sus detalles.",
-            font=("Segoe UI Semibold", 13), text_color=COLOR_MUTED,
+            font=("Segoe UI Semibold", 13), text_color="#A78BFA",
             justify=tk.CENTER
         ).pack(expand=True)
 
@@ -379,8 +379,8 @@ class HistorialFrame(ctk.CTkFrame):
         txt_hdr.pack(fill=tk.X, padx=14, pady=(12, 4))
 
         ctk.CTkLabel(
-            txt_hdr, text="TEXTO TRANSCRITO",
-            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+            txt_hdr, text="📝  TEXTO TRANSCRITO",
+            font=("Segoe UI Semibold", 10), text_color="#63B3ED"
         ).pack(side=tk.LEFT)
 
         self.label_word_count = ctk.CTkLabel(
@@ -406,8 +406,8 @@ class HistorialFrame(ctk.CTkFrame):
         sum_hdr.pack(fill=tk.X, padx=14, pady=(12, 4))
 
         ctk.CTkLabel(
-            sum_hdr, text="✨  RESUMEN IA - GEMINI",
-            font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+            sum_hdr, text="✨  RESUMEN IA · GEMINI",
+            font=("Segoe UI Semibold", 10), text_color="#F6E05E"
         ).pack(side=tk.LEFT)
 
         # Summary content area (either textbox or no-summary placeholder)
@@ -465,7 +465,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_rename = ctk.CTkButton(
             self.action_row, text="✏️  Renombrar",
             font=("Segoe UI Semibold", 11),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+            fg_color=COLOR_PANEL_LIGHT, text_color="#F6AD55", hover_color=COLOR_BORDER,
             width=110, height=34, corner_radius=8, command=self.rename_record
         )
         self.btn_rename.pack(side=tk.LEFT, padx=(0, 4))
@@ -473,7 +473,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_copy_text = ctk.CTkButton(
             self.action_row, text="📋  Copiar",
             font=("Segoe UI Semibold", 11),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+            fg_color=COLOR_PANEL_LIGHT, text_color="#63B3ED", hover_color=COLOR_BORDER,
             width=90, height=34, corner_radius=8, command=self.copy_transcription
         )
         self.btn_copy_text.pack(side=tk.LEFT, padx=(0, 4))
@@ -481,7 +481,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_copy_summary = ctk.CTkButton(
             self.action_row, text="✨  Resumen",
             font=("Segoe UI Semibold", 11),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+            fg_color=COLOR_PANEL_LIGHT, text_color="#F6E05E", hover_color=COLOR_BORDER,
             width=100, height=34, corner_radius=8, command=self.copy_summary
         )
         self.btn_copy_summary.pack(side=tk.LEFT, padx=(0, 4))
@@ -489,7 +489,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_export = ctk.CTkButton(
             self.action_row, text="📥  Exportar",
             font=("Segoe UI Semibold", 11),
-            fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+            fg_color=COLOR_PANEL_LIGHT, text_color="#48BB78", hover_color=COLOR_BORDER,
             width=100, height=34, corner_radius=8, command=self.export_transcription
         )
         self.btn_export.pack(side=tk.LEFT, padx=(0, 4))
@@ -521,9 +521,13 @@ class HistorialFrame(ctk.CTkFrame):
         name = record.get("file_name", "")
         dur  = record.get("duration") or "00:00"
         date = (record.get("created_at") or "").split(" ")[0]
+        path = (record.get("file_path") or "").lower()
+        audio_exts = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".aac", ".opus"}
+        ext = os.path.splitext(path)[1]
+        kind_icon = "🎙" if ext in audio_exts else "📄"
 
         lbl_name = ctk.CTkLabel(
-            card, text=name, font=("Segoe UI Semibold", 11),
+            card, text=f"{kind_icon}  {name}", font=("Segoe UI Semibold", 11),
             text_color=COLOR_TEXT_FG, anchor=tk.W
         )
         lbl_name.pack(fill=tk.X, padx=12, pady=(10, 2))

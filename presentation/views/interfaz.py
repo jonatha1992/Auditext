@@ -119,12 +119,34 @@ def crear_interfaz(ventana):
         ):
             view_entrevista.finish_session()
 
-        # Reset button colors
-        btn_archivos.configure(fg_color="transparent" if view_name != "archivos" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "archivos" else COLOR_TEXT_FG)
-        btn_envivo.configure(fg_color="transparent" if view_name != "envivo" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "envivo" else COLOR_TEXT_FG)
-        btn_entrevista.configure(fg_color="transparent" if view_name != "entrevista" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "entrevista" else COLOR_TEXT_FG)
-        btn_historial.configure(fg_color="transparent" if view_name != "historial" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "historial" else COLOR_TEXT_FG)
-        btn_ajustes.configure(fg_color="transparent" if view_name != "ajustes" else COLOR_PANEL, text_color=COLOR_MUTED if view_name != "ajustes" else COLOR_TEXT_FG)
+        # Reset button colors — keep tinted icons; brighten the active destination
+        nav_colors = {
+            "archivos": "#A78BFA",
+            "envivo": "#4DA3FF",
+            "entrevista": "#48BB78",
+            "historial": "#F6AD55",
+            "ajustes": "#8A8F9E",
+        }
+        btn_archivos.configure(
+            fg_color="transparent" if view_name != "archivos" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "archivos" else nav_colors["archivos"],
+        )
+        btn_envivo.configure(
+            fg_color="transparent" if view_name != "envivo" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "envivo" else nav_colors["envivo"],
+        )
+        btn_entrevista.configure(
+            fg_color="transparent" if view_name != "entrevista" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "entrevista" else nav_colors["entrevista"],
+        )
+        btn_historial.configure(
+            fg_color="transparent" if view_name != "historial" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "historial" else nav_colors["historial"],
+        )
+        btn_ajustes.configure(
+            fg_color="transparent" if view_name != "ajustes" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "ajustes" else nav_colors["ajustes"],
+        )
 
         if view_name == "archivos":
             view_archivos.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
@@ -144,24 +166,24 @@ def crear_interfaz(ventana):
             # Refresh DB stats
             view_ajustes.refresh_db_stats()
 
-    # Sidebar Buttons
+    # Sidebar Buttons — tinted text so each destination reads as a distinct color cue
     btn_archivos = ctk.CTkButton(
         sidebar_frame, text="📁   Archivos", font=("Segoe UI Semibold", 13),
-        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        fg_color="transparent", text_color="#A78BFA", hover_color=COLOR_PANEL_LIGHT,
         anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("archivos")
     )
     btn_archivos.pack(fill=tk.X, padx=12, pady=4)
 
     btn_envivo = ctk.CTkButton(
         sidebar_frame, text="🎙   En vivo", font=("Segoe UI Semibold", 13),
-        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        fg_color="transparent", text_color="#4DA3FF", hover_color=COLOR_PANEL_LIGHT,
         anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("envivo")
     )
     btn_envivo.pack(fill=tk.X, padx=12, pady=4)
 
     btn_entrevista = ctk.CTkButton(
         sidebar_frame, text="🎯   Entrevista", font=("Segoe UI Semibold", 13),
-        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        fg_color="transparent", text_color="#48BB78", hover_color=COLOR_PANEL_LIGHT,
         anchor=tk.W, width=176, height=40, corner_radius=8,
         command=lambda: switch_view("entrevista")
     )
@@ -169,14 +191,14 @@ def crear_interfaz(ventana):
 
     btn_historial = ctk.CTkButton(
         sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
-        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        fg_color="transparent", text_color="#F6AD55", hover_color=COLOR_PANEL_LIGHT,
         anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("historial")
     )
     btn_historial.pack(fill=tk.X, padx=12, pady=4)
 
     btn_ajustes = ctk.CTkButton(
         sidebar_frame, text="⚙   Ajustes", font=("Segoe UI Semibold", 13),
-        fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_PANEL_LIGHT,
+        fg_color="transparent", text_color="#8A8F9E", hover_color=COLOR_PANEL_LIGHT,
         anchor=tk.W, width=176, height=40, corner_radius=8, command=lambda: switch_view("ajustes")
     )
     btn_ajustes.pack(side=tk.BOTTOM, fill=tk.X, padx=12, pady=20)
@@ -253,13 +275,13 @@ def crear_interfaz(ventana):
     header_frame.pack(fill=tk.X, padx=24, pady=(20, 10))
 
     label_titulo = ctk.CTkLabel(
-        header_frame, text="Transcripción de archivos",
+        header_frame, text="📁  Transcripción de archivos",
         font=("Segoe UI Semibold", 22), text_color=COLOR_TEXT_FG
     )
     label_titulo.pack(anchor=tk.W)
 
     label_subtitulo = ctk.CTkLabel(
-        header_frame, text="Selecciona uno o más audios y conviértelos en texto.",
+        header_frame, text="🎧  Seleccioná uno o más audios y convertilos en texto offline.",
         font=("Segoe UI", 12), text_color=COLOR_MUTED
     )
     label_subtitulo.pack(anchor=tk.W, pady=(2, 0))
@@ -274,7 +296,7 @@ def crear_interfaz(ventana):
     left_col.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=(0, 12))
 
     label_left_title = ctk.CTkLabel(
-        left_col, text="LISTA DE ARCHIVOS", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        left_col, text="📂  LISTA DE ARCHIVOS", font=("Segoe UI Semibold", 10), text_color="#A78BFA"
     )
     label_left_title.pack(anchor=tk.W, pady=(0, 6))
 
@@ -358,7 +380,7 @@ def crear_interfaz(ventana):
     right_col_header.pack(fill=tk.X, pady=(0, 6))
 
     label_right_title = ctk.CTkLabel(
-        right_col_header, text="TRANSCRIPCIÓN", font=("Segoe UI Semibold", 10), text_color=COLOR_MUTED
+        right_col_header, text="📝  TRANSCRIPCIÓN", font=("Segoe UI Semibold", 10), text_color="#63B3ED"
     )
     label_right_title.pack(side=tk.LEFT)
 
@@ -399,7 +421,7 @@ def crear_interfaz(ventana):
     card_options.pack(fill=tk.X, padx=24, pady=6)
 
     # Options Grid Layout
-    label_entrada = ctk.CTkLabel(card_options, text="IDIOMA DE ENTRADA", font=("Segoe UI Semibold", 9), text_color=COLOR_MUTED)
+    label_entrada = ctk.CTkLabel(card_options, text="🌐  IDIOMA DE ENTRADA", font=("Segoe UI Semibold", 9), text_color="#A78BFA")
     label_entrada.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
 
     combobox_idioma_entrada = ctk.CTkComboBox(
@@ -411,7 +433,7 @@ def crear_interfaz(ventana):
     combobox_idioma_entrada.set("Spanish")
     combobox_idioma_entrada.grid(row=1, column=0, padx=(16, 12), pady=(0, 12), sticky=tk.W)
 
-    label_salida = ctk.CTkLabel(card_options, text="IDIOMA DE SALIDA", font=("Segoe UI Semibold", 9), text_color=COLOR_MUTED)
+    label_salida = ctk.CTkLabel(card_options, text="🗣  IDIOMA DE SALIDA", font=("Segoe UI Semibold", 9), text_color="#4DA3FF")
     label_salida.grid(row=0, column=1, padx=(4, 4), pady=(8, 2), sticky=tk.W)
 
     combobox_idioma_salida = ctk.CTkComboBox(
@@ -426,8 +448,8 @@ def crear_interfaz(ventana):
 
 
     check_timestamps = ctk.CTkCheckBox(
-        card_options, text="Incluir marcas de tiempo", variable=timestamps_var,
-        font=("Segoe UI", 12), text_color=COLOR_TEXT_FG,
+        card_options, text="⏱  Incluir marcas de tiempo", variable=timestamps_var,
+        font=("Segoe UI", 12), text_color="#F6AD55",
         fg_color=COLOR_ACCENT, hover_color=COLOR_ACCENT_HOVER, border_color=COLOR_BORDER
     )
     check_timestamps.grid(row=1, column=2, padx=(32, 16), pady=(4, 12), sticky=tk.E)
@@ -448,7 +470,7 @@ def crear_interfaz(ventana):
 
     boton_seleccionar = ctk.CTkButton(
         buttons_frame, text="📁   Seleccionar", font=("Segoe UI Semibold", 12),
-        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        fg_color=COLOR_PANEL_LIGHT, text_color="#A78BFA", hover_color=COLOR_BORDER,
         width=120, height=36, corner_radius=8,
         command=on_seleccionar
     )
@@ -456,7 +478,7 @@ def crear_interfaz(ventana):
 
     boton_borrar = ctk.CTkButton(
         buttons_frame, text="🗑️   Borrar", font=("Segoe UI Semibold", 12),
-        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color="#E53E3E",
+        fg_color=COLOR_PANEL_LIGHT, text_color="#E53E3E", hover_color="#3D1D1D",
         width=90, height=36, corner_radius=8, state="disabled",
         command=on_borrar
     )
@@ -618,7 +640,7 @@ def crear_interfaz(ventana):
 
     boton_resumir = ctk.CTkButton(
         buttons_frame, text="✨   Resumir", font=("Segoe UI Semibold", 12),
-        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        fg_color=COLOR_PANEL_LIGHT, text_color="#F6E05E", hover_color=COLOR_BORDER,
         width=100, height=36, corner_radius=8,
         command=resumir_transcripcion_files
     )
@@ -626,7 +648,7 @@ def crear_interfaz(ventana):
 
     boton_exportar = ctk.CTkButton(
         buttons_frame, text="📥   Exportar", font=("Segoe UI Semibold", 12),
-        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        fg_color=COLOR_PANEL_LIGHT, text_color="#48BB78", hover_color=COLOR_BORDER,
         width=100, height=36, corner_radius=8,
         command=lambda: exportar_transcripcion(text_area.get("1.0", tk.END))
     )
@@ -634,7 +656,7 @@ def crear_interfaz(ventana):
 
     boton_limpiar = ctk.CTkButton(
         buttons_frame, text="🧹   Limpiar", font=("Segoe UI Semibold", 12),
-        fg_color=COLOR_PANEL_LIGHT, text_color=COLOR_TEXT_FG, hover_color=COLOR_BORDER,
+        fg_color=COLOR_PANEL_LIGHT, text_color="#F6AD55", hover_color=COLOR_BORDER,
         width=90, height=36, corner_radius=8,
         command=lambda: limpiar(text_area)
     )

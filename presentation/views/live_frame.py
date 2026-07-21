@@ -39,7 +39,7 @@ class LiveFrame(ctk.CTkFrame):
         header.pack(fill=tk.X, padx=24, pady=(20, 10))
 
         label_titulo = ctk.CTkLabel(
-            header, text="Transcripción en vivo",
+            header, text="🎙  Transcripción en vivo",
             font=("Segoe UI Semibold", 22), text_color="#FFFFFF"
         )
         label_titulo.pack(side=tk.LEFT)
@@ -63,7 +63,7 @@ class LiveFrame(ctk.CTkFrame):
         subtitle_frame = ctk.CTkFrame(self, fg_color="transparent")
         subtitle_frame.pack(fill=tk.X, padx=24)
         label_subtitulo = ctk.CTkLabel(
-            subtitle_frame, text="Capturá el audio del sistema o micrófono en tiempo real.",
+            subtitle_frame, text="🎧  Capturá el audio del sistema o 🎤 micrófono en tiempo real.",
             font=("Segoe UI", 12), text_color="#8A8F9E"
         )
         label_subtitulo.pack(anchor=tk.W)
@@ -74,35 +74,35 @@ class LiveFrame(ctk.CTkFrame):
 
         self.toggle_btn = ctk.CTkButton(
             toolbar, text="▶   Iniciar", font=("Segoe UI Semibold", 12),
-            fg_color="#7000FF", text_color="#FFFFFF", hover_color="#5900CC",
+            fg_color="#48BB78", text_color="#FFFFFF", hover_color="#38A169",
             width=110, height=36, corner_radius=8, command=self._toggle
         )
         self.toggle_btn.pack(side=tk.LEFT)
 
         self.btn_save = ctk.CTkButton(
             toolbar, text="💾   Guardar", font=("Segoe UI Semibold", 12),
-            fg_color="#15161E", text_color="#FFFFFF", hover_color="#1A1B26",
+            fg_color="#15161E", text_color="#63B3ED", hover_color="#1A1B26",
             width=90, height=36, corner_radius=8, command=self._save
         )
         self.btn_save.pack(side=tk.LEFT, padx=(8, 0))
 
         self.btn_clear = ctk.CTkButton(
             toolbar, text="🧹   Limpiar", font=("Segoe UI Semibold", 12),
-            fg_color="#15161E", text_color="#FFFFFF", hover_color="#1A1B26",
+            fg_color="#15161E", text_color="#F6AD55", hover_color="#1A1B26",
             width=90, height=36, corner_radius=8, command=self._clear
         )
         self.btn_clear.pack(side=tk.LEFT, padx=(8, 0))
 
         self.summary_btn = ctk.CTkButton(
             toolbar, text="✨   Resumir", font=("Segoe UI Semibold", 12),
-            fg_color="#15161E", text_color="#FFFFFF", hover_color="#1A1B26",
+            fg_color="#15161E", text_color="#F6E05E", hover_color="#1A1B26",
             width=100, height=36, corner_radius=8, command=self._summarize
         )
         self.summary_btn.pack(side=tk.LEFT, padx=(8, 0))
 
         self.btn_open_folder = ctk.CTkButton(
             toolbar, text="📁   Grabaciones", font=("Segoe UI Semibold", 12),
-            fg_color="#15161E", text_color="#FFFFFF", hover_color="#1A1B26",
+            fg_color="#15161E", text_color="#A78BFA", hover_color="#1A1B26",
             width=120, height=36, corner_radius=8, command=self._open_recordings_folder
         )
         self.btn_open_folder.pack(side=tk.LEFT, padx=(8, 0))
@@ -113,7 +113,7 @@ class LiveFrame(ctk.CTkFrame):
 
         # Options layout inside config card
         self.label_fuente = ctk.CTkLabel(
-            card_config, text="FUENTE", font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
+            card_config, text="🎧  FUENTE", font=("Segoe UI Semibold", 9), text_color="#4DA3FF"
         )
         self.label_fuente.grid(row=0, column=0, padx=(16, 4), pady=(8, 2), sticky=tk.W)
 
@@ -141,7 +141,7 @@ class LiveFrame(ctk.CTkFrame):
         self.btn_refresh.grid(row=1, column=1, padx=(0, 12), pady=(0, 12), sticky=tk.W)
 
         self.label_idioma = ctk.CTkLabel(
-            card_config, text="IDIOMA", font=("Segoe UI Semibold", 9), text_color="#8A8F9E"
+            card_config, text="🌐  IDIOMA", font=("Segoe UI Semibold", 9), text_color="#A78BFA"
         )
         self.label_idioma.grid(row=0, column=2, padx=(8, 4), pady=(8, 2), sticky=tk.W)
 
@@ -160,7 +160,7 @@ class LiveFrame(ctk.CTkFrame):
         self.lang_combo.grid(row=1, column=2, padx=(8, 12), pady=(0, 12), sticky=tk.W)
 
         self.translate_check = ctk.CTkCheckBox(
-            card_config, text="Traducir a Inglés", variable=self.translate_var,
+            card_config, text="🌐 Traducir a Inglés", variable=self.translate_var,
             font=("Segoe UI", 12), text_color="#FFFFFF",
             fg_color="#7000FF", hover_color="#5900CC", border_color="#2A2B36"
         )
@@ -172,14 +172,14 @@ class LiveFrame(ctk.CTkFrame):
 
         self.record_check = ctk.CTkCheckBox(
             rec_frame, text="⏺ Grabar audio", variable=self.record_var,
-            font=("Segoe UI", 12), text_color="#FFFFFF",
+            font=("Segoe UI", 12), text_color="#FC8181",
             fg_color="#E53E3E", hover_color="#C53030", border_color="#2A2B36"
         )
         self.record_check.pack(anchor=tk.W)
 
         self.btn_change_folder = ctk.CTkButton(
             rec_frame, text="📂 Cambiar carpeta", font=("Segoe UI", 11),
-            fg_color="transparent", text_color="#8A8F9E", hover_color="#1A1B26",
+            fg_color="transparent", text_color="#63B3ED", hover_color="#1A1B26",
             width=130, height=20, corner_radius=6, command=self._choose_folder
         )
         self.btn_change_folder.pack(anchor=tk.W, pady=(4, 0))
@@ -301,7 +301,7 @@ class LiveFrame(ctk.CTkFrame):
         self.is_animating = False
 
         self.path_label = ctk.CTkLabel(
-            self.wave_card, text=f"Pulsa Iniciar para comenzar\n{self.out_dir}",
+            self.wave_card, text=f"▶  Pulsá Iniciar para comenzar\n{self.out_dir}",
             font=("Segoe UI", 11), text_color="#8A8F9E", justify=tk.CENTER
         )
         self.path_label.pack(pady=(4, 10))
@@ -309,6 +309,13 @@ class LiveFrame(ctk.CTkFrame):
         # Output text box
         text_card = ctk.CTkFrame(self, fg_color="#15161E", corner_radius=12, border_color="#2A2B36", border_width=1)
         text_card.pack(fill=tk.BOTH, expand=True, padx=24, pady=(6, 16))
+
+        text_hdr = ctk.CTkFrame(text_card, fg_color="transparent")
+        text_hdr.pack(fill=tk.X, padx=14, pady=(10, 0))
+        ctk.CTkLabel(
+            text_hdr, text="📝  TRANSCRIPCIÓN EN VIVO",
+            font=("Segoe UI Semibold", 9), text_color="#A78BFA",
+        ).pack(side=tk.LEFT)
 
         self.output = ctk.CTkTextbox(
             text_card, fg_color="#11121A", text_color="#FFFFFF",
@@ -528,7 +535,9 @@ class LiveFrame(ctk.CTkFrame):
                 translate=self.translate_var.get(),
                 save_audio=self.record_var.get(),
             )
-            self.toggle_btn.configure(text="⏹   Detener")
+            self.toggle_btn.configure(
+                text="⏹   Detener", fg_color="#E53E3E", hover_color="#C53030"
+            )
 
     def refresh_devices(self):
         self._refresh_sources()
@@ -577,7 +586,7 @@ class LiveFrame(ctk.CTkFrame):
         if chosen:
             self.out_dir = Path(chosen)
             self.path_label.configure(
-                text=f"Pulsa Iniciar para comenzar\n{self.out_dir}",
+                text=f"▶  Pulsá Iniciar para comenzar\n{self.out_dir}",
                 text_color="#8A8F9E"
             )
 
@@ -863,9 +872,12 @@ class LiveFrame(ctk.CTkFrame):
             if self.spinner.is_spinning:
                 self.spinner.stop()
                 self.spinner.pack_forget()
-            self.toggle_btn.configure(text="▶   Iniciar", state="normal")
+            self.toggle_btn.configure(
+                text="▶   Iniciar", state="normal",
+                fg_color="#48BB78", hover_color="#38A169",
+            )
             self.path_label.configure(
-                text=f"Pulsa Iniciar para comenzar\n{self.out_dir}",
+                text=f"▶  Pulsá Iniciar para comenzar\n{self.out_dir}",
                 text_color="#8A8F9E"
             )
 
