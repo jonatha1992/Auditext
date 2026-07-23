@@ -1,5 +1,5 @@
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk
 import customtkinter as ctk
 import threading
 from infrastructure.services import summarizer
@@ -12,6 +12,7 @@ from .spinner import Spinner
 from .ajustes_frame import AjustesFrame
 from .historial_frame import HistorialFrame
 from .tooltip import Tooltip
+from .app_dialog import ask_yes_no, show_error, show_info, show_warning
 
 # Design System Colors matching the mockup
 COLOR_BG = "#0B0C10"          # Deep dark window background
@@ -512,11 +513,12 @@ def crear_interfaz(ventana):
     def resumir_transcripcion_files():
         texto = text_area.get("1.0", tk.END).strip()
         if not texto:
-            messagebox.showwarning("Advertencia", "No hay texto para resumir.")
+            show_warning(ventana, "Advertencia", "No hay texto para resumir.")
             return
             
         if not summarizer.is_configured():
-            messagebox.showinfo(
+            show_info(
+                ventana,
                 "Resumen no configurado",
                 "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
@@ -527,7 +529,8 @@ def crear_interfaz(ventana):
         if _last_file_path:
             record = config.repository.get(_last_file_path)
             if record and record.summary and record.summary.strip():
-                use_cached = messagebox.askyesno(
+                use_cached = ask_yes_no(
+                    ventana,
                     "Resumen guardado",
                     "Ya existe un resumen guardado para este archivo.\n\n"
                     "¿Querés usar el resumen guardado? (sin costo)\n\n"
@@ -552,7 +555,7 @@ def crear_interfaz(ventana):
                 ventana.after(0, lambda r=resumen: mostrar_resumen_modal(r))
             except Exception as e:
                 err_msg = str(e)
-                ventana.after(0, lambda msg=err_msg: messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{msg}"))
+                ventana.after(0, lambda msg=err_msg: show_error(ventana, "Error de Resumen IA", f"No se pudo completar el resumen:\n\n{msg}"))
             finally:
                 ventana.after(0, clean_up_resumir)
                 
@@ -596,7 +599,7 @@ def crear_interfaz(ventana):
             def copiar_resumen():
                 win.clipboard_clear()
                 win.clipboard_append(summary)
-                messagebox.showinfo("Copiado", "El resumen ha sido copiado al portapapeles.", parent=win)
+                show_info(win, "Copiado", "El resumen ha sido copiado al portapapeles.")
                 
             btn_copy = ctk.CTkButton(
                 btn_row, text="📋   Copiar", font=("Segoe UI Semibold", 12),

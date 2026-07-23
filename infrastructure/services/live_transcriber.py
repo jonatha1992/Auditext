@@ -110,6 +110,26 @@ def is_silent(audio: np.ndarray, threshold: float = SILENCE_THRESHOLD) -> bool:
     return float(np.abs(audio).mean()) < threshold
 
 
+def mix_mono_tracks(
+    system: np.ndarray,
+    mic: np.ndarray,
+    *,
+    system_gain: float = 0.85,
+    mic_gain: float = 0.85,
+) -> np.ndarray:
+    """Mix interviewer (system) and candidate (mic) into one mono track for WAV export."""
+    n = len(system)
+    mic_aligned = np.zeros(n, dtype=np.float32)
+    take = min(n, len(mic))
+    if take:
+        mic_aligned[:take] = mic[:take].astype(np.float32)
+    return np.clip(
+        system.astype(np.float32) * system_gain + mic_aligned * mic_gain,
+        -1.0,
+        1.0,
+    )
+
+
 class Transcriber:
     def __init__(self, text_queue, status_queue):
         self._text_queue = text_queue
@@ -140,6 +160,8 @@ class Transcriber:
         self.duration_seconds = 0
         self.current_transcript_path = None
         self.current_wav_path = None
+        self._mix_lock = threading.Lock()
+        self._mic_mix_buf = np.zeros(0, dtype=np.float32)
 
     def start(
         self,
@@ -178,6 +200,8 @@ class Transcriber:
         self.playhead_index = 0
         self.update_count = 0
         self.peak_accumulator = []
+        with self._mix_lock:
+            self._mic_mix_buf = np.zeros(0, dtype=np.float32)
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
@@ -200,6 +224,35 @@ class Transcriber:
         live = self._live_session
         if live is not None:
             live.add_candidate_turn(text)
+
+    def push_candidate_audio(self, mono: np.ndarray) -> None:
+        """Append candidate microphone samples for WAV mixing (not sent to Gemini)."""
+        if not (self._save_audio and self._interview_mode):
+            return
+        chunk = mono.astype(np.float32).flatten()
+        if chunk.size == 0:
+            return
+        max_samples = SAMPLE_RATE * 30
+        with self._mix_lock:
+            if self._mic_mix_buf.size == 0:
+                self._mic_mix_buf = chunk
+            else:
+                self._mic_mix_buf = np.concatenate([self._mic_mix_buf, chunk])
+            if self._mic_mix_buf.size > max_samples:
+                self._mic_mix_buf = self._mic_mix_buf[-max_samples:]
+
+    def _take_mic_for_mix(self, n: int) -> np.ndarray:
+        with self._mix_lock:
+            if self._mic_mix_buf.size >= n:
+                out = self._mic_mix_buf[:n].copy()
+                self._mic_mix_buf = self._mic_mix_buf[n:]
+            elif self._mic_mix_buf.size > 0:
+                out = np.zeros(n, dtype=np.float32)
+                out[: self._mic_mix_buf.size] = self._mic_mix_buf
+                self._mic_mix_buf = np.zeros(0, dtype=np.float32)
+            else:
+                out = np.zeros(n, dtype=np.float32)
+        return out
 
     def _open_log(self):
         self._out_dir.mkdir(parents=True, exist_ok=True)
@@ -399,7 +452,9 @@ class Transcriber:
                 pcm = interview_live.float32_to_pcm16(mono)
                 self._live_session.send_audio(pcm)
                 if self._wav_file:
-                    self._wav_file.writeframes(pcm)
+                    mic_part = self._take_mic_for_mix(len(mono))
+                    mixed = mix_mono_tracks(mono, mic_part)
+                    self._wav_file.writeframes(interview_live.float32_to_pcm16(mixed))
             else:
                 self._audio_q.put_nowait(mono)
                 if self._wav_file:

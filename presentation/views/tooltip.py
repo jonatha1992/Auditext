@@ -54,10 +54,10 @@ class Tooltip:
             widget_w = self._widget.winfo_width()
             widget_h = self._widget.winfo_height()
             
-            # Determine placement: sidebar (left) vs main content (right/bottom)
+            # Left rail (~historial list): tip to the right so it never clips
+            # above the card. Wider threshold covers 260px left column.
             relative_x = widget_x - parent_x
-            if relative_x < 240:
-                # Sidebar buttons: Position to the right of the sidebar
+            if relative_x < 320:
                 x = widget_x + widget_w + 12
                 y = widget_y + (widget_h - 32) // 2
             else:
@@ -66,6 +66,9 @@ class Tooltip:
                 if x < widget_x - 20:
                     x = widget_x - 20
                 y = widget_y - 42
+                # If above would clip the window top, flip below
+                if y < toplevel.winfo_rooty() + 8:
+                    y = widget_y + widget_h + 8
         except Exception:
             return
 

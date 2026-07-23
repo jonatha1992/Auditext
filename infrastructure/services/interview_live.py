@@ -4,7 +4,7 @@ Live API models only support AUDIO response modality. We:
 1. Stream PCM into Live for low-latency input transcription (interviewer EN).
 2. Discard model audio (never play it — interviewer must not hear the coach).
 3. On each interviewer turn, call generate_content (flash) for Spanish gloss +
-   2 short English reply suggestions as JSON.
+   1-2 short English reply suggestions (first is the priority) as JSON.
 
 Keys: GEMINI_API_KEY / _2 / _3 or GEMINI_API_KEY1/2/3.
 """
@@ -16,6 +16,7 @@ import json
 import os
 import re
 import threading
+import time
 from dataclasses import dataclass
 from typing import Callable
 
@@ -78,6 +79,21 @@ _MODE_INSTRUCTIONS = {
     ),
 }
 
+# Coach input is truncated before prompting: with thinking_budget=0 the cost is
+# dominated by TTFT/prefill (input length), so a shorter prompt is the main lever
+# for lowering latency (see tech plan Path A).
+_MAX_CONTEXT_CHARS = 2500
+_COACH_HISTORY_TURNS = 6
+
+
+def _truncate_context(context: str) -> str:
+    """Clamp pasted context (CV, notes, temario) to keep the coach prompt short."""
+    ctx = (context or "").strip()
+    if len(ctx) <= _MAX_CONTEXT_CHARS:
+        return ctx
+    return ctx[:_MAX_CONTEXT_CHARS].rstrip() + " […]"
+
+
 _COACH_PROMPT = """{role_instructions}
 
 Contexto pegado por el usuario (CV, puesto, tema de práctica, apuntes...):
@@ -96,9 +112,9 @@ Conversación reciente, separada por rol:
 ---
 
 Respondé SOLO un JSON válido, sin markdown:
-{{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada en inglés","alternativa breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"],"frase_puente":"frase breve en inglés para ganar tiempo o pedir aclaración"}}
+{{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada corta en inglés","alternativa opcional breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"]}}
 
-Reglas: exactamente 2 respuestas, 1-2 oraciones cada una, naturales para decir en voz alta.
+Reglas: la PRIMERA respuesta es la prioridad — 1 oración corta y fácil de decir en voz alta; la segunda es opcional y breve (podés devolver solo 1).
 Respondé SIEMPRE que el turno tenga contenido: pregunta, instrucción, ejercicio o comentario.
 Devolvé pregunta_es vacía y respuestas [] SOLO si el texto es ruido ininteligible.
 Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
@@ -154,10 +170,9 @@ def parse_assist_text(text: str) -> InterviewAssist | None:
     if not isinstance(ideas_raw, list):
         ideas_raw = [ideas_raw]
     ideas = [str(v).strip() for v in ideas_raw if str(v).strip()][:3]
-    frase_puente = str(data.get("frase_puente") or "").strip()
     if not pregunta and not respuestas:
         return None
-    return InterviewAssist(pregunta, respuestas, ideas, frase_puente)
+    return InterviewAssist(pregunta, respuestas, ideas)
 
 
 def is_configured() -> bool:
@@ -183,7 +198,7 @@ def _coach_config(model: str):
 
     kwargs = dict(
         temperature=0.4,
-        max_output_tokens=400,
+        max_output_tokens=220,
         response_mime_type="application/json",
     )
     if "2.0" not in model:
@@ -209,7 +224,7 @@ def coach_assist(
 
     prompt = _COACH_PROMPT.format(
         role_instructions=_MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS[DEFAULT_ASSIST_MODE]),
-        context=(context or "").strip() or "(sin contexto)",
+        context=_truncate_context(context) or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
     )
@@ -273,6 +288,7 @@ class InterviewLiveSession:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
         self._utterance_buf = ""
+        self._last_transcript_ts = 0.0
         self._api_key: str | None = None
         self._coach_lock = asyncio.Lock()
         self._coach_task: asyncio.Task | None = None
@@ -431,6 +447,7 @@ class InterviewLiveSession:
         assert self._audio_q is not None
         send_task = asyncio.create_task(self._send_loop(session, types))
         recv_task = asyncio.create_task(self._recv_loop(session))
+        watch_task = asyncio.create_task(self._flush_watchdog())
         try:
             done, pending = await asyncio.wait(
                 {send_task, recv_task},
@@ -445,8 +462,24 @@ class InterviewLiveSession:
         finally:
             send_task.cancel()
             recv_task.cancel()
+            watch_task.cancel()
             if self._coach_task and not self._coach_task.done():
                 self._coach_task.cancel()
+
+    # Gemini's turn_complete/generation_complete fire on the MODEL's turn, which
+    # may stay silent per _LIVE_SYSTEM and never signal — so the interviewer's
+    # utterance would sit in the buffer forever. This watchdog flushes it once
+    # transcription goes quiet for a bit, independent of that signal.
+    _FLUSH_IDLE_SECONDS = 1.2
+
+    async def _flush_watchdog(self) -> None:
+        while not self._stop.is_set():
+            await asyncio.sleep(0.3)
+            if not self._utterance_buf:
+                continue
+            loop = asyncio.get_event_loop()
+            if loop.time() - self._last_transcript_ts >= self._FLUSH_IDLE_SECONDS:
+                self._flush_utterance()
 
     async def _send_loop(self, session, types) -> None:
         assert self._audio_q is not None
@@ -481,23 +514,28 @@ class InterviewLiveSession:
             t = (getattr(in_tx, "text", None) or "").strip()
             if t:
                 self._utterance_buf = (self._utterance_buf + " " + t).strip()
+                self._last_transcript_ts = asyncio.get_event_loop().time()
                 self._on_transcript(t)
 
         # Intentionally ignore model audio / output transcription (never play coach).
 
         if getattr(sc, "turn_complete", False) or getattr(sc, "generation_complete", False):
-            buf = self._utterance_buf.strip()
-            self._utterance_buf = ""
-            if buf and self._api_key:
-                with self._history_lock:
-                    self._history.append(f"ENTREVISTADOR: {buf}")
-                    self._history = self._history[-12:]
-                # Latest-wins: never cancel an in-flight coach call. If one is
-                # running, stash the newest utterance; _run_coach drains it.
-                if self._coach_task and not self._coach_task.done():
-                    self._pending_utterance = buf
-                else:
-                    self._coach_task = asyncio.create_task(self._run_coach(buf))
+            self._flush_utterance()
+
+    def _flush_utterance(self) -> None:
+        buf = self._utterance_buf.strip()
+        self._utterance_buf = ""
+        if not (buf and self._api_key):
+            return
+        with self._history_lock:
+            self._history.append(f"ENTREVISTADOR: {buf}")
+            self._history = self._history[-12:]
+        # Latest-wins: never cancel an in-flight coach call. If one is
+        # running, stash the newest utterance; _run_coach drains it.
+        if self._coach_task and not self._coach_task.done():
+            self._pending_utterance = buf
+        else:
+            self._coach_task = asyncio.create_task(self._run_coach(buf))
 
     async def _run_coach(self, utterance: str) -> None:
         async with self._coach_lock:
@@ -511,9 +549,11 @@ class InterviewLiveSession:
 
     async def _coach_once(self, utterance: str) -> None:
         self._on_status("Generando sugerencias...")
+        # Timing: turn_complete/flush -> coach return, to falsify latency wins.
+        start = time.perf_counter()
         try:
             with self._history_lock:
-                history = "\n".join(self._history[-6:])
+                history = "\n".join(self._history[-_COACH_HISTORY_TURNS:])
             assist = await asyncio.to_thread(
                 coach_assist,
                 self._context,
@@ -524,10 +564,19 @@ class InterviewLiveSession:
             )
             if assist:
                 self._on_assist(assist)
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            logger.info(
+                "Coach turn complete in %.0f ms (mode=%s, assist=%s)",
+                elapsed_ms,
+                self._mode,
+                "yes" if assist else "none",
+            )
             self._on_status(
                 f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
             )
         except Exception as exc:
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            logger.info("Coach turn failed after %.0f ms (mode=%s)", elapsed_ms, self._mode)
             if gemini_keys.pool.is_quota_error(exc):
                 nxt = gemini_keys.pool.mark_exhausted(self._api_key)
                 if nxt:

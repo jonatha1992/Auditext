@@ -5,12 +5,13 @@ import random
 
 import soundcard as sc
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import customtkinter as ctk
 
 from infrastructure.services import summarizer
 import config
 from config import logger
+from .app_dialog import ask_input, ask_yes_no, show_error, show_info, show_warning
 from infrastructure.services.live_transcriber import (
     DEFAULT_DIR,
     GOOGLE_STT_LABEL,
@@ -74,7 +75,8 @@ class LiveFrame(ctk.CTkFrame):
 
         self.toggle_btn = ctk.CTkButton(
             toolbar, text="▶   Iniciar", font=("Segoe UI Semibold", 12),
-            fg_color="#48BB78", text_color="#FFFFFF", hover_color="#38A169",
+            fg_color="#48BB78", text_color="#FFFFFF", text_color_disabled="#FFFFFF",
+            hover_color="#38A169",
             width=110, height=36, corner_radius=8, command=self._toggle
         )
         self.toggle_btn.pack(side=tk.LEFT)
@@ -599,7 +601,8 @@ class LiveFrame(ctk.CTkFrame):
             self._set_status("Nada para resumir")
             return
         if not summarizer.is_configured():
-            messagebox.showinfo(
+            show_info(
+                self,
                 "Resumen no configurado",
                 "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
@@ -620,7 +623,7 @@ class LiveFrame(ctk.CTkFrame):
     def _summary_failed(self, msg):
         self.summary_btn.configure(state="normal")
         self._set_status("Error en el resumen")
-        messagebox.showerror("Resumen", msg)
+        show_error(self, "Resumen", msg)
 
     def _show_summary(self, summary):
         self.summary_btn.configure(state="normal")
@@ -669,15 +672,14 @@ class LiveFrame(ctk.CTkFrame):
     def _save(self):
         text = self.output.get("1.0", tk.END).strip()
         if not text:
-            messagebox.showwarning("Advertencia", "No hay texto para guardar.")
+            show_warning(self, "Advertencia", "No hay texto para guardar.")
             return
 
-        # Pedir nombre de la grabación al usuario usando CTkInputDialog
-        dialog = ctk.CTkInputDialog(
-            text="Ingresá el nombre para la grabación:",
-            title="Guardar grabación"
+        custom_name = ask_input(
+            self,
+            "Guardar grabación",
+            "Ingresá el nombre para la grabación:",
         )
-        custom_name = dialog.get_input()
         if not custom_name:
             return
         custom_name = custom_name.strip()
@@ -694,10 +696,10 @@ class LiveFrame(ctk.CTkFrame):
 
         # Verificar si ya existe para confirmar sobreescritura
         if target_txt.exists() or (getattr(self.worker, "current_wav_path", None) and target_wav.exists()):
-            overwrite = messagebox.askyesno(
+            overwrite = ask_yes_no(
+                self,
                 "Confirmar sobrescritura",
                 f"Ya existe una grabación con el nombre '{safe_name}'.\n\n¿Querés sobrescribirla?",
-                parent=self
             )
             if not overwrite:
                 return
@@ -707,7 +709,7 @@ class LiveFrame(ctk.CTkFrame):
             target_txt.write_text(text + "\n", encoding="utf-8")
         except Exception as exc:
             logger.exception("Failed to write transcript file: %s", exc)
-            messagebox.showerror("Error", f"No se pudo guardar el archivo de texto: {exc}")
+            show_error(self, "Error", f"No se pudo guardar el archivo de texto: {exc}")
             return
 
         # Si hay un audio asociado, renombrarlo/moverlo al nuevo nombre
@@ -721,9 +723,10 @@ class LiveFrame(ctk.CTkFrame):
                 wav_moved = True
             except Exception as exc:
                 logger.exception("Failed to move WAV file: %s", exc)
-                messagebox.showwarning(
+                show_warning(
+                    self,
                     "Advertencia",
-                    f"Se guardó la transcripción pero no se pudo renombrar el archivo de audio:\n{exc}"
+                    f"Se guardó la transcripción pero no se pudo renombrar el archivo de audio:\n{exc}",
                 )
 
         # Borrar el archivo de transcripción temporal original
@@ -760,10 +763,10 @@ class LiveFrame(ctk.CTkFrame):
                 )
             )
             self._set_status(f"Guardado: {safe_name}")
-            messagebox.showinfo("Éxito", f"Grabación guardada como '{safe_name}' y añadida al historial.")
+            show_info(self, "Éxito", f"Grabación guardada como '{safe_name}' y añadida al historial.")
         except Exception as exc:
             logger.exception("Failed to save to database: %s", exc)
-            messagebox.showerror("Error", f"Se guardó el archivo en disco pero no se pudo indexar en el historial: {exc}")
+            show_error(self, "Error", f"Se guardó el archivo en disco pero no se pudo indexar en el historial: {exc}")
 
     def _append(self, text: str):
         at_bottom = self.output.yview()[1] >= 0.999
@@ -794,7 +797,8 @@ class LiveFrame(ctk.CTkFrame):
                 detail = msg[13:]
                 self.after(
                     10,
-                    lambda d=detail: messagebox.showinfo(
+                    lambda d=detail: show_info(
+                        self,
                         "Windows STT — Configuración necesaria",
                         f"{d}\n\nMás info: busca 'Speech' en Configuración de Windows.",
                     ),

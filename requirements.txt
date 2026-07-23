@@ -26,3 +26,6 @@ python-docx
 # CV upload in the interview tab (PDF text extraction).
 pypdf
 
+# Pronunciation playback in the interview tab (offline SAPI5 TTS on Windows).
+pyttsx3
+

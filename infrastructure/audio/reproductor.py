@@ -11,6 +11,10 @@ class ReproductorAudio:
     def __init__(self):
         self.reproduciendo = False
         self.audio_actual = None
+        # Ruta originalmente solicitada por el llamador (ej. historial_frame),
+        # distinta de audio_actual cuando hay fallback a conversión WAV.
+        # Se usa para comparar "es este el archivo que tengo seleccionado".
+        self.ruta_solicitada = None
         self.tiempo_inicio = 0
         self.tiempo_pausa = 0
         self.duracion_total = 0
@@ -18,6 +22,7 @@ class ReproductorAudio:
 
     def iniciar(self, ruta_archivo):
         self.audio_actual = ruta_archivo
+        self.ruta_solicitada = ruta_archivo
         self.duracion_total = obtener_duracion_audio(ruta_archivo)
         if pygame.mixer.get_init():
             try:
@@ -66,6 +71,7 @@ class ReproductorAudio:
             except pygame.error:
                 pass
         self.audio_actual = None  # was: del self.audio_actual (caused AttributeError on next check)
+        self.ruta_solicitada = None
         self.reproduciendo = False
         self.tiempo_inicio = 0
         self.tiempo_pausa = 0

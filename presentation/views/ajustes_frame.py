@@ -1,10 +1,11 @@
 import os
 from pathlib import Path
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog
 import customtkinter as ctk
 import config
 from . import live_frame
+from .app_dialog import ask_yes_no, show_error, show_info
 
 class AjustesFrame(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
@@ -152,7 +153,7 @@ class AjustesFrame(ctk.CTkFrame):
             self.path_entry.delete(0, tk.END)
             self.path_entry.insert(0, str(new_dir))
             self.path_entry.configure(state="readonly")
-            messagebox.showinfo("Configuración", "Ruta de grabaciones actualizada correctamente.")
+            show_info(self, "Configuración", "Ruta de grabaciones actualizada correctamente.")
 
     def refresh_db_stats(self):
         try:
@@ -168,17 +169,17 @@ class AjustesFrame(ctk.CTkFrame):
             self.label_db_stats.configure(text=f"No se pudieron cargar las estadísticas: {e}")
 
     def on_clear_db(self):
-        confirm = messagebox.askyesno(
+        confirm = ask_yes_no(
+            self,
             "Confirmar acción",
             "¿Estás seguro de que querés borrar todo el historial de transcripciones guardadas?\n\nEsta acción no se puede deshacer.",
-            parent=self
         )
         if confirm:
             try:
                 import config
                 config.repository.clear()
                 self.refresh_db_stats()
-                messagebox.showinfo("Éxito", "El historial fue eliminado por completo.")
+                show_info(self, "Éxito", "El historial fue eliminado por completo.")
                 self.refresh_db_stats()
             except Exception as e:
-                messagebox.showerror("Error", f"No se pudo limpiar la base de datos: {e}")
+                show_error(self, "Error", f"No se pudo limpiar la base de datos: {e}")

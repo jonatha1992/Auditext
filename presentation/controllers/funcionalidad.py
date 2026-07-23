@@ -7,7 +7,9 @@ import wave
 import contextlib
 
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import filedialog
+
+from presentation.views.app_dialog import ask_yes_no_cancel, show_error, show_info, show_warning
 
 from mutagen import File
 
@@ -21,7 +23,7 @@ from config import (
 
 
 def _ask_on_main_thread(ventana, title, message):
-    """Show a yes/no/cancel messagebox on the main thread.
+    """Show a yes/no/cancel dialog on the main thread.
 
     Blocks the calling (worker) thread until the user responds,
     without freezing the Tkinter event loop.
@@ -32,7 +34,7 @@ def _ask_on_main_thread(ventana, title, message):
     event = threading.Event()
 
     def _show():
-        result[0] = messagebox.askyesnocancel(title, message, parent=ventana)
+        result[0] = ask_yes_no_cancel(ventana, title, message)
         event.set()
 
     ventana.after(0, _show)
@@ -41,13 +43,13 @@ def _ask_on_main_thread(ventana, title, message):
 
 
 def _show_error_on_main_thread(ventana, title, message):
-    """Show an error messagebox on the main thread (non-blocking for worker)."""
-    ventana.after(0, lambda: messagebox.showerror(title, message, parent=ventana))
+    """Show an error dialog on the main thread (non-blocking for worker)."""
+    ventana.after(0, lambda: show_error(ventana, title, message))
 
 
 def _show_info_on_main_thread(ventana, title, message):
-    """Show an info messagebox on the main thread (non-blocking for worker)."""
-    ventana.after(0, lambda: messagebox.showinfo(title, message, parent=ventana))
+    """Show an info dialog on the main thread (non-blocking for worker)."""
+    ventana.after(0, lambda: show_info(ventana, title, message))
 
 
 def convertir_a_wav(audio_path):
@@ -157,9 +159,11 @@ def seleccionar_archivos(lista_archivos, lista_archivos_paths):
                 archivos_no_agregados.append(file_name)
                 
         if archivos_no_agregados:
-            messagebox.showwarning(
+            show_warning(
+                lista_archivos.winfo_toplevel(),
                 "Archivos Duplicados",
-                f"Los siguientes archivos ya estaban en la lista y no se añadieron nuevamente:\n{', '.join(archivos_no_agregados)}",
+                "Los siguientes archivos ya estaban en la lista y no se añadieron nuevamente:\n"
+                f"{', '.join(archivos_no_agregados)}",
             )
     finally:
         # Liberar el bloqueo después de 300ms para ignorar eventos duplicados
@@ -274,7 +278,7 @@ def text_to_vtt(text: str) -> str:
 
 def exportar_transcripcion(transcripcion_resultado):
     if not transcripcion_resultado or not transcripcion_resultado.strip():
-        messagebox.showwarning("Advertencia", "No hay transcripción para exportar.")
+        show_warning(None, "Advertencia", "No hay transcripción para exportar.")
         return
         
     output_file = filedialog.asksaveasfilename(
@@ -305,10 +309,11 @@ def exportar_transcripcion(transcripcion_resultado):
         elif ext == ".srt":
             srt_content = text_to_srt(transcripcion_resultado)
             if not srt_content.strip():
-                messagebox.showwarning(
-                    "Advertencia", 
+                show_warning(
+                    None,
+                    "Advertencia",
                     "No se detectaron marcas de tiempo [MM:SS - MM:SS] en el texto.\n\n"
-                    "Se guardará como archivo de texto plano pero con extensión .srt."
+                    "Se guardará como archivo de texto plano pero con extensión .srt.",
                 )
                 srt_content = transcripcion_resultado
             with open(output_file, "w", encoding="utf-8") as f:
@@ -316,10 +321,11 @@ def exportar_transcripcion(transcripcion_resultado):
         elif ext == ".vtt":
             vtt_content = text_to_vtt(transcripcion_resultado)
             if len(vtt_content.strip()) <= 7: # only contains WEBVTT\n
-                messagebox.showwarning(
-                    "Advertencia", 
+                show_warning(
+                    None,
+                    "Advertencia",
                     "No se detectaron marcas de tiempo [MM:SS - MM:SS] en el texto.\n\n"
-                    "Se guardará como archivo de texto plano pero con extensión .vtt."
+                    "Se guardará como archivo de texto plano pero con extensión .vtt.",
                 )
                 vtt_content = "WEBVTT\n\n" + transcripcion_resultado
             with open(output_file, "w", encoding="utf-8") as f:
@@ -328,7 +334,7 @@ def exportar_transcripcion(transcripcion_resultado):
             with open(output_file, "w", encoding="utf-8") as f:
                 f.write(transcripcion_resultado)
                 
-        messagebox.showinfo("Información", f"Transcripción guardada en {output_file}.")
+        show_info(None, "Información", f"Transcripción guardada en {output_file}.")
         logger.info(f"Transcripción guardada en {output_file}.")
 
         try:
@@ -343,7 +349,7 @@ def exportar_transcripcion(transcripcion_resultado):
             logger.error(f"Error al abrir el archivo: {str(e)}")
             
     except Exception as e:
-        messagebox.showerror("Error de exportación", f"No se pudo exportar el archivo:\n\n{e}")
+        show_error(None, "Error de exportación", f"No se pudo exportar el archivo:\n\n{e}")
         logger.error(f"Error al exportar archivo: {e}")
 
 
@@ -399,7 +405,8 @@ def iniciar_transcripcion_thread(
     from infrastructure.audio.reproductor import reproductor
 
     if reproductor.reproduciendo:
-        messagebox.showwarning(
+        show_warning(
+            ventana,
             "Advertencia",
             "Hay una reproduccion en curso. Por favor, detenga la reproduccion antes de transcribir.",
         )
@@ -407,9 +414,7 @@ def iniciar_transcripcion_thread(
 
     seleccion = lista_archivos.curselection()
     if not seleccion:
-        messagebox.showwarning(
-            "Advertencia", "Seleccione un archivo de audio para transcribir."
-        )
+        show_warning(ventana, "Advertencia", "Seleccione un archivo de audio para transcribir.")
         config.transcripcion_en_curso = False
         return
 
@@ -433,7 +438,8 @@ def iniciar_transcripcion_thread(
         
         # Safe check for diarization availability on main GUI thread
         if diarizar_val and not diarizer.is_available():
-            messagebox.showinfo(
+            show_info(
+                ventana,
                 "Diferenciar hablantes no disponible",
                 "Falta whisperx o el token de HuggingFace (HF_TOKEN en .env). "
                 "Se transcribirá sin diferenciar hablantes.",
@@ -553,8 +559,9 @@ def iniciar_transcripcion(
 
     seleccion = lista_archivos.curselection()
     if not seleccion:
-        messagebox.showwarning(
-            "Advertencia", "Por favor, seleccione al menos un archivo para transcribir."
+        show_warning(
+            ventana,
+            "Advertencia", "Por favor, seleccione al menos un archivo para transcribir.",
         )
         return
 
@@ -575,7 +582,8 @@ def iniciar_transcripcion(
         and idioma_salida != "en"
         and idioma_salida != idioma_entrada
     ):
-        messagebox.showinfo(
+        show_info(
+            ventana,
             "Traduccion offline",
             "La traduccion offline solo soporta ingles como destino. "
             "El audio se transcribira en su idioma original.",

@@ -1,18 +1,21 @@
 import os
 import threading
+import time
 import tkinter as tk
-from tkinter import messagebox, filedialog
+from tkinter import filedialog
 import customtkinter as ctk
 from infrastructure.services import summarizer
 from .spinner import Spinner
 from infrastructure.audio.reproductor import reproductor
 from presentation.controllers.funcionalidad import obtener_duracion_audio
 from .tooltip import Tooltip
+from .app_dialog import ask_input, ask_yes_no, show_error, show_info, show_warning
 
 
 COLOR_BG          = "#0B0C10"
 COLOR_PANEL       = "#15161E"
 COLOR_PANEL_LIGHT = "#1A1B26"
+COLOR_PANEL_DARK  = "#11121A"
 COLOR_TEXT_FG     = "#FFFFFF"
 COLOR_MUTED       = "#8A8F9E"
 COLOR_ACCENT      = "#7000FF"
@@ -20,82 +23,11 @@ COLOR_ACCENT_HOVER= "#5900CC"
 COLOR_BORDER      = "#2A2B36"
 COLOR_CARD_HOVER  = "#23243A"
 COLOR_CARD_SEL    = "#2D1569"  # dark purple for selected card bg
-COLOR_DANGER      = "#E53E3E"
+COLOR_CHIP        = "#252633"
+COLOR_ICON_HOVER  = "#20212D"
+COLOR_DANGER      = "#E0506A"   # soft rose (matches interview ERROR)
+COLOR_DANGER_SOFT = "#2A1518"  # quiet delete hover — never solid alarm red
 COLOR_GREEN       = "#48BB78"
-
-class RenameDialog(ctk.CTkToplevel):
-    def __init__(self, parent, current_name, title="Renombrar transcripción", prompt="Nuevo nombre:"):
-        super().__init__(parent)
-        self.title(title)
-        self.geometry("400x200")
-        self.resizable(False, False)
-        self.configure(fg_color=COLOR_BG)
-        
-        # Center the dialog on the parent window
-        self.transient(parent)
-        self.grab_set()
-        
-        self.result = None
-        
-        # Title/Prompt
-        ctk.CTkLabel(
-            self, text=prompt, font=("Segoe UI Semibold", 13), text_color="#FFFFFF"
-        ).pack(anchor=tk.W, padx=24, pady=(20, 8))
-        
-        # Entry field
-        self.entry = ctk.CTkEntry(
-            self, fg_color="#11121A", border_color=COLOR_BORDER, text_color="#FFFFFF",
-            width=350, height=36, corner_radius=8
-        )
-        self.entry.pack(padx=24, pady=4)
-        self.entry.insert(0, current_name)
-        self.entry.select_range(0, tk.END)
-        self.entry.focus()
-        
-        # Buttons frame
-        btn_frame = ctk.CTkFrame(self, fg_color="transparent")
-        btn_frame.pack(fill=tk.X, padx=24, pady=(24, 20))
-        
-        def on_ok(event=None):
-            self.result = self.entry.get().strip()
-            self.destroy()
-            
-        def on_cancel(event=None):
-            self.destroy()
-            
-        btn_ok = ctk.CTkButton(
-            btn_frame, text="Aceptar", font=("Segoe UI Semibold", 12),
-            fg_color=COLOR_ACCENT, text_color="#FFFFFF", hover_color=COLOR_ACCENT_HOVER,
-            width=100, height=36, corner_radius=8, command=on_ok
-        )
-        btn_ok.pack(side=tk.LEFT)
-        
-        btn_cancel = ctk.CTkButton(
-            btn_frame, text="Cancelar", font=("Segoe UI Semibold", 12),
-            fg_color=COLOR_PANEL_LIGHT, text_color="#FFFFFF", hover_color=COLOR_BORDER,
-            width=90, height=36, corner_radius=8, command=on_cancel
-        )
-        btn_cancel.pack(side=tk.RIGHT)
-        
-        # Bind enter and escape keys
-        self.bind("<Return>", on_ok)
-        self.bind("<Escape>", on_cancel)
-        
-        # Centering helper
-        self.update_idletasks()
-        try:
-            pw = parent.winfo_toplevel().winfo_x()
-            ph = parent.winfo_toplevel().winfo_y()
-            pwidth = parent.winfo_toplevel().winfo_width()
-            pheight = parent.winfo_toplevel().winfo_height()
-            x = pw + (pwidth // 2) - (400 // 2)
-            y = ph + (pheight // 2) - (200 // 2)
-            self.geometry(f"400x200+{x}+{y}")
-        except Exception:
-            pass
-        
-        # Wait for window to close
-        parent.wait_window(self)
 
 class HistorialFrame(ctk.CTkFrame):
     def __init__(self, parent, **kwargs):
@@ -334,7 +266,7 @@ class HistorialFrame(ctk.CTkFrame):
             width=32, height=32, corner_radius=16,
             command=lambda: self._seek_history(-5)
         )
-        self.btn_rewind_history.pack(side=tk.LEFT, padx=2)
+        self.btn_rewind_history.pack(side=tk.LEFT, padx=4)
 
         self.btn_forward_history = ctk.CTkButton(
             self.player_frame, text="⏩", font=("Segoe UI", 12),
@@ -342,21 +274,21 @@ class HistorialFrame(ctk.CTkFrame):
             width=32, height=32, corner_radius=16,
             command=lambda: self._seek_history(5)
         )
-        self.btn_forward_history.pack(side=tk.LEFT, padx=2)
-        
+        self.btn_forward_history.pack(side=tk.LEFT, padx=4)
+
         self.lbl_time_history = ctk.CTkLabel(
             self.player_frame, text="00:00 / 00:00",
             font=("Segoe UI", 11), text_color=COLOR_TEXT_FG
         )
-        self.lbl_time_history.pack(side=tk.LEFT, padx=8)
-        
+        self.lbl_time_history.pack(side=tk.LEFT, padx=(12, 12))
+
         self.slider_history = ctk.CTkSlider(
             self.player_frame, from_=0, to=100,
             fg_color="#11121A", progress_color=COLOR_ACCENT, button_color=COLOR_ACCENT,
             button_hover_color=COLOR_ACCENT_HOVER, height=14,
             command=self._on_slider_change
         )
-        self.slider_history.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(8, 16))
+        self.slider_history.pack(side=tk.LEFT, fill=tk.X, expand=True, padx=(0, 16))
         
         def on_slider_press(event):
             self._slider_dragging = True
@@ -497,7 +429,8 @@ class HistorialFrame(ctk.CTkFrame):
         self.btn_delete = ctk.CTkButton(
             self.action_row, text="🗑️  Eliminar",
             font=("Segoe UI Semibold", 11),
-            fg_color=COLOR_DANGER, text_color="#FFFFFF", hover_color="#C53030",
+            fg_color="transparent", text_color=COLOR_DANGER,
+            hover_color=COLOR_DANGER_SOFT, border_width=1, border_color=COLOR_BORDER,
             width=110, height=34, corner_radius=8, command=self.delete_record
         )
         self.btn_delete.pack(side=tk.RIGHT)
@@ -514,7 +447,8 @@ class HistorialFrame(ctk.CTkFrame):
     def _make_card(self, record, index):
         card = ctk.CTkFrame(
             self.card_scroll, fg_color=COLOR_PANEL_LIGHT,
-            corner_radius=10, cursor="hand2"
+            corner_radius=10, cursor="hand2",
+            border_width=1, border_color=COLOR_BORDER,
         )
         card.pack(fill=tk.X, padx=6, pady=(4, 0))
 
@@ -527,18 +461,19 @@ class HistorialFrame(ctk.CTkFrame):
         kind_icon = "🎙" if ext in audio_exts else "📄"
 
         lbl_name = ctk.CTkLabel(
-            card, text=f"{kind_icon}  {name}", font=("Segoe UI Semibold", 11),
+            card, text=f"{kind_icon}  {name}", font=("Segoe UI Semibold", 12),
             text_color=COLOR_TEXT_FG, anchor=tk.W
         )
-        lbl_name.pack(fill=tk.X, padx=12, pady=(10, 2))
+        lbl_name.pack(fill=tk.X, padx=12, pady=(10, 4))
 
         row2 = ctk.CTkFrame(card, fg_color="transparent")
         row2.pack(fill=tk.X, padx=12, pady=(0, 10))
 
+        # Quiet duration chip — accent reserved for primary actions
         badge = ctk.CTkLabel(
             row2, text=dur, font=("Segoe UI Semibold", 9),
-            fg_color=COLOR_ACCENT, text_color="#FFFFFF",
-            corner_radius=4, width=48, height=18
+            fg_color=COLOR_CHIP, text_color=COLOR_MUTED,
+            corner_radius=6, width=48, height=20
         )
         badge.pack(side=tk.LEFT, padx=(0, 8))
 
@@ -547,7 +482,9 @@ class HistorialFrame(ctk.CTkFrame):
         )
         lbl_date.pack(side=tk.LEFT)
 
-        # Action buttons on card
+        actions = ctk.CTkFrame(row2, fg_color="transparent")
+        # Hidden until hover/selection — cleaner default list
+
         def on_delete_card(ev=None):
             self._select_card(index)
             self.after(50, self.delete_record)
@@ -556,44 +493,74 @@ class HistorialFrame(ctk.CTkFrame):
             self._select_card(index)
             self.after(50, self.rename_record)
 
+        def _bind_icon_hover(btn, idle_fg, hover_fg, idle_tc=COLOR_MUTED, hover_tc=COLOR_TEXT_FG):
+            def enter(_e=None):
+                btn.configure(fg_color=hover_fg, text_color=hover_tc)
+            def leave(_e=None):
+                btn.configure(fg_color=idle_fg, text_color=idle_tc)
+            btn.bind("<Enter>", enter, add="+")
+            btn.bind("<Leave>", leave, add="+")
+
         btn_delete_card = ctk.CTkButton(
-            row2, text="🗑️", font=("Segoe UI", 10),
-            fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_DANGER,
-            width=20, height=20, corner_radius=4,
+            actions, text="🗑", font=("Segoe UI", 12),
+            fg_color=COLOR_PANEL_DARK, text_color=COLOR_MUTED,
+            hover_color=COLOR_DANGER_SOFT,
+            width=28, height=28, corner_radius=6,
             command=on_delete_card
         )
-        btn_delete_card.pack(side=tk.RIGHT, padx=2)
+        btn_delete_card.pack(side=tk.RIGHT, padx=(4, 0))
+        _bind_icon_hover(
+            btn_delete_card, COLOR_PANEL_DARK, COLOR_DANGER_SOFT,
+            COLOR_MUTED, COLOR_DANGER,
+        )
 
         btn_rename_card = ctk.CTkButton(
-            row2, text="✏️", font=("Segoe UI", 10),
-            fg_color="transparent", text_color=COLOR_MUTED, hover_color=COLOR_ACCENT,
-            width=20, height=20, corner_radius=4,
+            actions, text="✎", font=("Segoe UI", 12),
+            fg_color=COLOR_PANEL_DARK, text_color=COLOR_MUTED,
+            hover_color=COLOR_ICON_HOVER,
+            width=28, height=28, corner_radius=6,
             command=on_rename_card
         )
-        btn_rename_card.pack(side=tk.RIGHT, padx=2)
+        btn_rename_card.pack(side=tk.RIGHT)
+        _bind_icon_hover(btn_rename_card, COLOR_PANEL_DARK, COLOR_ICON_HOVER)
 
         Tooltip(btn_rename_card, "Renombrar grabación")
         Tooltip(btn_delete_card, "Eliminar grabación")
 
+        card._actions = actions
+        card._index = index
+
+        def _show_actions():
+            if not actions.winfo_ismapped():
+                actions.pack(side=tk.RIGHT)
+
+        def _hide_actions():
+            if self._selected_idx == index:
+                return
+            if actions.winfo_ismapped():
+                actions.pack_forget()
 
         def on_click(ev, idx=index):
             self._select_card(idx)
 
         def on_enter(ev):
             if self._selected_idx != index:
-                card.configure(fg_color=COLOR_CARD_HOVER)
+                card.configure(fg_color=COLOR_CARD_HOVER, border_color=COLOR_BORDER)
+            _show_actions()
 
         def on_leave(ev):
-            if self._selected_idx == index:
-                return
             x, y = ev.x, ev.y
             w, h = card.winfo_width(), card.winfo_height()
-            if x < 0 or x >= w or y < 0 or y >= h:
-                card.configure(fg_color=COLOR_PANEL_LIGHT)
+            if 0 <= x < w and 0 <= y < h:
+                return
+            _hide_actions()
+            if self._selected_idx == index:
+                return
+            card.configure(fg_color=COLOR_PANEL_LIGHT, border_color=COLOR_BORDER)
 
         for w in [card, lbl_name, row2, badge, lbl_date]:
             w.bind("<Button-1>", on_click)
-            
+
         card.bind("<Enter>", on_enter)
         card.bind("<Leave>", on_leave)
 
@@ -603,12 +570,19 @@ class HistorialFrame(ctk.CTkFrame):
         if index >= len(self.records):
             return
 
-        # Reset all cards to default
+        # Reset all cards to default; hide actions on non-selected
         for c in self._card_widgets:
-            c.configure(fg_color=COLOR_PANEL_LIGHT)
+            c.configure(fg_color=COLOR_PANEL_LIGHT, border_color=COLOR_BORDER)
+            actions = getattr(c, "_actions", None)
+            if actions is not None and actions.winfo_ismapped():
+                actions.pack_forget()
 
         self._selected_idx = index
-        self._card_widgets[index].configure(fg_color=COLOR_CARD_SEL)
+        sel = self._card_widgets[index]
+        sel.configure(fg_color=COLOR_CARD_SEL, border_color=COLOR_ACCENT)
+        actions = getattr(sel, "_actions", None)
+        if actions is not None and not actions.winfo_ismapped():
+            actions.pack(side=tk.RIGHT)
 
         record = self.records[index]
         self.selected_record = record
@@ -652,7 +626,7 @@ class HistorialFrame(ctk.CTkFrame):
             self.btn_rewind_history.configure(state="normal")
             self.btn_forward_history.configure(state="normal")
             self.lbl_time_history.configure(text="00:00 / 00:00")
-            self.player_frame.pack(fill=tk.X, pady=(0, 10))
+            self.player_frame.pack(fill=tk.X, pady=(12, 14))
             self.update_history_player_ui()
         else:
             self.slider_history.configure(to=100, state="disabled")
@@ -661,7 +635,7 @@ class HistorialFrame(ctk.CTkFrame):
             self.btn_rewind_history.configure(state="disabled")
             self.btn_forward_history.configure(state="disabled")
             self.lbl_time_history.configure(text="Audio no disponible")
-            self.player_frame.pack(fill=tk.X, pady=(0, 10))
+            self.player_frame.pack(fill=tk.X, pady=(12, 14))
             
         self.split_details.pack(fill=tk.BOTH, expand=True)
 
@@ -771,11 +745,12 @@ class HistorialFrame(ctk.CTkFrame):
 
         text = self.txt_transcription.get("1.0", tk.END).strip()
         if not text:
-            messagebox.showwarning("Advertencia", "No hay texto transcrito para resumir.")
+            show_warning(self, "Advertencia", "No hay texto transcrito para resumir.")
             return
 
         if not summarizer.is_configured():
-            messagebox.showinfo(
+            show_info(
+                self,
                 "Resumen no configurado",
                 "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
@@ -818,7 +793,7 @@ class HistorialFrame(ctk.CTkFrame):
                     break
             self.update_summary_ui()
             self.set_status("¡Resumen listo!")
-            messagebox.showinfo("Éxito", "El resumen de IA fue generado correctamente.")
+            show_info(self, "Éxito", "El resumen de IA fue generado correctamente.")
         else:
             self.set_status("")
 
@@ -828,7 +803,7 @@ class HistorialFrame(ctk.CTkFrame):
         self.label_no_summary.pack(pady=(20, 8), padx=20)
         self.btn_gen_summary_inline.pack(pady=(0, 20))
         self.set_status("Error al resumir")
-        messagebox.showerror("Error de Resumen IA", f"No se pudo completar el resumen:\n\n{err_msg}")
+        show_error(self, "Error de Resumen IA", f"No se pudo completar el resumen:\n\n{err_msg}")
 
     # ------------------------------------------------------------------
     # ACTIONS
@@ -863,37 +838,46 @@ class HistorialFrame(ctk.CTkFrame):
         if not self.selected_record:
             return
         current_name = self.selected_record.get("file_name", "")
-        dialog = RenameDialog(self, current_name)
-        new_name = dialog.result
+        new_name = ask_input(
+            self,
+            "Renombrar transcripción",
+            "Nuevo nombre:",
+            current_name,
+        )
         if not new_name or new_name == current_name:
             return
         import config
+        file_path = self.selected_record["file_path"]
         if config.repository.rename(file_path, new_name):
             self.selected_record["file_name"] = new_name
             for r in self.records:
                 if r["file_path"] == file_path:
                     r["file_name"] = new_name
                     break
-            # Refresh the card label in-place
+            # Refresh the card label in-place (keep type icon)
             card = self._card_widgets[self._selected_idx]
+            path = (file_path or "").lower()
+            audio_exts = {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".aac", ".opus"}
+            ext = os.path.splitext(path)[1]
+            kind_icon = "🎙" if ext in audio_exts else "📄"
             for child in card.winfo_children():
                 if isinstance(child, ctk.CTkLabel):
-                    child.configure(text=new_name)
+                    child.configure(text=f"{kind_icon}  {new_name}")
                     break
             self.label_detail_title.configure(text=new_name)
             self.show_toast("Nombre actualizado")
         else:
-            messagebox.showerror("Error", "No se pudo renombrar el registro.")
+            show_error(self, "Error", "No se pudo renombrar el registro.")
 
     def delete_record(self):
         if not self.selected_record:
             return
-        confirm = messagebox.askyesno(
+        confirm = ask_yes_no(
+            self,
             "Confirmar eliminación",
             f"¿Estás seguro de que querés borrar la transcripción de "
             f"'{self.selected_record['file_name']}' del historial?\n\n"
             "Esta acción no eliminará tu archivo de audio, solo el registro guardado.",
-            parent=self
         )
         if confirm:
             try:
@@ -902,7 +886,7 @@ class HistorialFrame(ctk.CTkFrame):
                 self.show_toast("Registro eliminado")
                 self.load_history()
             except Exception as e:
-                messagebox.showerror("Error", f"No se pudo eliminar el registro: {e}")
+                show_error(self, "Error", f"No se pudo eliminar el registro: {e}")
 
     def set_status(self, text):
         self.label_status.configure(text=text)
@@ -917,12 +901,12 @@ class HistorialFrame(ctk.CTkFrame):
         
         file_path = self.selected_record["file_path"]
         
-        if reproductor.audio_actual != file_path:
+        if reproductor.ruta_solicitada != file_path:
             self._stop_history_playback()
             try:
                 reproductor.iniciar(file_path)
             except Exception as e:
-                messagebox.showerror("Error", f"No se pudo reproducir el audio: {e}")
+                show_error(self, "Error", f"No se pudo reproducir el audio: {e}")
                 return
         else:
             if reproductor.reproduciendo:
@@ -940,7 +924,7 @@ class HistorialFrame(ctk.CTkFrame):
         if not self.selected_record:
             return
         file_path = self.selected_record["file_path"]
-        if reproductor.audio_actual == file_path:
+        if reproductor.ruta_solicitada == file_path:
             if seconds > 0:
                 reproductor.adelantar(seconds)
             else:
@@ -948,7 +932,7 @@ class HistorialFrame(ctk.CTkFrame):
             self.update_history_player_ui()
 
     def _on_slider_change(self, value):
-        if self.selected_record and reproductor.audio_actual == self.selected_record["file_path"]:
+        if self.selected_record and reproductor.ruta_solicitada == self.selected_record["file_path"]:
             curr = int(value)
             total = int(reproductor.duracion_total)
             def _fmt(s):
@@ -964,7 +948,7 @@ class HistorialFrame(ctk.CTkFrame):
 
     def _on_slider_release(self, event):
         self._slider_dragging = False
-        if self.selected_record and reproductor.audio_actual == self.selected_record["file_path"]:
+        if self.selected_record and reproductor.ruta_solicitada == self.selected_record["file_path"]:
             new_pos = self.slider_history.get()
             reproductor.posicion_actual = new_pos
             import pygame
@@ -984,7 +968,7 @@ class HistorialFrame(ctk.CTkFrame):
             return
             
         file_path = self.selected_record["file_path"]
-        is_current = (reproductor.audio_actual == file_path)
+        is_current = (reproductor.ruta_solicitada == file_path)
         
         if is_current:
             if reproductor.reproduciendo:
@@ -1008,7 +992,7 @@ class HistorialFrame(ctk.CTkFrame):
             
         if self.selected_record:
             file_path = self.selected_record["file_path"]
-            if reproductor.audio_actual == file_path:
+            if reproductor.ruta_solicitada == file_path:
                 import pygame
                 mixer_busy = False
                 if pygame.mixer.get_init():

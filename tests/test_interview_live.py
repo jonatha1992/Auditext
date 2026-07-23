@@ -11,6 +11,8 @@ import numpy as np
 from infrastructure.services.gemini_keys import KeyPool
 from infrastructure.services.interview_live import (
     InterviewAssist,
+    _MAX_CONTEXT_CHARS,
+    _truncate_context,
     float32_to_pcm16,
     parse_assist_text,
 )
@@ -126,11 +128,52 @@ class TestInterviewHelpers(unittest.TestCase):
         assist = parse_assist_text(
             '{"pregunta_es":"Contame sobre vos",'
             '"respuestas":["I am a developer.","My background is in Python."],'
-            '"ideas_clave":["mencionar experiencia","dar un resultado"],'
-            '"frase_puente":"That is a great question."}'
+            '"ideas_clave":["mencionar experiencia","dar un resultado"]}'
         )
         self.assertEqual(assist.ideas_clave, ["mencionar experiencia", "dar un resultado"])
-        self.assertEqual(assist.frase_puente, "That is a great question.")
+
+    def test_parse_single_response(self):
+        # Coach now prioritizes 1 short reply; a single respuesta must parse.
+        assist = parse_assist_text(
+            '{"pregunta_es":"¿Por qué querés el puesto?","respuestas":["I want to grow here."]}'
+        )
+        self.assertIsNotNone(assist)
+        self.assertEqual(assist.respuestas, ["I want to grow here."])
+
+    def test_parse_ignores_frase_puente(self):
+        # frase_puente is no longer parsed; extra key must not break parsing
+        # and the field stays at its empty default.
+        assist = parse_assist_text(
+            '{"pregunta_es":"Hola","respuestas":["Hi there"],'
+            '"frase_puente":"That is a great question."}'
+        )
+        self.assertIsNotNone(assist)
+        self.assertEqual(assist.frase_puente, "")
+
+    def test_parse_prueba_oral_ideas(self):
+        # prueba_oral regression guard: ideas_clave must stay useful in the
+        # same single response alongside short starters.
+        assist = parse_assist_text(
+            '{"pregunta_es":"Explicá la fotosíntesis",'
+            '"respuestas":["The main idea is..."],'
+            '"ideas_clave":["clorofila","luz solar","glucosa"]}'
+        )
+        self.assertIsNotNone(assist)
+        self.assertEqual(assist.ideas_clave, ["clorofila", "luz solar", "glucosa"])
+
+
+class TestContextTruncation(unittest.TestCase):
+    def test_short_context_unchanged(self):
+        self.assertEqual(_truncate_context("  hola CV  "), "hola CV")
+
+    def test_none_context(self):
+        self.assertEqual(_truncate_context(None), "")
+
+    def test_long_context_truncated(self):
+        long_ctx = "x" * (_MAX_CONTEXT_CHARS + 500)
+        out = _truncate_context(long_ctx)
+        self.assertTrue(out.endswith("[…]"))
+        self.assertLessEqual(len(out), _MAX_CONTEXT_CHARS + 5)
 
 
 if __name__ == "__main__":
