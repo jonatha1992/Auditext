@@ -206,6 +206,71 @@ class _InputDialog(ctk.CTkToplevel):
         self.focus_force()
 
 
+class _ExportChoiceDialog(ctk.CTkToplevel):
+    def __init__(
+        self,
+        parent: tk.Misc,
+        options: list[tuple[str, str, str, str]],
+    ):
+        super().__init__(parent)
+        self.title("Exportar")
+        self.resizable(False, False)
+        self.configure(fg_color=BG)
+        self.result: str | None = None
+
+        ctk.CTkLabel(
+            self, text="📥  Exportar",
+            font=("Segoe UI Semibold", 15), text_color=TEXT,
+        ).pack(anchor=tk.W, padx=24, pady=(20, 4))
+
+        ctk.CTkLabel(
+            self, text="¿Qué querés exportar del registro seleccionado?",
+            font=("Segoe UI", 12), text_color=MUTED,
+        ).pack(anchor=tk.W, padx=24, pady=(0, 14))
+
+        def choose(value: str | None):
+            self.result = value
+            self.destroy()
+
+        for key, label, icon, color in options:
+            ctk.CTkButton(
+                self, text=f"{icon}  {label}",
+                font=("Segoe UI Semibold", 12),
+                fg_color=PANEL_LIGHT, text_color=color,
+                hover_color=BORDER, anchor=tk.W,
+                height=42, corner_radius=8,
+                command=lambda v=key: choose(v),
+            ).pack(fill=tk.X, padx=24, pady=4)
+
+        cancel_frame = ctk.CTkFrame(self, fg_color="transparent")
+        cancel_frame.pack(fill=tk.X, padx=24, pady=(12, 20))
+
+        ctk.CTkButton(
+            cancel_frame, text="Cancelar", font=("Segoe UI Semibold", 12),
+            fg_color=PANEL_LIGHT, text_color=TEXT, hover_color=BORDER,
+            height=36, corner_radius=8, command=lambda: choose(None),
+        ).pack(side=tk.RIGHT)
+
+        self.bind("<Escape>", lambda _e: choose(None))
+        self.protocol("WM_DELETE_WINDOW", lambda: choose(None))
+
+        height = 140 + len(options) * 54
+        _center(self, parent, 380, min(height, 360))
+        self.transient(parent)
+        self.grab_set()
+        self.focus_force()
+
+
+def ask_export_choice(
+    parent: tk.Misc | None,
+    options: list[tuple[str, str, str, str]],
+) -> str | None:
+    dlg = _ExportChoiceDialog(_resolve_parent(parent), options)
+    root = _resolve_parent(parent)
+    root.wait_window(dlg)
+    return dlg.result
+
+
 def _show(parent: tk.Misc | None, dialog: ctk.CTkToplevel):
     root = _resolve_parent(parent)
     root.wait_window(dialog)

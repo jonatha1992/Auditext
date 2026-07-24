@@ -1,5 +1,6 @@
 import os
 import platform
+import shutil
 import subprocess
 import threading
 import time
@@ -20,6 +21,112 @@ from config import (
     idiomas,
     ffmpeg_path,
 )
+
+
+SUPPORTED_MEDIA_EXTENSIONS = frozenset(
+    {".mp3", ".wav", ".m4a", ".flac", ".ogg", ".mp4", ".aac", ".opus"}
+)
+
+
+def es_archivo_multimedia_exportable(file_path: str) -> bool:
+    """Return whether a history record points to a supported local media file."""
+    extension = os.path.splitext((file_path or "").lower())[1]
+    return extension in SUPPORTED_MEDIA_EXTENSIONS and os.path.isfile(file_path)
+
+
+def _abrir_archivo_exportado(file_path: str) -> None:
+    try:
+        if platform.system() == "Darwin":
+            subprocess.call(("open", file_path))
+        elif platform.system() == "Windows":
+            os.startfile(file_path)
+        else:
+            subprocess.call(("xdg-open", file_path))
+        logger.info(f"Archivo abierto: {file_path}")
+    except Exception as exc:
+        logger.error(f"Error al abrir el archivo: {exc}")
+
+
+def exportar_resumen(
+    resumen: str,
+    *,
+    parent=None,
+) -> str | None:
+    """Save a non-empty history summary as TXT or DOCX."""
+    if not resumen or not resumen.strip():
+        show_warning(parent, "Advertencia", "No hay resumen para exportar.")
+        return None
+
+    output_file = filedialog.asksaveasfilename(
+        defaultextension=".txt",
+        filetypes=[
+            ("Archivo de texto", "*.txt"),
+            ("Documento de Word", "*.docx"),
+        ],
+        title="Guardar resumen como",
+    )
+    if not output_file:
+        return None
+
+    _, extension = os.path.splitext(output_file.lower())
+    try:
+        if extension == ".docx":
+            import docx
+
+            document = docx.Document()
+            document.add_heading("Resumen de AudioText", 0)
+            for paragraph in resumen.split("\n"):
+                if paragraph.strip():
+                    document.add_paragraph(paragraph)
+            document.save(output_file)
+        else:
+            with open(output_file, "w", encoding="utf-8") as output:
+                output.write(resumen)
+
+        show_info(parent, "Información", f"Resumen guardado en {output_file}.")
+        logger.info(f"Resumen guardado en {output_file}.")
+        _abrir_archivo_exportado(output_file)
+        return output_file
+    except Exception as exc:
+        show_error(parent, "Error de exportación", f"No se pudo exportar el resumen:\n\n{exc}")
+        logger.error(f"Error al exportar resumen: {exc}")
+        return None
+
+
+def exportar_audio(
+    source_path: str,
+    *,
+    parent=None,
+) -> str | None:
+    """Copy supported history media without converting or re-encoding it."""
+    if not es_archivo_multimedia_exportable(source_path):
+        show_warning(parent, "Advertencia", "El archivo de audio ya no está disponible.")
+        return None
+
+    source_extension = os.path.splitext(source_path)[1]
+    output_file = filedialog.asksaveasfilename(
+        defaultextension=source_extension,
+        filetypes=[("Archivo de audio o video", f"*{source_extension}")],
+        title="Guardar audio como",
+        initialfile=os.path.basename(source_path),
+    )
+    if not output_file:
+        return None
+
+    destination_root, destination_extension = os.path.splitext(output_file)
+    if destination_extension.lower() != source_extension.lower():
+        output_file = destination_root + source_extension
+
+    try:
+        shutil.copy2(source_path, output_file)
+        show_info(parent, "Información", f"Audio copiado a {output_file}.")
+        logger.info(f"Audio copiado a {output_file}.")
+        _abrir_archivo_exportado(output_file)
+        return output_file
+    except Exception as exc:
+        show_error(parent, "Error de exportación", f"No se pudo copiar el audio:\n\n{exc}")
+        logger.error(f"Error al copiar audio: {exc}")
+        return None
 
 
 def _ask_on_main_thread(ventana, title, message):

@@ -2,14 +2,26 @@ import os
 import threading
 import time
 import tkinter as tk
-from tkinter import filedialog
 import customtkinter as ctk
 from infrastructure.services import summarizer
 from .spinner import Spinner
 from infrastructure.audio.reproductor import reproductor
-from presentation.controllers.funcionalidad import obtener_duracion_audio
+from presentation.controllers.funcionalidad import (
+    es_archivo_multimedia_exportable,
+    exportar_audio,
+    exportar_resumen,
+    exportar_transcripcion,
+    obtener_duracion_audio,
+)
 from .tooltip import Tooltip
-from .app_dialog import ask_input, ask_yes_no, show_error, show_info, show_warning
+from .app_dialog import (
+    ask_export_choice,
+    ask_input,
+    ask_yes_no,
+    show_error,
+    show_info,
+    show_warning,
+)
 
 
 COLOR_BG          = "#0B0C10"
@@ -829,9 +841,39 @@ class HistorialFrame(ctk.CTkFrame):
     def export_transcription(self):
         if not self.selected_record:
             return
+
+        record = self.selected_record
+        file_path = record.get("file_path", "")
         text = self.txt_transcription.get("1.0", tk.END).strip()
-        from presentation.controllers.funcionalidad import exportar_transcripcion
-        exportar_transcripcion(text)
+        summary = (record.get("summary") or "").strip()
+
+        available = []
+
+        if text:
+            available.append(
+                ("transcript", "Transcripción / subtítulos", "📄", "#63B3ED")
+            )
+
+        if summary:
+            available.append(("summary", "Resumen", "✨", "#F6E05E"))
+
+        if es_archivo_multimedia_exportable(file_path):
+            available.append(("audio", "Audio", "🎙", "#48BB78"))
+
+        if not available:
+            show_warning(self, "Exportar", "No hay contenido disponible para exportar en este registro.")
+            return
+
+        choice = ask_export_choice(self, available)
+        if not choice:
+            return
+
+        if choice == "transcript":
+            exportar_transcripcion(text)
+        elif choice == "summary":
+            exportar_resumen(summary, parent=self)
+        elif choice == "audio":
+            exportar_audio(file_path, parent=self)
 
 
     def rename_record(self):
