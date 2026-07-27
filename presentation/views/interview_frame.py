@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import ctypes
 import queue
 import re
+import sys
 import threading
 from pathlib import Path
 
@@ -46,6 +48,7 @@ MODE_LABELS = {
     "Entrevista laboral": "entrevista",
     "Práctica de idioma": "practica",
     "Conversación general": "general",
+    "Examen oral (respuestas completas)": "examen_oral",
     "Prueba oral (práctica, solo ideas)": "prueba_oral",
 }
 
@@ -69,6 +72,14 @@ MODE_CONTEXT = {
         "color": "#63B3ED",
         "placeholder": "¿De qué querés hablar? (tema, contexto de la charla...).",
         "show_cv": False,
+    },
+    "examen_oral": {
+        "label": "📚  TEMARIO / CRONOGRAMA",
+        "color": "#F6AD55",
+        "placeholder": "Pegá el cronograma o temario de la materia (unidades, temas, bibliografía...).",
+        "show_cv": True,
+        "file_button": "📂  Cargar temario…",
+        "file_title": "temario",
     },
     "prueba_oral": {
         "label": "📝  TEMA DE LA PRUEBA",
@@ -108,6 +119,17 @@ class CandidateListener:
         return bool(self._thread and self._thread.is_alive())
 
     def _run(self, microphone_name: str | None) -> None:
+        com_initialized = False
+        if sys.platform == "win32":
+            try:
+                # Inicializar COM como COINIT_MULTITHREADED (0x0): soundcard usa
+                # objetos COM que requieren inicialización por-hilo, y este hilo
+                # es distinto al que ya inicializó COM al importar el módulo.
+                hr = ctypes.windll.ole32.CoInitializeEx(None, 0)
+                if hr >= 0:
+                    com_initialized = True
+            except Exception as exc:
+                logger.exception("CoInitializeEx falló: %s", exc)
         try:
             service = config.transcription_service
             if service is None:
@@ -149,6 +171,12 @@ class CandidateListener:
         except Exception as exc:
             logger.exception("Candidate microphone transcription failed: %s", exc)
             self._on_status(f"Error de micrófono: {exc}")
+        finally:
+            if com_initialized:
+                try:
+                    ctypes.windll.ole32.CoUninitialize()
+                except Exception:
+                    pass
 
 
 class InterviewFrame(ctk.CTkFrame):
@@ -608,8 +636,10 @@ class InterviewFrame(ctk.CTkFrame):
     def _upload_cv_file(self) -> None:
         from tkinter import filedialog
 
+        cfg = MODE_CONTEXT.get(self._current_mode or "entrevista", MODE_CONTEXT["entrevista"])
+        what = cfg.get("file_title", "CV")
         path = filedialog.askopenfilename(
-            title="Seleccionar CV",
+            title=f"Seleccionar {what}",
             filetypes=[
                 ("Documentos (PDF, Word, texto)", "*.pdf;*.docx;*.txt;*.md"),
                 ("PDF", "*.pdf"),
@@ -623,11 +653,11 @@ class InterviewFrame(ctk.CTkFrame):
             text = self._extract_cv_text(path)
         except Exception as exc:
             logger.exception("Failed extracting CV text from %s: %s", path, exc)
-            show_error(self, "CV", f"No se pudo leer el archivo:\n{exc}")
+            show_error(self, what, f"No se pudo leer el archivo:\n{exc}")
             return
         if not text.strip():
             show_warning(
-                self, "CV", "El archivo no tiene texto extraíble (¿PDF escaneado como imagen?)."
+                self, what, "El archivo no tiene texto extraíble (¿PDF escaneado como imagen?)."
             )
             return
         self.context_box.delete("1.0", tk.END)
@@ -684,6 +714,7 @@ class InterviewFrame(ctk.CTkFrame):
 
         self.context_label.configure(text=cfg["label"], text_color=cfg["color"])
         if cfg["show_cv"]:
+            self.cv_button.configure(text=cfg.get("file_button", "📂  Cargar CV…"))
             self.cv_button.pack(side=tk.RIGHT)
         else:
             self.cv_button.pack_forget()

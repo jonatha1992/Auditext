@@ -12,11 +12,12 @@ WHISPER_SMALL = os.path.join(
 )
 TORCH_HUB = os.path.join(os.environ["USERPROFILE"], ".cache", "torch", "hub")
 SILERO_VAD = os.path.join(TORCH_HUB, "snakers4_silero-vad_master")
-FFMPEG_BIN = os.path.join("..", "ffmpeg", "bin")
+FFMPEG_BIN = os.path.join(".", "ffmpeg", "bin")
 
 # --- Collect packages that bundle data files ---
 ctk_datas, ctk_bins, ctk_hiddens = collect_all("customtkinter")
 fw_datas = collect_data_files("faster_whisper")
+sc_datas = collect_data_files("soundcard")
 
 a = Analysis(
     ["main.py"],
@@ -28,7 +29,7 @@ a = Analysis(
     datas=[
         ("icons/icono.ico", "icons"),
         (WHISPER_SMALL, "models/whisper-small"),
-    ] + ctk_datas + fw_datas,
+    ] + ctk_datas + fw_datas + sc_datas,
     hiddenimports=[
         # Audio capture
         "soundcard",

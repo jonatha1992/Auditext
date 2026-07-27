@@ -67,6 +67,14 @@ _MODE_INSTRUCTIONS = {
         "Las respuestas deben ser naturales, adecuadas al contexto pegado por el usuario. "
         "ideas_clave: puntos del contexto o de la conversación útiles para el próximo turno."
     ),
+    "examen_oral": (
+        "Sos asistente de examen oral para un hispanohablante. El INTERLOCUTOR hace de "
+        "examinador y el contexto pegado es el temario o cronograma de la materia. "
+        "Las respuestas deben ser COMPLETAS y listas para decir en voz alta: correctas, "
+        "concretas y apoyadas en el temario, en el idioma en que habla el examinador. "
+        "ideas_clave: conceptos del temario que sostienen la respuesta, por si el "
+        "examinador repregunta."
+    ),
     "prueba_oral": (
         "Sos asistente de PRÁCTICA para pruebas orales. El usuario estudia respondiendo en voz alta; "
         "el INTERLOCUTOR hace de examinador. El contexto pegado es el temario o material de estudio. "
@@ -92,6 +100,28 @@ def _truncate_context(context: str) -> str:
     if len(ctx) <= _MAX_CONTEXT_CHARS:
         return ctx
     return ctx[:_MAX_CONTEXT_CHARS].rstrip() + " […]"
+
+
+def _select_context(context: str, utterance: str) -> str:
+    """Fit the pasted context into the prompt budget, keeping what's relevant.
+
+    A full-course study guide does not fit in _MAX_CONTEXT_CHARS, so we retrieve
+    the sections matching the examiner's question instead of head-truncating —
+    otherwise every question past unit one would be answered without its
+    material. Retrieval must never break the coach, so any failure degrades to
+    the previous truncation behaviour.
+    """
+    ctx = (context or "").strip()
+    if len(ctx) <= _MAX_CONTEXT_CHARS:
+        return ctx
+    try:
+        from infrastructure.services.temario_index import select_context
+
+        selected = select_context(ctx, utterance, _MAX_CONTEXT_CHARS)
+    except Exception as exc:
+        logger.exception("Context retrieval failed, truncating instead: %s", exc)
+        return _truncate_context(ctx)
+    return selected or _truncate_context(ctx)
 
 
 _COACH_PROMPT = """{role_instructions}
@@ -224,7 +254,7 @@ def coach_assist(
 
     prompt = _COACH_PROMPT.format(
         role_instructions=_MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS[DEFAULT_ASSIST_MODE]),
-        context=_truncate_context(context) or "(sin contexto)",
+        context=_select_context(context, utterance) or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
     )
