@@ -3,22 +3,8 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# Django
-*.log
-local_settings.py
-db.sqlite3
-db.sqlite3-journal
-/media
-/staticfiles
-/Audios
-
 # Environment variables - SECURITY CRITICAL
 .env
-.env.*
-.env.local
-.env.*.local
-!.env.example
-# Allow .env.example to be committed as a template
 
 # Virtual environments
 .venv
@@ -94,6 +80,19 @@ dmypy.json
 # Logs
 logs/
 *.log.*
-.env.example
-CLAUDE.md
+
+# Pretrained speaker recognition models (not used, too large for git)
+pretrained_models/
+
+# Sample audio files (large, not part of source)
+/Audios/
+
+# Session audio recordings in data/
+data/audios/
+
+
 .claude/settings.local.json
+
+# Agent skill cache
+.atl/.skill-registry.cache.json
+.atl/skill-registry.md
