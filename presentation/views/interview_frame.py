@@ -52,26 +52,38 @@ MODE_LABELS = {
     "Prueba oral (práctica, solo ideas)": "prueba_oral",
 }
 
+LANG_SETTING_KEY = "interview_answer_lang"
+LANG_LABELS = {
+    "Español": "es",
+    "Inglés": "en",
+    "El del examinador (automático)": "auto",
+}
+
 # Cada modo pide un contexto distinto. El CV solo tiene sentido en una entrevista
 # laboral; en los demás modos pedimos el tema/situación en lugar del CV.
+# 'default_lang' es solo el valor inicial: el usuario puede cambiarlo y su
+# elección queda guardada por modo.
 MODE_CONTEXT = {
     "entrevista": {
         "label": "📄  CV / CONTEXTO",
         "color": "#F6AD55",
         "placeholder": "Pegá tu CV o el contexto de la sesión (puesto, empresa, tema a practicar...).",
         "show_cv": True,
+        "default_lang": "en",
     },
     "practica": {
         "label": "🗣  TEMA A PRACTICAR",
         "color": "#4EC98A",
         "placeholder": "¿Qué querés practicar? (tema, situación, nivel de inglés, palabras que te cuestan...).",
         "show_cv": False,
+        "default_lang": "en",
     },
     "general": {
         "label": "💬  TEMA DE CONVERSACIÓN",
         "color": "#63B3ED",
         "placeholder": "¿De qué querés hablar? (tema, contexto de la charla...).",
         "show_cv": False,
+        "default_lang": "en",
     },
     "examen_oral": {
         "label": "📚  TEMARIO / CRONOGRAMA",
@@ -80,12 +92,14 @@ MODE_CONTEXT = {
         "show_cv": True,
         "file_button": "📂  Cargar temario…",
         "file_title": "temario",
+        "default_lang": "es",
     },
     "prueba_oral": {
         "label": "📝  TEMA DE LA PRUEBA",
         "color": "#A78BFA",
         "placeholder": "¿Sobre qué es la prueba oral? (tema, consigna, puntos a cubrir...).",
         "show_cv": False,
+        "default_lang": "es",
     },
 }
 
@@ -256,6 +270,23 @@ class InterviewFrame(ctk.CTkFrame):
             command=self._on_mode_change,
         )
         self.mode_combo.pack(fill=tk.X, pady=(4, 0))
+
+        lang_row = ctk.CTkFrame(self.prep, fg_color="transparent")
+        lang_row.pack(fill=tk.X, padx=18, pady=(0, 10))
+        ctk.CTkLabel(
+            lang_row, text="🌎  IDIOMA DE LAS RESPUESTAS",
+            font=("Segoe UI Semibold", 9), text_color="#63B3ED",
+        ).pack(anchor=tk.W)
+        self._mode_langs: dict[str, str] = {}  # idioma por modo (cache de sesión)
+        self.lang_var = tk.StringVar(value=self._load_saved_lang_label())
+        self.lang_combo = ctk.CTkComboBox(
+            lang_row, variable=self.lang_var, state="readonly",
+            values=list(LANG_LABELS),
+            fg_color=PANEL_DARK, border_color=BORDER, button_color=BORDER,
+            dropdown_fg_color=PANEL, dropdown_hover_color=ACCENT,
+            command=self._on_lang_change,
+        )
+        self.lang_combo.pack(fill=tk.X, pady=(4, 0))
 
         context_header = ctk.CTkFrame(self.prep, fg_color="transparent")
         context_header.pack(fill=tk.X, padx=18, pady=(0, 4))
@@ -719,14 +750,48 @@ class InterviewFrame(ctk.CTkFrame):
         else:
             self.cv_button.pack_forget()
 
-        # Cargar el contexto propio del nuevo modo (solo si realmente cambió).
+        # Cargar el contexto y el idioma propios del nuevo modo (solo si cambió).
         if prev != new_mode:
             saved = self._load_saved_context(new_mode)
             self.context_box.delete("1.0", tk.END)
             self.context_box.insert("1.0", saved or cfg["placeholder"])
+            # Un examen oral se rinde en español y una entrevista suele ser en
+            # inglés: cada modo arranca con su idioma y recuerda tu elección.
+            self.lang_var.set(self._lang_label_for(new_mode))
 
         self._context_placeholder = cfg["placeholder"]
         self._current_mode = new_mode
+
+    def _lang_label_for(self, mode: str) -> str:
+        """Saved answer language for `mode`, or the mode's default."""
+        cfg = MODE_CONTEXT.get(mode, MODE_CONTEXT["entrevista"])
+        code = self._mode_langs.get(mode) or cfg.get("default_lang", "en")
+        if mode not in self._mode_langs and config.repository is not None:
+            try:
+                saved = config.repository.get_setting(f"{LANG_SETTING_KEY}_{mode}")
+                if saved in LANG_LABELS.values():
+                    code = saved
+            except Exception as exc:
+                logger.exception("Failed loading saved answer language: %s", exc)
+        for label, value in LANG_LABELS.items():
+            if value == code:
+                return label
+        return next(iter(LANG_LABELS))
+
+    def _load_saved_lang_label(self) -> str:
+        return self._lang_label_for(MODE_LABELS.get(self.mode_var.get(), "entrevista"))
+
+    def _on_lang_change(self, choice: str) -> None:
+        """Persist the answer language for the mode currently selected."""
+        code = LANG_LABELS.get(choice, "en")
+        mode = self._current_mode or "entrevista"
+        self._mode_langs[mode] = code
+        if config.repository is None:
+            return
+        try:
+            config.repository.set_setting(f"{LANG_SETTING_KEY}_{mode}", code)
+        except Exception as exc:
+            logger.exception("Failed saving answer language: %s", exc)
 
     def _load_saved_context(self, mode: str = "entrevista") -> str | None:
         # Cache de sesión primero (funciona aunque no haya base de datos).
@@ -770,16 +835,22 @@ class InterviewFrame(ctk.CTkFrame):
                 config.repository.set_setting(MODE_SETTING_KEY, assist_mode)
             except Exception as exc:
                 logger.exception("Failed saving assist mode: %s", exc)
+        answer_lang = LANG_LABELS.get(self.lang_var.get(), "en")
+        # El STT del interlocutor tiene que ir en el idioma en que habla, o el
+        # coach recibe basura. Nunca 'auto': el tab Live fija el idioma (ver
+        # Transcriber._locked_language), así que 'auto' cae al inglés histórico.
+        stt_lang = answer_lang if answer_lang in ("es", "en") else "en"
         source_type, source_value = self._source_map.get(self.source_var.get(), ("loopback", None))
         self._session_ended = False
         self._mic_error_shown = False
         self.show_active()
         self._set_status("Conectando...", ACCENT)
         self.worker.start(
-            language="en", out_dir=self.out_dir, source_type=source_type,
+            language=stt_lang, out_dir=self.out_dir, source_type=source_type,
             source_val=source_value, translate=False,
             save_audio=self.record_var.get(), interview_mode=True,
             interview_context=context, interview_assist_mode=assist_mode,
+            interview_answer_lang=answer_lang,
             assist_queue=self.assist_queue,
         )
         self.candidate_listener.start(self._microphone_map.get(self.mic_var.get()))

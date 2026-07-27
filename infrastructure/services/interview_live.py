@@ -47,6 +47,16 @@ Acknowledge briefly only if needed; prefer no spoken reply.
 
 DEFAULT_ASSIST_MODE = "entrevista"
 
+# Language the coach must answer in. The app started out English-only (job
+# interviews), but an oral exam is usually taken in Spanish, so the language is
+# now an explicit choice instead of being baked into the prompt.
+DEFAULT_ANSWER_LANG = "en"
+ANSWER_LANGS = {
+    "en": "SIEMPRE en inglés",
+    "es": "SIEMPRE en español",
+    "auto": "en el mismo idioma en que habla el INTERLOCUTOR",
+}
+
 _MODE_INSTRUCTIONS = {
     "entrevista": (
         "Sos coach de entrevista laboral para un candidato hispanohablante. "
@@ -58,7 +68,7 @@ _MODE_INSTRUCTIONS = {
         "Sos asistente de práctica de idioma para un hispanohablante que practica inglés. "
         "El INTERLOCUTOR puede ser un profesor, tutor o compañero de práctica. "
         "Si pide un ejercicio o ejemplo (p. ej. 'try saying that'), las respuestas deben CUMPLIR "
-        "el ejercicio con frases naturales en inglés. Si pregunta algo, las respuestas la contestan. "
+        "el ejercicio con frases naturales. Si pregunta algo, las respuestas la contestan. "
         "ideas_clave: tips breves de vocabulario, gramática o pronunciación relevantes al turno."
     ),
     "general": (
@@ -71,7 +81,7 @@ _MODE_INSTRUCTIONS = {
         "Sos asistente de examen oral para un hispanohablante. El INTERLOCUTOR hace de "
         "examinador y el contexto pegado es el temario o cronograma de la materia. "
         "Las respuestas deben ser COMPLETAS y listas para decir en voz alta: correctas, "
-        "concretas y apoyadas en el temario, en el idioma en que habla el examinador. "
+        "concretas y apoyadas en el temario. "
         "ideas_clave: conceptos del temario que sostienen la respuesta, por si el "
         "examinador repregunta."
     ),
@@ -81,8 +91,8 @@ _MODE_INSTRUCTIONS = {
         "REGLA CENTRAL: NO des respuestas completas — el usuario debe formular con sus palabras. "
         "ideas_clave es el campo principal: 3 o 4 conceptos o palabras clave del temario que responden "
         "la pregunta, ordenados como esqueleto de respuesta. "
-        "respuestas: SOLO arranques de frase cortos (máximo 6 palabras, terminados en ...) en el idioma "
-        "en que habla el interlocutor, p. ej. 'El concepto central es...' o 'The main idea is...'. "
+        "respuestas: SOLO arranques de frase cortos (máximo 6 palabras, terminados en ...), "
+        "p. ej. 'El concepto central es...' o 'The main idea is...'. "
         "pregunta_es: glosa clara de la pregunta del examinador."
     ),
 }
@@ -141,8 +151,11 @@ Conversación reciente, separada por rol:
 {history}
 ---
 
+IDIOMA DE LAS RESPUESTAS: escribí el campo "respuestas" {answer_lang}.
+El campo "pregunta_es" va siempre en español; "ideas_clave" también.
+
 Respondé SOLO un JSON válido, sin markdown:
-{{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada corta en inglés","alternativa opcional breve en inglés"],"ideas_clave":["idea relevante 1","idea relevante 2"]}}
+{{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada corta","alternativa opcional breve"],"ideas_clave":["idea relevante 1","idea relevante 2"]}}
 
 Reglas: la PRIMERA respuesta es la prioridad — 1 oración corta y fácil de decir en voz alta; la segunda es opcional y breve (podés devolver solo 1).
 Respondé SIEMPRE que el turno tenga contenido: pregunta, instrucción, ejercicio o comentario.
@@ -242,6 +255,7 @@ def coach_assist(
     api_key: str | None = None,
     conversation_history: str = "",
     mode: str = DEFAULT_ASSIST_MODE,
+    answer_lang: str = DEFAULT_ANSWER_LANG,
 ) -> InterviewAssist | None:
     """Sync generate_content coach call (JSON). Tries keys + model fallbacks."""
     utterance = (utterance or "").strip()
@@ -254,6 +268,7 @@ def coach_assist(
 
     prompt = _COACH_PROMPT.format(
         role_instructions=_MODE_INSTRUCTIONS.get(mode, _MODE_INSTRUCTIONS[DEFAULT_ASSIST_MODE]),
+        answer_lang=ANSWER_LANGS.get(answer_lang, ANSWER_LANGS[DEFAULT_ANSWER_LANG]),
         context=_select_context(context, utterance) or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
@@ -307,9 +322,11 @@ class InterviewLiveSession:
         on_assist: Callable[[InterviewAssist], None],
         on_status: Callable[[str], None],
         mode: str = DEFAULT_ASSIST_MODE,
+        answer_lang: str = DEFAULT_ANSWER_LANG,
     ):
         self._context = (context or "").strip() or "(sin contexto del candidato)"
         self._mode = mode if mode in _MODE_INSTRUCTIONS else DEFAULT_ASSIST_MODE
+        self._answer_lang = answer_lang if answer_lang in ANSWER_LANGS else DEFAULT_ANSWER_LANG
         self._on_transcript = on_transcript
         self._on_assist = on_assist
         self._on_status = on_status
@@ -591,6 +608,7 @@ class InterviewLiveSession:
                 self._api_key,
                 history,
                 self._mode,
+                self._answer_lang,
             )
             if assist:
                 self._on_assist(assist)
