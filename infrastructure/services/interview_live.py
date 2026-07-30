@@ -23,7 +23,7 @@ from typing import Callable
 import numpy as np
 
 from config import logger
-from infrastructure.services import gemini_keys
+from infrastructure.services import gemini_keys, nvidia_provider
 
 LIVE_MODELS = [
     os.getenv("GEMINI_LIVE_MODEL", "").strip() or "gemini-3.1-flash-live-preview",
@@ -40,12 +40,14 @@ COACH_MODELS = [
     "gemini-2.0-flash-lite",
 ]
 
-_LIVE_SYSTEM = """You are listening to an English speaker via system audio.
+_LIVE_SYSTEM = """You are listening to a speaker via system audio.
+Transcribe the speaker faithfully in the language they use; never translate their words.
 Stay silent / minimal. Do not coach out loud. The client app will handle coaching separately.
 Acknowledge briefly only if needed; prefer no spoken reply.
 """
 
 DEFAULT_ASSIST_MODE = "entrevista"
+ORAL_ASSIST_MODES = frozenset({"examen_oral", "prueba_oral", "resolver"})
 
 # Language the coach must answer in. The app started out English-only (job
 # interviews), but an oral exam is usually taken in Spanish, so the language is
@@ -56,6 +58,13 @@ ANSWER_LANGS = {
     "es": "SIEMPRE en español",
     "auto": "en el mismo idioma en que habla el INTERLOCUTOR",
 }
+
+
+def resolve_answer_lang(mode: str, answer_lang: str | None) -> str:
+    """Return the effective answer language for an assistance mode."""
+    if mode in ORAL_ASSIST_MODES:
+        return "es"
+    return answer_lang if answer_lang in ANSWER_LANGS else DEFAULT_ANSWER_LANG
 
 _MODE_INSTRUCTIONS = {
     "entrevista": (
@@ -82,6 +91,8 @@ _MODE_INSTRUCTIONS = {
         "examinador y el contexto pegado es el temario o cronograma de la materia. "
         "Las respuestas deben ser COMPLETAS y listas para decir en voz alta: correctas, "
         "concretas y apoyadas en el temario. "
+        "No inventes definiciones para términos dudosos o ausentes del contexto. "
+        "Si la transcripción parece cortada o corrupta, indicá que no se entendió la pregunta. "
         "ideas_clave: conceptos del temario que sostienen la respuesta, por si el "
         "examinador repregunta."
     ),
@@ -95,6 +106,18 @@ _MODE_INSTRUCTIONS = {
         "p. ej. 'El concepto central es...' o 'The main idea is...'. "
         "pregunta_es: glosa clara de la pregunta del examinador."
     ),
+    "resolver": (
+        "Sos un asistente académico que RESUELVE preguntas en español. "
+        "El INTERLOCUTOR formula una pregunta y el contexto pegado contiene el tema, "
+        "apuntes o material de consulta. Contestá exactamente lo preguntado, sin convertir "
+        "la consulta en una entrevista ni en un ejercicio de práctica. "
+        "La primera respuesta debe ser COMPLETA, directa, correcta y lista para decir en voz alta. "
+        "Si el material no alcanza, usá conocimiento general solo cuando la pregunta sea clara. "
+        "No inventes términos, definiciones ni relaciones ausentes de la pregunta o el contexto. "
+        "Si la transcripción parece incompleta, contradictoria o contiene un término desconocido, "
+        "respondé que no se entendió la pregunta y que debe repetirse. "
+        "ideas_clave: 3 conceptos concretos que justifican la respuesta."
+    ),
 }
 
 # Coach input is truncated before prompting: with thinking_budget=0 the cost is
@@ -102,6 +125,16 @@ _MODE_INSTRUCTIONS = {
 # for lowering latency (see tech plan Path A).
 _MAX_CONTEXT_CHARS = 2500
 _COACH_HISTORY_TURNS = 6
+
+_DEFAULT_RESPONSE_RULES = (
+    "Devolvé UNA sola respuesta, directa y fácil de decir en voz alta. "
+    "Máximo 2 oraciones y 55 palabras. Sin introducciones, consejos ni información lateral."
+)
+_RESOLVER_RESPONSE_RULES = (
+    "Devolvé UNA sola respuesta final. Contestá directamente en 2 a 3 oraciones, "
+    "máximo 80 palabras, lista para decir en voz alta. Sin introducciones, consejos, "
+    "alternativas ni frases como 'podrías decir'. No agregues información lateral."
+)
 
 
 def _truncate_context(context: str) -> str:
@@ -141,7 +174,7 @@ Contexto pegado por el usuario (CV, puesto, tema de práctica, apuntes...):
 {context}
 ---
 
-Texto reciente del INTERLOCUTOR (STT en inglés, puede tener ruido):
+Texto reciente del INTERLOCUTOR (STT en su idioma original, puede tener ruido):
 ---
 {utterance}
 ---
@@ -157,9 +190,11 @@ El campo "pregunta_es" va siempre en español; "ideas_clave" también.
 Respondé SOLO un JSON válido, sin markdown:
 {{"pregunta_es":"glosa clara en español de lo que dijo o pidió el interlocutor","respuestas":["respuesta recomendada corta","alternativa opcional breve"],"ideas_clave":["idea relevante 1","idea relevante 2"]}}
 
-Reglas: la PRIMERA respuesta es la prioridad — 1 oración corta y fácil de decir en voz alta; la segunda es opcional y breve (podés devolver solo 1).
+Reglas específicas de salida:
+{response_rules}
 Respondé SIEMPRE que el turno tenga contenido: pregunta, instrucción, ejercicio o comentario.
 Devolvé pregunta_es vacía y respuestas [] SOLO si el texto es ruido ininteligible.
+Nunca completes por imaginación una palabra cortada ni definas un término dudoso.
 Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
 """
 
@@ -170,6 +205,7 @@ class InterviewAssist:
     respuestas: list[str]
     ideas_clave: list[str] | None = None
     frase_puente: str = ""
+    provider: str = "Gemini"
 
 
 class InterviewLiveError(Exception):
@@ -182,6 +218,32 @@ def float32_to_pcm16(audio: np.ndarray) -> bytes:
         audio = audio.mean(axis=1)
     pcm = np.clip(audio.astype(np.float32) * 32767.0, -32768, 32767).astype(np.int16)
     return pcm.tobytes()
+
+
+def merge_transcript_delta(current: str, chunk: str) -> str:
+    """Join streaming STT deltas without inventing word boundaries.
+
+    Gemini can split a word across events (``mero`` + ``s``). Leading spaces
+    carried by the API already identify real word boundaries, so stripping each
+    delta and inserting our own space corrupts otherwise correct Spanish.
+    """
+    raw = chunk or ""
+    if not raw.strip():
+        return current
+    return current + raw if current else raw.lstrip()
+
+
+def _looks_like_unsupported_definition(context: str, utterance: str) -> bool:
+    """Fast local guard against defining a corrupted, out-of-context term."""
+    question = (utterance or "").casefold()
+    match = re.search(r"\bqu[eé]\s+es\s+(?:un[ao]?\s+)?([a-záéíóúñ]{10,})", question)
+    if not match:
+        return False
+    term = match.group(1)
+    material = (context or "").casefold()
+    if len(material) < 40 or material == "(sin contexto)":
+        return False
+    return term not in material
 
 
 def parse_assist_text(text: str) -> InterviewAssist | None:
@@ -222,6 +284,17 @@ def is_configured() -> bool:
     return gemini_keys.is_configured()
 
 
+def _session_status(mode: str, provider: str = "Gemini") -> str:
+    """Reader-facing status with module and active/fallback provider."""
+    title = "Resolver activo" if mode == "resolver" else "Entrevista activa"
+    if provider == "NVIDIA":
+        return f"{title} · NVIDIA · {nvidia_provider.pool.count()} claves"
+    gemini = gemini_keys.pool.current_label().replace("API", "Gemini", 1)
+    nvidia_count = nvidia_provider.pool.count()
+    fallback = f" · NVIDIA disponible ({nvidia_count})" if nvidia_count else ""
+    return f"{title} · {gemini}{fallback}"
+
+
 # Reuse one client per key: avoids TLS/session setup on every coach call.
 _client_cache: dict[str, object] = {}
 
@@ -234,14 +307,14 @@ def _get_client(genai, api_key: str):
     return client
 
 
-def _coach_config(model: str):
+def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE):
     """Low-latency generation config. thinking_budget=0 skips the multi-second
     default 'thinking' phase on 2.5+ models; 2.0 models reject the field."""
     from google.genai import types
 
     kwargs = dict(
         temperature=0.4,
-        max_output_tokens=220,
+        max_output_tokens=300 if mode == "resolver" else 160,
         response_mime_type="application/json",
     )
     if "2.0" not in model:
@@ -259,8 +332,9 @@ def coach_assist(
 ) -> InterviewAssist | None:
     """Sync generate_content coach call (JSON). Tries keys + model fallbacks."""
     utterance = (utterance or "").strip()
-    if len(utterance.split()) < 2:
+    if not utterance:
         return None
+    answer_lang = resolve_answer_lang(mode, answer_lang)
     try:
         from google import genai
     except ImportError:
@@ -272,18 +346,47 @@ def coach_assist(
         context=_select_context(context, utterance) or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
+        response_rules=(
+            _RESOLVER_RESPONSE_RULES
+            if mode == "resolver"
+            else _DEFAULT_RESPONSE_RULES
+        ),
     )
+    if mode in ORAL_ASSIST_MODES and _looks_like_unsupported_definition(
+        context, utterance
+    ):
+        return InterviewAssist(
+            pregunta_es="La pregunta parece haberse transcripto incorrectamente.",
+            respuestas=[
+                "No se entendió con claridad el término de la pregunta; pedí que la repitan."
+            ],
+            ideas_clave=["transcripción dudosa", "no inventar definiciones"],
+            provider="Validación local",
+        )
     models = []
     for m in COACH_MODELS:
         if m and m not in models:
             models.append(m)
 
     keys: list[str] = []
-    if api_key:
+    if api_key and api_key in gemini_keys.pool.available():
         keys.append(api_key)
     for k in gemini_keys.pool.available():
         if k not in keys:
             keys.append(k)
+    if not keys and nvidia_provider.is_configured():
+        try:
+            assist = parse_assist_text(
+                nvidia_provider.generate(
+                    prompt, max_tokens=340 if mode == "resolver" else 190
+                )
+            )
+            if assist is not None:
+                assist.provider = "NVIDIA"
+            return assist
+        except Exception as exc:
+            logger.error("NVIDIA coach failed: %s", exc)
+            return None
     if not keys:
         return None
 
@@ -293,9 +396,16 @@ def coach_assist(
         for model in models:
             try:
                 resp = client.models.generate_content(
-                    model=model, contents=prompt, config=_coach_config(model)
+                    model=model, contents=prompt, config=_coach_config(model, mode)
                 )
-                return parse_assist_text(resp.text or "")
+                assist = parse_assist_text(resp.text or "")
+                if assist is not None:
+                    return assist
+                logger.warning(
+                    "Coach model %s returned no valid assistance; trying fallback",
+                    model,
+                )
+                continue
             except Exception as exc:
                 last_exc = exc
                 if gemini_keys.pool.is_quota_error(exc):
@@ -306,9 +416,21 @@ def coach_assist(
                 logger.warning("Coach model %s failed: %s", model, exc)
                 continue
     if last_exc and gemini_keys.pool.is_quota_error(last_exc):
+        logger.warning("Gemini coach sin cuota; usando respaldo NVIDIA")
+        try:
+            assist = parse_assist_text(
+                nvidia_provider.generate(
+                    prompt, max_tokens=340 if mode == "resolver" else 190
+                )
+            )
+            if assist is not None:
+                assist.provider = "NVIDIA"
+                return assist
+        except Exception as nvidia_exc:
+            logger.error("NVIDIA coach fallback failed: %s", nvidia_exc)
         raise last_exc
     if last_exc:
-        logger.exception("Coach assist failed: %s", last_exc)
+        logger.error("Coach assist failed: %s", last_exc)
     return None
 
 
@@ -326,7 +448,7 @@ class InterviewLiveSession:
     ):
         self._context = (context or "").strip() or "(sin contexto del candidato)"
         self._mode = mode if mode in _MODE_INSTRUCTIONS else DEFAULT_ASSIST_MODE
-        self._answer_lang = answer_lang if answer_lang in ANSWER_LANGS else DEFAULT_ANSWER_LANG
+        self._answer_lang = resolve_answer_lang(self._mode, answer_lang)
         self._on_transcript = on_transcript
         self._on_assist = on_assist
         self._on_status = on_status
@@ -432,6 +554,7 @@ class InterviewLiveSession:
             ) from exc
 
         gemini_keys.pool.reload()
+        nvidia_provider.pool.reload()
         keys = list(gemini_keys.pool.available())
         if not keys:
             raise InterviewLiveError("No hay claves Gemini disponibles.")
@@ -458,9 +581,7 @@ class InterviewLiveSession:
                         output_audio_transcription=types.AudioTranscriptionConfig(),
                     )
                     async with client.aio.live.connect(model=model, config=config) as session:
-                        self._on_status(
-                            f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
-                        )
+                        self._on_status(_session_status(self._mode))
                         logger.info("Interview Live connected model=%s", model)
                         self._audio_q = asyncio.Queue(maxsize=80)
                         self._utterance_buf = ""
@@ -517,7 +638,9 @@ class InterviewLiveSession:
     # may stay silent per _LIVE_SYSTEM and never signal — so the interviewer's
     # utterance would sit in the buffer forever. This watchdog flushes it once
     # transcription goes quiet for a bit, independent of that signal.
-    _FLUSH_IDLE_SECONDS = 1.2
+    # Una pregunta oral puede incluir pausas naturales mayores a un segundo.
+    # El valor anterior dividía una oración en varios prompts sin contexto.
+    _FLUSH_IDLE_SECONDS = 2.5
 
     async def _flush_watchdog(self) -> None:
         while not self._stop.is_set():
@@ -558,16 +681,19 @@ class InterviewLiveSession:
         # Input transcription = interviewer speech (what we care about)
         in_tx = getattr(sc, "input_transcription", None)
         if in_tx is not None:
-            t = (getattr(in_tx, "text", None) or "").strip()
-            if t:
-                self._utterance_buf = (self._utterance_buf + " " + t).strip()
+            raw = getattr(in_tx, "text", None) or ""
+            if raw.strip():
+                self._utterance_buf = merge_transcript_delta(
+                    self._utterance_buf, raw
+                )
                 self._last_transcript_ts = asyncio.get_event_loop().time()
-                self._on_transcript(t)
+                self._on_transcript(raw)
 
         # Intentionally ignore model audio / output transcription (never play coach).
 
-        if getattr(sc, "turn_complete", False) or getattr(sc, "generation_complete", False):
-            self._flush_utterance()
+        # Do not flush immediately on the model-side completion flags. Gemini
+        # can emit them during a natural pause in the examiner's sentence.
+        # The idle watchdog is the single debounce point for input speech.
 
     def _flush_utterance(self) -> None:
         buf = self._utterance_buf.strip()
@@ -595,7 +721,11 @@ class InterviewLiveSession:
                 utterance, self._pending_utterance = self._pending_utterance, None
 
     async def _coach_once(self, utterance: str) -> None:
-        self._on_status("Generando sugerencias...")
+        self._on_status(
+            "Resolviendo pregunta..."
+            if self._mode == "resolver"
+            else "Generando sugerencias..."
+        )
         # Timing: turn_complete/flush -> coach return, to falsify latency wins.
         start = time.perf_counter()
         try:
@@ -619,9 +749,12 @@ class InterviewLiveSession:
                 self._mode,
                 "yes" if assist else "none",
             )
-            self._on_status(
-                f"Entrevista Live activa ({gemini_keys.pool.current_label()})"
-            )
+            if assist:
+                self._on_status(_session_status(self._mode, assist.provider))
+            else:
+                self._on_status(
+                    "No se pudo generar una respuesta válida; intentá repetir la pregunta"
+                )
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             logger.info("Coach turn failed after %.0f ms (mode=%s)", elapsed_ms, self._mode)

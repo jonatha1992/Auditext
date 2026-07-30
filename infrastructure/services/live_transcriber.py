@@ -3,11 +3,18 @@
 import datetime as dt
 import queue
 import threading
+import warnings
 import wave
 from pathlib import Path
 
 import numpy as np
 import soundcard as sc
+
+warnings.filterwarnings(
+    "once",
+    message="data discontinuity in recording",
+    category=getattr(sc, "SoundcardRuntimeWarning", Warning),
+)
 
 import config
 from config import logger

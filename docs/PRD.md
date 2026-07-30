@@ -1,164 +1,268 @@
 # PRD — AudioText
 
-## 1. Resumen del producto
+## 1. Resultado del producto
 
-AudioText es una aplicación de escritorio para Windows que transforma audio en texto, permite conservar y consultar transcripciones y ofrece asistencia privada durante entrevistas laborales.
+AudioText es una aplicación de escritorio para Windows que transcribe audio, conserva sesiones y ayuda al usuario a responder preguntas durante entrevistas, exámenes y llamadas. La asistencia debe ser rápida, breve, contextual y privada: nunca debe hablar ni enviar una respuesta automáticamente en nombre del usuario.
 
-El producto se organiza en cuatro experiencias principales:
+La navegación principal contiene seis experiencias:
 
-1. **Archivos:** transcribir audios existentes.
-2. **En vivo:** capturar y transcribir audio del sistema o del micrófono.
-3. **Entrevista:** comprender al entrevistador y recibir sugerencias de respuesta en tiempo real.
-4. **Historial:** buscar, revisar y exportar resultados guardados.
+1. **Archivos:** transcripción de audios existentes.
+2. **En vivo:** captura y transcripción general.
+3. **Entrevista:** apoyo para entrevistas laborales y conversaciones.
+4. **Resolver:** respuestas para exámenes, prácticas orales y preguntas académicas.
+5. **Historial:** consulta, reproducción y exportación.
+6. **Ajustes:** configuración local e integraciones.
 
 ## 2. Problema
 
-Las personas que trabajan con grabaciones o conversaciones en tiempo real necesitan obtener texto utilizable sin depender de herramientas complejas. Los candidatos hispanohablantes que participan en entrevistas en inglés tienen además otro problema: deben comprender la pregunta y formular una respuesta mientras la conversación continúa.
+Durante una llamada o examen oral, el usuario necesita escuchar una pregunta, comprenderla y formular una respuesta mientras la conversación continúa. Una herramienta útil debe:
 
-La implementación actual incluye Entrevista dentro de En vivo mediante una casilla. Esto mezcla dos objetivos distintos:
+- captar la pregunta desde el audio del sistema;
+- conservar la pregunta como una sola intervención, sin separar palabras o sílabas;
+- responder exactamente lo preguntado y mantenerse dentro de la materia;
+- entregar texto corto y listo para decir;
+- capturar y guardar también la respuesta oral del usuario;
+- continuar funcionando cuando un proveedor de IA alcanza su cuota.
 
-- **En vivo:** producir una transcripción fiel.
-- **Entrevista:** asistir al candidato para que comprenda y responda.
+Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombres, instrucciones ni resultados aunque reutilicen infraestructura.
 
-## 3. Usuarios objetivo
+## 3. Usuarios
 
-| Usuario | Necesidad principal |
+| Usuario | Necesidad |
 |---|---|
-| Profesional o estudiante | Transcribir grabaciones y clases. |
-| Persona que documenta reuniones | Capturar conversaciones en tiempo real. |
-| Candidato hispanohablante | Recibir apoyo durante una entrevista laboral en inglés. |
+| Estudiante | Resolver una pregunta de examen usando el programa o material de una materia. |
+| Persona en práctica oral | Recibir una respuesta breve o ideas para contestar en voz alta. |
+| Candidato laboral | Recibir apoyo contextual durante una entrevista. |
+| Profesional | Transcribir archivos, reuniones y llamadas. |
 
-## 4. Objetivos
+## 4. Principios del producto
 
-- Permitir transcripción local de archivos y audio en vivo.
-- Reducir el esfuerzo para revisar, guardar y exportar transcripciones.
-- Ofrecer un espacio de Entrevista enfocado, discreto y fácil de preparar.
-- Mantener claras las funciones offline y las que requieren servicios externos.
+- **Respuesta antes que explicación:** mostrar primero una respuesta utilizable.
+- **Corto y al pie:** una respuesta principal, sin introducciones ni información lateral.
+- **Contexto estable:** conservar el rol seleccionado y no convertir un examen en entrevista o práctica de inglés.
+- **No inventar:** si la pregunta está incompleta, corrupta o fuera del material, solicitar repetición.
+- **Baja latencia:** evitar reintentos de proveedores ya agotados.
+- **Control del usuario:** el usuario decide cuándo grabar, guardar, copiar o reproducir.
 
 ## 5. No objetivos
 
-- Responder automáticamente en nombre del candidato.
-- Reproducir las sugerencias del asistente por audio.
-- Grabar o analizar una conversación sin conocimiento y autorización del usuario.
-- Sustituir plataformas de videollamadas o sistemas de selección de personal.
+- Hablar, contestar una llamada o enviar mensajes automáticamente.
+- Inventar definiciones para compensar una mala transcripción.
+- Mezclar Entrevista, práctica de idiomas y Resolver en una misma experiencia.
+- Grabar conversaciones sin conocimiento y autorización del usuario.
+- Sustituir una plataforma de videollamadas o un sistema educativo.
 
-## 6. Decisión de navegación
+## 6. Requisitos funcionales
 
-**Entrevista será una sección principal separada de En vivo.**
+### 6.1 Archivos
 
-La separación se justifica porque Entrevista posee un propósito, una preparación, dependencias y resultados propios. Ocultarla detrás de una casilla dificulta descubrirla y obliga a mostrar controles de transcripción que no son relevantes para el candidato.
-
-Navegación propuesta:
-
-1. Archivos
-2. En vivo
-3. Entrevista
-4. Historial
-5. Ajustes
-
-La separación es de experiencia y presentación. La captura de audio y los servicios compartidos deben reutilizarse; no se debe duplicar el motor técnico.
-
-## 7. Requisitos funcionales
-
-### 7.1 Archivos
-
-- Seleccionar uno o más archivos compatibles.
-- Transcribir sin conexión mediante el modelo local.
+- Seleccionar uno o más audios compatibles.
+- Transcribir localmente con Whisper.
 - Mostrar progreso y errores recuperables.
-- Guardar, resumir y exportar el resultado.
+- Guardar, resumir y exportar resultados.
 
-### 7.2 En vivo
+### 6.2 En vivo
 
-- Elegir audio del sistema, micrófono o una fuente disponible.
+- Capturar audio del sistema, micrófono o aplicación disponible.
 - Seleccionar idioma o detección automática.
-- Activar o desactivar la grabación de audio.
-- Ver la transcripción mientras se captura.
-- Guardar y resumir la sesión.
-- No mostrar configuración ni sugerencias de Entrevista.
+- Activar o desactivar la grabación.
+- Mostrar y guardar la transcripción.
+- Generar un resumen opcional.
+- No mostrar controles de Entrevista o Resolver.
 
-### 7.3 Entrevista
+### 6.3 Entrevista
+
+Modos permitidos:
+
+- Entrevista laboral.
+- Práctica de idioma.
+- Conversación general.
+
+Requisitos:
+
+- Aceptar CV, puesto, empresa o contexto de conversación.
+- Escuchar al entrevistador desde el audio del sistema.
+- Capturar la respuesta del usuario desde un micrófono separado.
+- Mantener roles de Entrevistador y Candidato.
+- Responder en el idioma configurado.
+- Mostrar una respuesta principal breve y lista para decir.
+- Conservar un historial corto para sostener el hilo.
+- Permitir copiar la respuesta sin reproducirla automáticamente.
+
+### 6.4 Resolver
+
+Resolver es un módulo principal separado de Entrevista.
+
+Modos permitidos:
+
+- **Resolver preguntas:** una respuesta completa y directa.
+- **Examen oral:** respuesta breve lista para decir.
+- **Práctica oral:** ideas clave para que el usuario construya su respuesta.
 
 #### Preparación
 
-- Permitir pegar el CV y datos del puesto o empresa.
-- Explicar que Gemini y conexión a Internet son necesarios.
-- Confirmar que existe una clave configurada antes de iniciar.
-- Usar audio del sistema como fuente principal del entrevistador.
+- Seleccionar audio del sistema para captar una llamada o videoconferencia.
+- Seleccionar el micrófono del usuario.
+- Pegar programa, cronograma, temario o apuntes.
+- Cargar documentos locales compatibles.
+- Elegir un cuaderno/materia de NotebookLM.
+- Sincronizar una guía compacta del cuaderno antes de iniciar.
 
-#### Sesión activa
+#### Pregunta
 
-- Transcribir en inglés lo dicho por el entrevistador.
-- Capturar el micrófono del candidato en paralelo y transcribir su respuesta localmente.
-- Identificar cada intervención como Entrevistador o Candidato sin mezclar las señales.
-- Mantener un historial breve de ambos participantes para conservar el hilo de la conversación.
-- Mostrar una glosa clara de la pregunta en español.
-- Generar exactamente dos sugerencias breves en inglés.
-- Destacar una respuesta recomendada, ideas clave personalizadas y una frase puente para ganar tiempo o pedir aclaración.
-- Permitir copiar cada sugerencia con una acción explícita.
-- Mantener silenciada la respuesta de audio del modelo.
-- Mostrar estados de conexión, generación, rotación de clave y error.
-- Permitir detener la sesión inmediatamente.
+- Conservar los espacios originales de la transcripción incremental.
+- Unir fragmentos cortados dentro de una palabra.
+- Agrupar la intervención hasta detectar al menos 2,5 segundos de silencio.
+- No cerrar la pregunta durante una pausa natural o por eventos parciales del modelo.
+- Mostrar la pregunta como una oración continua.
 
-#### Cierre
+#### Respuesta de IA
 
-- Permitir guardar la transcripción y la información útil de la sesión.
-- No guardar CV, contexto sensible ni audio de forma implícita.
-- Informar claramente qué datos se conservarán antes de guardar.
+- Mantener siempre el modo y la materia seleccionados.
+- Contestar exactamente la pregunta detectada.
+- Devolver una sola respuesta principal.
+- En Resolver: 2 a 3 oraciones y máximo 80 palabras.
+- En los demás modos orales: máximo 2 oraciones y 55 palabras.
+- Omitir introducciones, alternativas, consejos e información lateral.
+- No traducir automáticamente al inglés en modos académicos.
+- No definir términos desconocidos ausentes del material.
+- Si la transcripción parece corrupta o fuera de contexto, indicar que debe repetirse.
 
-### 7.4 Historial
+#### Respuesta del usuario
 
-- Buscar transcripciones guardadas.
-- Revisar texto, resumen, idioma y metadatos disponibles.
-- Reproducir el audio cuando exista.
-- Exportar resultados en formatos compatibles.
+- Capturar el micrófono en paralelo.
+- Resolver diferencias de nombres entre `soundcard` y `sounddevice`.
+- Probar el siguiente endpoint físico si el actual devuelve audio exactamente vacío.
+- Transcribir localmente la voz del usuario.
+- Mostrarla bajo **TU RESPUESTA**.
+- Incorporarla al historial conversacional y a la sesión guardada.
+- Mezclarla en el audio final solamente cuando **Guardar audio** esté activado.
 
-### 7.5 Ajustes
+### 6.5 NotebookLM
 
-- Configurar modelo local, carpetas y base de datos.
-- Configurar integraciones externas sin exponer las claves.
-- Diferenciar funciones locales de funciones en línea.
+- Mostrar los cuadernos disponibles como materias seleccionables.
+- No consultar NotebookLM en cada pregunta en vivo.
+- Preparar antes de la sesión un contexto compacto para reducir latencia.
+- Informar estados de autenticación, carga, selección y error.
+- Permitir continuar con material pegado si NotebookLM no está disponible.
+
+### 6.6 Proveedores de IA
+
+Orden de respaldo para generación de texto:
+
+1. Gemini API 1.
+2. Gemini API 2.
+3. Gemini API 3.
+4. NVIDIA API 1.
+5. NVIDIA API 2.
+
+Reglas:
+
+- Una clave agotada no debe probarse nuevamente en cada pregunta de la misma sesión.
+- NVIDIA debe rotar a su segunda clave ante cuota, autenticación o error recuperable.
+- El estado debe mostrar módulo, proveedor activo y respaldo disponible.
+- Gemini Live continúa siendo el canal de transcripción de audio en los modos asistidos.
+- NVIDIA se utiliza para generar texto una vez disponible la pregunta transcripta.
+- Resúmenes también deben utilizar NVIDIA cuando Gemini no esté disponible.
+
+### 6.7 Historial y guardado
+
+- Guardar pregunta, respuesta de IA y respuesta del usuario con títulos diferenciados.
+- Registrar la sesión automáticamente al finalizar cuando exista texto o audio.
+- Permitir guardado manual con un nombre elegido.
+- Reproducir el audio si fue grabado.
+- No guardar CV, programa completo ni credenciales dentro de la transcripción.
+
+## 7. Estados visibles
+
+Ejemplos:
+
+- `Resolver activo · Gemini 1/3 · NVIDIA disponible (2)`
+- `Resolver activo · NVIDIA · 2 claves`
+- `Entrevista activa · Gemini 1/3 · NVIDIA disponible (2)`
+- `Resolviendo pregunta…`
+- `La pregunta parece haberse transcripto incorrectamente`
+- `Guardada en Historial`
+- `Error de micrófono: …`
+
+Los estados no deben depender únicamente del color.
 
 ## 8. Privacidad y seguridad
 
-- La transcripción local debe funcionar sin enviar audio a servicios externos.
-- Entrevista y resumen deben indicar que utilizan Gemini antes de transmitir datos.
-- Las claves no deben aparecer en logs, interfaz, historial ni exportaciones.
-- El usuario debe controlar la grabación y persistencia del audio.
-- La aplicación debe recordar al usuario que cumpla las leyes y políticas aplicables a la grabación de conversaciones.
+- Archivos y transcripción local no deben requerir servicios externos.
+- Audio del interlocutor puede enviarse a Gemini Live únicamente durante una sesión asistida iniciada por el usuario.
+- El texto de la pregunta y el contexto relevante pueden enviarse a Gemini o NVIDIA para generar respuestas.
+- Las claves nunca deben mostrarse en interfaz, logs, historial ni exportaciones.
+- El usuario controla grabación y persistencia.
+- La interfaz debe recordar el cumplimiento de leyes y políticas de grabación aplicables.
 
 ## 9. Requisitos no funcionales
 
-- **Plataforma:** Windows 10 o superior.
-- **Disponibilidad:** Archivos, En vivo e Historial deben conservar su flujo principal sin Gemini.
-- **Rendimiento:** La interfaz no debe bloquearse durante captura, transcripción o solicitudes de IA.
-- **Recuperación:** Un error de red o cuota debe mostrar un estado accionable y permitir detener o reintentar.
-- **Accesibilidad:** Estados y acciones no deben depender únicamente del color.
+| Área | Requisito |
+|---|---|
+| Plataforma | Windows 10 o superior. |
+| Interfaz | No bloquearse durante captura, transcripción o generación. |
+| Latencia | Mostrar la respuesta dentro de 4 segundos desde el cierre de una pregunta en condiciones normales. |
+| Respaldo | Pasar directamente a NVIDIA cuando Gemini ya esté agotado en la sesión. |
+| Audio | Procesar bloques al ritmo real; nunca ejecutar un bucle vacío de captura. |
+| Recuperación | Mostrar errores accionables y permitir detener o reintentar. |
+| Accesibilidad | Combinar texto, icono y color para los estados. |
 
-## 10. Criterios de aceptación para separar Entrevista
+## 10. Criterios de aceptación
 
-- [ ] Entrevista aparece como destino propio en la navegación principal.
-- [ ] En vivo ya no contiene la casilla “Modo entrevista”.
-- [ ] La sección Entrevista contiene preparación, sesión activa y cierre.
-- [ ] La pantalla muestra por separado lo que dice el entrevistador y lo que responde el candidato.
-- [ ] Los flujos En vivo y Entrevista reutilizan la captura y los servicios existentes.
-- [ ] El usuario conoce las dependencias en línea y el tratamiento de datos antes de iniciar.
-- [ ] Un fallo de Gemini no afecta la transcripción local de Archivos o En vivo.
-- [ ] Las pruebas existentes del servicio de entrevista continúan pasando.
-- [ ] Se agregan pruebas para el cambio de navegación y los estados principales del nuevo flujo.
+### Implementados
 
-## 11. Métricas iniciales
+- [x] Entrevista es un destino independiente.
+- [x] Resolver es un destino independiente.
+- [x] Entrevista no ofrece modos académicos.
+- [x] Resolver no convierte preguntas académicas en práctica de inglés.
+- [x] NotebookLM permite seleccionar una materia y sincronizar contexto.
+- [x] Las transcripciones incrementales no insertan saltos entre sílabas.
+- [x] Las pausas breves no crean múltiples preguntas.
+- [x] Las respuestas son breves, directas y limitadas por palabras.
+- [x] Gemini rota entre tres claves.
+- [x] NVIDIA rota entre dos claves y actúa como respaldo.
+- [x] Los proveedores agotados se omiten en los turnos siguientes.
+- [x] Los resúmenes tienen respaldo NVIDIA.
+- [x] La sesión guardada incluye **TU RESPUESTA** cuando el micrófono logra transcribirla.
+- [x] El micrófono alternativo cambia de endpoint ante audio exactamente vacío.
+- [x] Las claves permanecen ocultas.
 
-- Porcentaje de sesiones de Entrevista que llegan al estado activo.
-- Tiempo desde la pregunta detectada hasta las sugerencias visibles.
-- Porcentaje de errores recuperables por red, modelo o cuota.
-- Porcentaje de sugerencias copiadas durante una sesión.
+### Validación manual pendiente
 
-Las métricas no deben registrar audio, CV, preguntas ni respuestas sin consentimiento explícito.
+- [ ] Confirmar tres preguntas consecutivas desde una videoconferencia real.
+- [ ] Confirmar respuesta visible dentro del objetivo de 4 segundos.
+- [ ] Confirmar transcripción y guardado de **TU RESPUESTA** con el micrófono elegido.
+- [ ] Confirmar reproducción del audio combinado desde Historial.
+- [ ] Confirmar recuperación al agotar Gemini y NVIDIA API 1.
 
-## 12. Entrega incremental
+## 11. Métricas
 
-1. Extraer la interfaz de Entrevista desde `LiveFrame` sin cambiar el servicio actual.
-2. Incorporar el nuevo destino en la navegación.
-3. Separar el estado y ciclo de vida de ambas pantallas.
-4. Definir persistencia y cierre de sesión con privacidad explícita.
-5. Validar el flujo completo y retirar la casilla anterior.
+- Tiempo desde el final de la pregunta hasta la respuesta visible.
+- Porcentaje de preguntas que producen una respuesta válida.
+- Porcentaje de preguntas rechazadas por transcripción dudosa.
+- Cambios de proveedor por sesión.
+- Porcentaje de respuestas del usuario capturadas y guardadas.
+- Errores de micrófono, audio vacío y pérdida de continuidad.
+
+Las métricas no deben almacenar el contenido de audio, preguntas, respuestas, CV ni material académico.
+
+## 12. Flujo de referencia
+
+```text
+Audio de llamada
+      ↓
+Gemini Live transcribe y agrupa la pregunta
+      ↓
+Contexto local / materia NotebookLM
+      ↓
+Gemini 1 → Gemini 2 → Gemini 3 → NVIDIA 1 → NVIDIA 2
+      ↓
+Respuesta breve en pantalla
+
+Micrófono del usuario
+      ↓
+Transcripción local + grabación opcional
+      ↓
+TU RESPUESTA → Historial
+```

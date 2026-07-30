@@ -12,8 +12,11 @@ from infrastructure.services.gemini_keys import KeyPool
 from infrastructure.services.interview_live import (
     InterviewAssist,
     _MAX_CONTEXT_CHARS,
+    _session_status,
+    _looks_like_unsupported_definition,
     _truncate_context,
     float32_to_pcm16,
+    merge_transcript_delta,
     parse_assist_text,
 )
 
@@ -91,6 +94,42 @@ class TestKeyPool(unittest.TestCase):
 
 
 class TestInterviewHelpers(unittest.TestCase):
+    def test_rejects_long_unknown_definition_outside_course_context(self):
+        self.assertTrue(
+            _looks_like_unsupported_definition(
+                "Matemática discreta: congruencia y relaciones de equivalencia.",
+                "¿Qué es una pueratología y por qué es funcionalmente completa?",
+            )
+        )
+
+    def test_keeps_definition_supported_by_course_context(self):
+        self.assertFalse(
+            _looks_like_unsupported_definition(
+                "Arquitectura web: autenticación, autorización y sesiones.",
+                "¿Qué es la autenticación?",
+            )
+        )
+    def test_streaming_transcript_preserves_word_boundaries(self):
+        text = ""
+        for chunk in ("no se esta mero", "s es", "tán en la misma clase"):
+            text = merge_transcript_delta(text, chunk)
+        self.assertEqual(text, "no se esta meros están en la misma clase")
+
+    def test_streaming_transcript_preserves_leading_word_space(self):
+        text = merge_transcript_delta("misma", " clase")
+        self.assertEqual(text, "misma clase")
+
+    def test_resolver_status_names_module_and_fallback(self):
+        with mock.patch(
+            "infrastructure.services.interview_live.nvidia_provider.pool.count",
+            return_value=2,
+        ):
+            status = _session_status("resolver")
+        self.assertIn("Resolver activo", status)
+        self.assertIn("Gemini", status)
+        self.assertIn("NVIDIA disponible (2)", status)
+        self.assertNotIn("Entrevista Live", status)
+
     def test_pcm_convert(self):
         audio = np.array([0.0, 0.5, -1.0, 1.0], dtype=np.float32)
         pcm = float32_to_pcm16(audio)

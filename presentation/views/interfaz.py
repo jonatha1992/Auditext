@@ -108,6 +108,7 @@ def crear_interfaz(ventana):
         view_archivos.pack_forget()
         view_envivo.pack_forget()
         view_entrevista.pack_forget()
+        view_resolver.pack_forget()
         view_historial.pack_forget()
         view_ajustes.pack_forget()
 
@@ -119,12 +120,18 @@ def crear_interfaz(ventana):
             or view_entrevista.candidate_listener.is_running()
         ):
             view_entrevista.finish_session()
+        if view_name != "resolver" and (
+            view_resolver.worker.is_running()
+            or view_resolver.candidate_listener.is_running()
+        ):
+            view_resolver.finish_session()
 
         # Reset button colors — keep tinted icons; brighten the active destination
         nav_colors = {
             "archivos": "#A78BFA",
             "envivo": "#4DA3FF",
             "entrevista": "#48BB78",
+            "resolver": "#4DA3FF",
             "historial": "#F6AD55",
             "ajustes": "#8A8F9E",
         }
@@ -139,6 +146,10 @@ def crear_interfaz(ventana):
         btn_entrevista.configure(
             fg_color="transparent" if view_name != "entrevista" else COLOR_PANEL,
             text_color=COLOR_TEXT_FG if view_name == "entrevista" else nav_colors["entrevista"],
+        )
+        btn_resolver.configure(
+            fg_color="transparent" if view_name != "resolver" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "resolver" else nav_colors["resolver"],
         )
         btn_historial.configure(
             fg_color="transparent" if view_name != "historial" else COLOR_PANEL,
@@ -159,6 +170,9 @@ def crear_interfaz(ventana):
         elif view_name == "entrevista":
             view_entrevista.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             view_entrevista.refresh_devices()
+        elif view_name == "resolver":
+            view_resolver.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            view_resolver.refresh_devices()
         elif view_name == "historial":
             view_historial.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             view_historial.load_history()
@@ -190,6 +204,14 @@ def crear_interfaz(ventana):
     )
     btn_entrevista.pack(fill=tk.X, padx=12, pady=4)
 
+    btn_resolver = ctk.CTkButton(
+        sidebar_frame, text="🧠   Resolver", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color="#4DA3FF", hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, width=176, height=40, corner_radius=8,
+        command=lambda: switch_view("resolver")
+    )
+    btn_resolver.pack(fill=tk.X, padx=12, pady=4)
+
     btn_historial = ctk.CTkButton(
         sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color="#F6AD55", hover_color=COLOR_PANEL_LIGHT,
@@ -207,6 +229,7 @@ def crear_interfaz(ventana):
     Tooltip(btn_archivos, "Transcribí archivos de audio (MP3, WAV, M4A, FLAC) a texto de forma offline.")
     Tooltip(btn_envivo, "Transcribí en tiempo real lo que reproduce el sistema o el micrófono.")
     Tooltip(btn_entrevista, "Seguí la conversación y recibí ayuda para responder con fluidez.")
+    Tooltip(btn_resolver, "Escuchá una pregunta y obtené una respuesta completa basada en tu material.")
     Tooltip(btn_historial, "Revisá, buscá y exportá transcripciones guardadas anteriormente.")
     Tooltip(btn_ajustes, "Configuración de la app: base de datos, modelo, carpetas.")
 
@@ -226,12 +249,14 @@ def crear_interfaz(ventana):
             btn_archivos.configure(text="📁", anchor=tk.CENTER, width=44)
             btn_envivo.configure(text="🎙", anchor=tk.CENTER, width=44)
             btn_entrevista.configure(text="🎯", anchor=tk.CENTER, width=44)
+            btn_resolver.configure(text="🧠", anchor=tk.CENTER, width=44)
             btn_historial.configure(text="📜", anchor=tk.CENTER, width=44)
             btn_ajustes.configure(text="⚙", anchor=tk.CENTER, width=44)
             
             btn_archivos.pack_configure(padx=8)
             btn_envivo.pack_configure(padx=8)
             btn_entrevista.pack_configure(padx=8)
+            btn_resolver.pack_configure(padx=8)
             btn_historial.pack_configure(padx=8)
             btn_ajustes.pack_configure(padx=8)
             
@@ -248,12 +273,14 @@ def crear_interfaz(ventana):
             btn_archivos.configure(text="📁   Archivos", anchor=tk.W, width=176)
             btn_envivo.configure(text="🎙   En vivo", anchor=tk.W, width=176)
             btn_entrevista.configure(text="🎯   Entrevista", anchor=tk.W, width=176)
+            btn_resolver.configure(text="🧠   Resolver", anchor=tk.W, width=176)
             btn_historial.configure(text="📜   Historial", anchor=tk.W, width=176)
             btn_ajustes.configure(text="⚙   Ajustes", anchor=tk.W, width=176)
             
             btn_archivos.pack_configure(padx=12)
             btn_envivo.pack_configure(padx=12)
             btn_entrevista.pack_configure(padx=12)
+            btn_resolver.pack_configure(padx=12)
             btn_historial.pack_configure(padx=12)
             btn_ajustes.pack_configure(padx=12)
             
@@ -520,7 +547,7 @@ def crear_interfaz(ventana):
             show_info(
                 ventana,
                 "Resumen no configurado",
-                "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
+                "Falta una clave Gemini o NVIDIA. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
             )
             return
@@ -847,6 +874,11 @@ def crear_interfaz(ventana):
     # VIEW 3: INTERVIEW COACH
     # ----------------------------------------------------
     view_entrevista = InterviewFrame(right_content)
+
+    # ----------------------------------------------------
+    # VIEW 4: DIRECT QUESTION RESOLVER
+    # ----------------------------------------------------
+    view_resolver = InterviewFrame(right_content, fixed_mode="resolver")
 
     # ----------------------------------------------------
     # VIEW 4: SETTINGS (AJUSTES)

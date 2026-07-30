@@ -12,7 +12,7 @@ import os
 from dotenv import load_dotenv
 
 from config import logger
-from infrastructure.services import gemini_keys
+from infrastructure.services import gemini_keys, nvidia_provider
 
 load_dotenv()
 
@@ -50,7 +50,7 @@ class SummaryError(Exception):
 
 def is_configured() -> bool:
     """True when an API key is present, so the UI can enable/disable the action."""
-    return gemini_keys.is_configured()
+    return gemini_keys.is_configured() or nvidia_provider.is_configured()
 
 
 def summarize(text: str) -> str:
@@ -59,17 +59,26 @@ def summarize(text: str) -> str:
     if not text:
         raise SummaryError("No hay texto para resumir.")
     gemini_keys.pool.reload()
+    nvidia_provider.pool.reload()
+    if not is_configured():
+        raise SummaryError("Falta una clave Gemini o NVIDIA en el archivo .env.")
+
+    contents = _PROMPT_TEMPLATE + text
     if not gemini_keys.is_configured():
-        raise SummaryError("Falta GEMINI_API_KEY. Configurala en el archivo .env.")
+        try:
+            return nvidia_provider.generate(contents, max_tokens=700)
+        except Exception as exc:
+            raise SummaryError("No se pudo generar el resumen con NVIDIA.") from exc
 
     try:
         from google import genai
     except ImportError as exc:
-        raise SummaryError(
-            "Falta el paquete google-genai (pip install google-genai)."
-        ) from exc
-
-    contents = _PROMPT_TEMPLATE + text
+        try:
+            return nvidia_provider.generate(contents, max_tokens=700)
+        except Exception:
+            raise SummaryError(
+                "Falta google-genai y NVIDIA no pudo generar el resumen."
+            ) from exc
     models_to_try = [GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != GEMINI_MODEL]
     last_exc = None
 
@@ -117,8 +126,11 @@ def summarize(text: str) -> str:
         if not key_quota_hit:
             break
 
-    logger.exception("Cuota agotada en todas las keys/modelos: %s", last_exc)
-    raise SummaryError(
-        "Cuota agotada en todas las API keys / modelos disponibles. "
-        "Sumá GEMINI_API_KEY_2 en .env o esperá unos minutos."
-    ) from last_exc
+    logger.warning("Gemini no pudo resumir; usando respaldo NVIDIA: %s", last_exc)
+    try:
+        return nvidia_provider.generate(contents, max_tokens=700)
+    except Exception as nvidia_exc:
+        logger.exception("También falló el respaldo NVIDIA: %s", nvidia_exc)
+        raise SummaryError(
+            "No quedan proveedores disponibles: Gemini y NVIDIA fallaron."
+        ) from nvidia_exc
