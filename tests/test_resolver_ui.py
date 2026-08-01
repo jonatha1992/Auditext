@@ -50,7 +50,36 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertTrue(self.frame.source_combo.winfo_ismapped())
         self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 150)
         self.assertTrue(hasattr(self.frame, "notebook_combo"))
-        self.assertIn("NotebookLM", self.frame.notebook_var.get())
+        self.assertEqual(
+            self.frame.notebook_var.get(), "Seleccioná una materia…"
+        )
+        self.assertTrue(self.frame.use_written_context_var.get())
+        self.assertFalse(self.frame.use_notebook_var.get())
+        self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+
+    def test_context_sources_can_be_enabled_together(self):
+        self.frame._select_notebook_context()
+
+        # Calling the handler does not alter either checkbox; the user may use
+        # written material and NotebookLM together.
+        self.frame.use_notebook_var.set(True)
+        self.frame._select_notebook_context()
+        self.assertTrue(self.frame.use_notebook_var.get())
+        self.assertTrue(self.frame.use_written_context_var.get())
+        self.assertEqual(self.frame.context_box._textbox.cget("state"), "normal")
+        self.assertEqual(self.frame.notebook_combo.cget("state"), "readonly")
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+
+        self.frame.use_notebook_var.set(False)
+        self.frame._select_notebook_context()
+
+        self.assertTrue(self.frame.use_written_context_var.get())
+        self.assertFalse(self.frame.use_notebook_var.get())
+        self.assertEqual(
+            self.frame.context_box._textbox.cget("state"), "normal"
+        )
+        self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
 
     def test_resolver_routes_system_as_question_and_mic_as_user(self):
         selected_source = self.frame._source_map.get(
@@ -121,6 +150,148 @@ class ResolverFrameTests(unittest.TestCase):
             )
         finally:
             interview.destroy()
+
+    def test_active_session_can_pause_and_resume_without_stopping(self):
+        self.frame.worker.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.worker.pause = mock.Mock()
+        self.frame.worker.resume = mock.Mock()
+        self.frame.candidate_listener.pause = mock.Mock()
+        self.frame.candidate_listener.resume = mock.Mock()
+
+        self.frame.toggle_pause()
+
+        self.assertTrue(self.frame._session_paused)
+        self.frame.worker.pause.assert_called_once_with()
+        self.frame.candidate_listener.pause.assert_called_once_with()
+        self.assertIn("Reanudar", self.frame.pause_button.cget("text"))
+
+        self.frame.toggle_pause()
+
+        self.assertFalse(self.frame._session_paused)
+        self.frame.worker.resume.assert_called_once_with()
+        self.frame.candidate_listener.resume.assert_called_once_with()
+        self.assertIn("Pausar", self.frame.pause_button.cget("text"))
+
+    def test_notebook_material_is_sent_as_session_context(self):
+        written = "Contexto escrito por el usuario."
+        material = "[NotebookLM · Física]\nLeyes de Newton y energía."
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", written)
+        self.frame._active_notebook_id = "physics"
+        self.frame._active_notebook_context = material
+        self.frame.use_notebook_var.set(True)
+        self.frame.use_written_context_var.set(False)
+        previous_repository = config.repository
+        config.repository = None
+        try:
+            with (
+                mock.patch(
+                    "presentation.views.interview_frame.interview_live.is_configured",
+                    return_value=True,
+                ),
+                mock.patch.object(self.frame.worker, "start") as worker_start,
+                mock.patch.object(self.frame.candidate_listener, "start"),
+            ):
+                self.frame.start_session()
+        finally:
+            config.repository = previous_repository
+
+        self.assertEqual(
+            worker_start.call_args.kwargs["interview_context"], material
+        )
+
+    def test_written_context_is_used_when_notebook_is_not_active(self):
+        written = "Este es el contexto ingresado manualmente."
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", written)
+        self.frame._active_notebook_id = "physics"
+        self.frame._active_notebook_context = (
+            "[NotebookLM · Física]\nMaterial que no debe usarse."
+        )
+        self.frame.use_notebook_var.set(False)
+        previous_repository = config.repository
+        config.repository = None
+        try:
+            with (
+                mock.patch(
+                    "presentation.views.interview_frame.interview_live.is_configured",
+                    return_value=True,
+                ),
+                mock.patch.object(self.frame.worker, "start") as worker_start,
+                mock.patch.object(self.frame.candidate_listener, "start"),
+            ):
+                self.frame.start_session()
+        finally:
+            config.repository = previous_repository
+
+        self.assertEqual(
+            worker_start.call_args.kwargs["interview_context"], written
+        )
+
+    def test_written_and_notebook_contexts_are_combined(self):
+        written = "Modelo ferroviario preparado por el estudiante."
+        material = "[NotebookLM · ADS III]\nConceptos de UML."
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", written)
+        self.frame._active_notebook_id = "ads"
+        self.frame._active_notebook_context = material
+        self.frame.use_written_context_var.set(True)
+        self.frame.use_notebook_var.set(True)
+        previous_repository = config.repository
+        config.repository = None
+        try:
+            with (
+                mock.patch(
+                    "presentation.views.interview_frame.interview_live.is_configured",
+                    return_value=True,
+                ),
+                mock.patch.object(self.frame.worker, "start") as worker_start,
+                mock.patch.object(self.frame.candidate_listener, "start"),
+            ):
+                self.frame.start_session()
+        finally:
+            config.repository = previous_repository
+
+        sent = worker_start.call_args.kwargs["interview_context"]
+        self.assertIn("[Contexto escrito]", sent)
+        self.assertIn(written, sent)
+        self.assertIn(material, sent)
+
+    def test_selecting_a_subject_starts_sync_automatically(self):
+        notebook = mock.Mock(id="ads", title="ADS III")
+        self.frame._notebook_map = {"ADS III": notebook}
+        self.frame.use_notebook_var.set(True)
+
+        with (
+            mock.patch.object(self.frame, "_save_notebook_selection"),
+            mock.patch.object(self.frame, "_sync_notebook") as sync,
+        ):
+            self.frame._on_notebook_change("ADS III")
+
+        sync.assert_called_once_with()
+
+    def test_cached_subject_enables_start_immediately(self):
+        notebook = mock.Mock(id="ads", title="ADS III")
+        self.frame._notebook_map = {"ADS III": notebook}
+        self.frame.notebook_var.set("ADS III")
+        self.frame.use_notebook_var.set(True)
+        self.frame._apply_context_source_state()
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+
+        with (
+            mock.patch.object(
+                self.frame,
+                "_load_setting",
+                return_value="[NotebookLM · ADS III]\nMaterial guardado.",
+            ),
+            mock.patch.object(self.frame, "_save_notebook_selection"),
+            mock.patch.object(self.frame, "_sync_notebook"),
+        ):
+            self.frame._on_notebook_change("ADS III")
+
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
+        self.assertIn("caché", self.frame.notebook_status.cget("text"))
 
 
 if __name__ == "__main__":

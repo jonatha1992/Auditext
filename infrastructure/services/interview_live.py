@@ -91,7 +91,11 @@ _MODE_INSTRUCTIONS = {
         "examinador y el contexto pegado es el temario o cronograma de la materia. "
         "Las respuestas deben ser COMPLETAS y listas para decir en voz alta: correctas, "
         "concretas y apoyadas en el temario. "
-        "No inventes definiciones para términos dudosos o ausentes del contexto. "
+        "Priorizá el temario para preguntas específicas del trabajo práctico. "
+        "Si la pregunta es clara y trata un concepto académico estándar (por ejemplo UML, "
+        "diagramas, arquitectura o patrones), respondé también con conocimiento general "
+        "correcto aunque la definición no figure literalmente en el contexto. "
+        "No inventes definiciones únicamente cuando el término sea dudoso o parezca mal transcripto. "
         "Si la transcripción parece cortada o corrupta, indicá que no se entendió la pregunta. "
         "ideas_clave: conceptos del temario que sostienen la respuesta, por si el "
         "examinador repregunta."
@@ -134,6 +138,15 @@ _RESOLVER_RESPONSE_RULES = (
     "Devolvé UNA sola respuesta final. Contestá directamente en 2 a 3 oraciones, "
     "máximo 80 palabras, lista para decir en voz alta. Sin introducciones, consejos, "
     "alternativas ni frases como 'podrías decir'. No agregues información lateral."
+)
+_EXAM_RESPONSE_RULES = (
+    "Redactá UNA respuesta breve y natural, como la daría un estudiante preparado en "
+    "un examen oral. Usá entre 2 y 3 oraciones y entre 40 y 80 palabras. "
+    "Primero contestá directamente y luego agregá solo la justificación o el ejemplo "
+    "imprescindible. Conservá la terminología técnica, pero evitá lenguaje rebuscado, "
+    "repeticiones y explicaciones enciclopédicas. No uses muletillas, felicitaciones, "
+    "preguntas de seguimiento, consejos ni expresiones como 'podrías decir'. "
+    "No atribuyas decisiones al trabajo práctico si el contexto no las confirma."
 )
 
 
@@ -192,8 +205,9 @@ Respondé SOLO un JSON válido, sin markdown:
 
 Reglas específicas de salida:
 {response_rules}
-Respondé SIEMPRE que el turno tenga contenido: pregunta, instrucción, ejercicio o comentario.
-Devolvé pregunta_es vacía y respuestas [] SOLO si el texto es ruido ininteligible.
+En modos de examen o resolución, respondé SOLO la pregunta o consigna concreta.
+Ignorá felicitaciones, muletillas, respuestas del alumno y comentarios sin una consigna.
+Devolvé pregunta_es vacía y respuestas [] si no hay una pregunta clara o el texto es ininteligible.
 Nunca completes por imaginación una palabra cortada ni definas un término dudoso.
 Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
 """
@@ -231,6 +245,43 @@ def merge_transcript_delta(current: str, chunk: str) -> str:
     if not raw.strip():
         return current
     return current + raw if current else raw.lstrip()
+
+
+_QUESTION_START = re.compile(
+    r"^\s*¿?\s*(?:"
+    r"qu[eé]|por\s+qu[eé]|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|d[oó]nde|"
+    r"qui[eé]n(?:es)?|cu[aá]nt[oa]s?|"
+    r"explic(?:á|a|e)|describ(?:í|a|e)|defin(?:í|a|e)|"
+    r"mencion(?:á|a|e)|justific(?:á|a|e)|compar(?:á|a|e)|"
+    r"analiz(?:á|a|e)|desarroll(?:á|a|e)"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def extract_question_candidate(text: str) -> str:
+    """Return only the latest actual question/academic instruction in STT text."""
+    clean = re.sub(r"\s+", " ", (text or "")).strip()
+    if len(clean) < 12:
+        return ""
+
+    # Prefer an explicitly punctuated question and discard the preceding answer
+    # or classroom chatter captured from the same system-audio stream.
+    marked = re.findall(r"(¿[^?]{8,}\?)", clean)
+    if marked:
+        return marked[-1].strip()
+
+    sentences = [
+        part.strip(" -–—")
+        for part in re.split(r"(?<=[.!?])\s+|\n+", clean)
+        if part.strip()
+    ]
+    for sentence in reversed(sentences):
+        if len(sentence) >= 12 and (
+            sentence.endswith("?") or _QUESTION_START.match(sentence)
+        ):
+            return sentence[-600:]
+    return ""
 
 
 def _looks_like_unsupported_definition(context: str, utterance: str) -> bool:
@@ -313,8 +364,12 @@ def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE):
     from google.genai import types
 
     kwargs = dict(
-        temperature=0.4,
-        max_output_tokens=300 if mode == "resolver" else 160,
+        temperature=0.2 if mode in ORAL_ASSIST_MODES else 0.4,
+        max_output_tokens=(
+            320 if mode == "resolver"
+            else 200 if mode == "examen_oral"
+            else 160
+        ),
         response_mime_type="application/json",
     )
     if "2.0" not in model:
@@ -349,6 +404,8 @@ def coach_assist(
         response_rules=(
             _RESOLVER_RESPONSE_RULES
             if mode == "resolver"
+            else _EXAM_RESPONSE_RULES
+            if mode == "examen_oral"
             else _DEFAULT_RESPONSE_RULES
         ),
     )
@@ -378,7 +435,12 @@ def coach_assist(
         try:
             assist = parse_assist_text(
                 nvidia_provider.generate(
-                    prompt, max_tokens=340 if mode == "resolver" else 190
+                    prompt,
+                    max_tokens=(
+                        360 if mode == "resolver"
+                        else 220 if mode == "examen_oral"
+                        else 190
+                    ),
                 )
             )
             if assist is not None:
@@ -420,7 +482,12 @@ def coach_assist(
         try:
             assist = parse_assist_text(
                 nvidia_provider.generate(
-                    prompt, max_tokens=340 if mode == "resolver" else 190
+                    prompt,
+                    max_tokens=(
+                        360 if mode == "resolver"
+                        else 220 if mode == "examen_oral"
+                        else 190
+                    ),
                 )
             )
             if assist is not None:
@@ -640,7 +707,7 @@ class InterviewLiveSession:
     # transcription goes quiet for a bit, independent of that signal.
     # Una pregunta oral puede incluir pausas naturales mayores a un segundo.
     # El valor anterior dividía una oración en varios prompts sin contexto.
-    _FLUSH_IDLE_SECONDS = 2.5
+    _FLUSH_IDLE_SECONDS = 4.0
 
     async def _flush_watchdog(self) -> None:
         while not self._stop.is_set():
@@ -700,6 +767,14 @@ class InterviewLiveSession:
         self._utterance_buf = ""
         if not (buf and self._api_key):
             return
+        if self._mode in ORAL_ASSIST_MODES:
+            question = extract_question_candidate(buf)
+            if not question:
+                logger.info(
+                    "Coach ignored non-question oral turn: %s", buf[:120]
+                )
+                return
+            buf = question
         with self._history_lock:
             self._history.append(f"ENTREVISTADOR: {buf}")
             self._history = self._history[-12:]

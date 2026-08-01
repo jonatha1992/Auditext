@@ -14,7 +14,9 @@ from infrastructure.services.interview_live import (
     _MAX_CONTEXT_CHARS,
     _session_status,
     _looks_like_unsupported_definition,
+    _coach_config,
     _truncate_context,
+    extract_question_candidate,
     float32_to_pcm16,
     merge_transcript_delta,
     parse_assist_text,
@@ -94,6 +96,44 @@ class TestKeyPool(unittest.TestCase):
 
 
 class TestInterviewHelpers(unittest.TestCase):
+    def test_oral_exam_uses_low_variance_generation(self):
+        config = _coach_config("gemini-2.5-flash", "examen_oral")
+        self.assertEqual(config.temperature, 0.2)
+        self.assertEqual(config.max_output_tokens, 200)
+
+    def test_detects_real_ads_iii_exam_questions(self):
+        questions = [
+            "¿Qué tipo de vista de UML representa el diagrama de clases?",
+            "¿Qué tipo de vista de UML representa el diagrama de actividad?",
+            "¿Qué diagramas de UML corresponden a una vista dinámica?",
+            "¿Qué diagramas representan una vista estática?",
+            "¿Cuáles son los elementos de un diagrama de secuencia?",
+            "¿Cuáles son los elementos de un diagrama de actividad?",
+            "¿Por qué decimos que un diagrama de secuencia tiene que estar balanceado?",
+        ]
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertEqual(extract_question_candidate(question), question)
+
+    def test_extracts_latest_question_from_classroom_chatter(self):
+        transcript = (
+            "Perfecto, esa respuesta está muy bien. Otra pregunta. "
+            "¿Cuáles son los elementos de un diagrama de secuencia? "
+            "Dale, te escucho."
+        )
+        self.assertEqual(
+            extract_question_candidate(transcript),
+            "¿Cuáles son los elementos de un diagrama de secuencia?",
+        )
+
+    def test_ignores_feedback_without_a_question(self):
+        self.assertEqual(
+            extract_question_candidate(
+                "Perfecto, está muy bien. Si querés seguimos con otra."
+            ),
+            "",
+        )
+
     def test_rejects_long_unknown_definition_outside_course_context(self):
         self.assertTrue(
             _looks_like_unsupported_definition(

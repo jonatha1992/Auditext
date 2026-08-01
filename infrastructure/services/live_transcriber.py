@@ -142,6 +142,7 @@ class Transcriber:
         self._text_queue = text_queue
         self._status_queue = status_queue
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._thread = None
         self._log_file = None
         self._wav_file = None
@@ -201,6 +202,7 @@ class Transcriber:
         self._assist_queue = assist_queue
         self._live_session = None
         self._stop.clear()
+        self._paused.clear()
         import time
         self.start_time = time.time()
         self.duration_seconds = 0
@@ -217,6 +219,7 @@ class Transcriber:
 
     def stop(self):
         self._stop.set()
+        self._paused.clear()
         live = self._live_session
         if live is not None:
             try:
@@ -230,6 +233,17 @@ class Transcriber:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def pause(self) -> None:
+        """Temporarily discard captured audio without closing the live session."""
+        if self.is_running():
+            self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
     def add_candidate_turn(self, text: str) -> None:
         live = self._live_session
         if live is not None:
@@ -237,7 +251,7 @@ class Transcriber:
 
     def push_candidate_audio(self, mono: np.ndarray) -> None:
         """Append candidate microphone samples for WAV mixing (not sent to Gemini)."""
-        if not (self._save_audio and self._interview_mode):
+        if self._paused.is_set() or not (self._save_audio and self._interview_mode):
             return
         chunk = mono.astype(np.float32).flatten()
         if chunk.size == 0:
@@ -457,6 +471,8 @@ class Transcriber:
                 pass
 
     def _push(self, mono):
+        if self._paused.is_set():
+            return
         try:
             if self._interview_mode and self._live_session is not None:
                 pcm = interview_live.float32_to_pcm16(mono)

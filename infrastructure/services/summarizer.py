@@ -19,6 +19,9 @@ load_dotenv()
 # Back-compat for any code that still reads this module-level name.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_SUMMARY_TIMEOUT_MS = int(
+    os.getenv("GEMINI_SUMMARY_TIMEOUT_MS", "12000")
+)
 
 # Fallback chain tried in order when the primary model hits a quota/rate-limit error.
 # gemini-2.0-flash free tier has limit=0 in many regions — fallbacks cover that.
@@ -54,7 +57,7 @@ def is_configured() -> bool:
 
 
 def summarize(text: str) -> str:
-    """Summarize a transcript with Gemini. Raises SummaryError on any failure."""
+    """Summarize quickly, preferring NVIDIA and falling back to Gemini."""
     text = (text or "").strip()
     if not text:
         raise SummaryError("No hay texto para resumir.")
@@ -64,21 +67,28 @@ def summarize(text: str) -> str:
         raise SummaryError("Falta una clave Gemini o NVIDIA en el archivo .env.")
 
     contents = _PROMPT_TEMPLATE + text
-    if not gemini_keys.is_configured():
+    # NVIDIA is consistently much faster for this short, non-conversational
+    # task. Prefer it so a busy Gemini endpoint cannot hold the UI for minutes.
+    if nvidia_provider.is_configured():
         try:
-            return nvidia_provider.generate(contents, max_tokens=700)
+            summary = nvidia_provider.generate(contents, max_tokens=700)
+            logger.info("Resumen generado con proveedor rápido NVIDIA")
+            return summary
         except Exception as exc:
-            raise SummaryError("No se pudo generar el resumen con NVIDIA.") from exc
+            logger.warning(
+                "NVIDIA no pudo resumir; intentando Gemini: %s", exc
+            )
+
+    if not gemini_keys.is_configured():
+        raise SummaryError("No se pudo generar el resumen con NVIDIA.")
 
     try:
         from google import genai
+        from google.genai import types
     except ImportError as exc:
-        try:
-            return nvidia_provider.generate(contents, max_tokens=700)
-        except Exception:
-            raise SummaryError(
-                "Falta google-genai y NVIDIA no pudo generar el resumen."
-            ) from exc
+        raise SummaryError(
+            "Falta google-genai y NVIDIA no pudo generar el resumen."
+        ) from exc
     models_to_try = [GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != GEMINI_MODEL]
     last_exc = None
 
@@ -87,7 +97,13 @@ def summarize(text: str) -> str:
         key = gemini_keys.pool.current()
         if not key:
             break
-        client = genai.Client(api_key=key)
+        client = genai.Client(
+            api_key=key,
+            http_options=types.HttpOptions(
+                timeout=GEMINI_SUMMARY_TIMEOUT_MS,
+                retry_options=types.HttpRetryOptions(attempts=1),
+            ),
+        )
         key_quota_hit = False
         for model in models_to_try:
             try:
