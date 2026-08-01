@@ -7,6 +7,8 @@ import queue
 import re
 import sys
 import threading
+import time
+import unicodedata
 from pathlib import Path
 
 import numpy as np
@@ -17,7 +19,7 @@ import customtkinter as ctk
 import config
 from config import logger
 from core.domain.entities import TranscriptionRecord
-from infrastructure.services import interview_live, tts
+from infrastructure.services import interview_live, notebooklm_service, tts
 from .app_dialog import ask_input, show_error, show_info, show_warning
 from infrastructure.services.live_transcriber import (
     DEFAULT_DIR,
@@ -44,13 +46,22 @@ CONTEXT_SETTING_KEY = "interview_context"
 CONTEXT_PLACEHOLDER = "Pegá tu CV o el contexto de la sesión (puesto, empresa, tema a practicar...)."
 
 MODE_SETTING_KEY = "interview_assist_mode"
+RESOLVER_MODE_SETTING_KEY = "resolver_assist_mode"
+NOTEBOOK_ID_SETTING_KEY = "notebooklm_selected_id"
+NOTEBOOK_TITLE_SETTING_KEY = "notebooklm_selected_title"
+NOTEBOOK_PLACEHOLDER = "Seleccioná una materia…"
+NOTEBOOK_CONTEXT_SETTING_PREFIX = "notebooklm_context_"
 MODE_LABELS = {
     "Entrevista laboral": "entrevista",
     "Práctica de idioma": "practica",
     "Conversación general": "general",
     "Examen oral (respuestas completas)": "examen_oral",
-    "Prueba oral (práctica, solo ideas)": "prueba_oral",
+    "Práctica oral (solo ideas)": "prueba_oral",
+    "Resolver preguntas": "resolver",
 }
+
+INTERVIEW_MODES = ("entrevista", "practica", "general")
+RESOLVER_MODES = ("resolver", "examen_oral", "prueba_oral")
 
 LANG_SETTING_KEY = "interview_answer_lang"
 LANG_LABELS = {
@@ -86,19 +97,28 @@ MODE_CONTEXT = {
         "default_lang": "en",
     },
     "examen_oral": {
-        "label": "📚  TEMARIO / CRONOGRAMA",
+        "label": "📚  PROGRAMA / TEMARIO / CRONOGRAMA",
         "color": "#F6AD55",
-        "placeholder": "Pegá el cronograma o temario de la materia (unidades, temas, bibliografía...).",
+        "placeholder": "Pegá el programa, temario o cronograma de la materia (unidades, temas, objetivos, bibliografía...).",
         "show_cv": True,
-        "file_button": "📂  Cargar temario…",
-        "file_title": "temario",
+        "file_button": "📂  Cargar programa…",
+        "file_title": "programa, temario o cronograma",
         "default_lang": "es",
     },
     "prueba_oral": {
-        "label": "📝  TEMA DE LA PRUEBA",
+        "label": "📝  TEMA DE LA PRÁCTICA ORAL",
         "color": "#A78BFA",
-        "placeholder": "¿Sobre qué es la prueba oral? (tema, consigna, puntos a cubrir...).",
+        "placeholder": "¿Sobre qué es la práctica oral? (tema, consigna, puntos a cubrir...).",
         "show_cv": False,
+        "default_lang": "es",
+    },
+    "resolver": {
+        "label": "📚  TEMA / PROGRAMA / APUNTES",
+        "color": "#4DA3FF",
+        "placeholder": "Pegá el tema, programa de la materia, cronograma, apuntes o material para responder...",
+        "show_cv": True,
+        "file_button": "📂  Cargar material o programa…",
+        "file_title": "material o programa de estudio",
         "default_lang": "es",
     },
 }
@@ -115,24 +135,43 @@ class CandidateListener:
         self._on_status = on_status
         self._on_audio = on_audio
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._thread: threading.Thread | None = None
 
-    def start(self, microphone_name: str | None) -> None:
+    def start(
+        self, microphone_name: str | None, language: str | None = None
+    ) -> None:
         if self.is_running():
             return
         self._stop.clear()
+        self._paused.clear()
         self._thread = threading.Thread(
-            target=self._run, args=(microphone_name,), daemon=True
+            target=self._run,
+            args=(microphone_name, language),
+            daemon=True,
         )
         self._thread.start()
 
     def stop(self) -> None:
         self._stop.set()
+        self._paused.clear()
+
+    def pause(self) -> None:
+        if self.is_running():
+            self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
 
     def is_running(self) -> bool:
         return bool(self._thread and self._thread.is_alive())
 
-    def _run(self, microphone_name: str | None) -> None:
+    def _run(
+        self, microphone_name: str | None, language: str | None
+    ) -> None:
         com_initialized = False
         if sys.platform == "win32":
             try:
@@ -159,29 +198,53 @@ class CandidateListener:
             sample_rate = config.SAMPLE_RATE
             block = int(sample_rate * 0.5)
             chunks: list[np.ndarray] = []
-            self._on_status(f"Micrófono activo: {mic.name[:32]}")
-            with mic.recorder(samplerate=sample_rate) as recorder:
-                while not self._stop.is_set():
-                    data = recorder.record(numframes=block)
-                    mono = data.mean(axis=1).astype(np.float32)
-                    if self._on_audio is not None:
-                        self._on_audio(mono)
-                    chunks.append(mono)
-                    if len(chunks) < 6:
-                        continue
-                    audio = np.concatenate(chunks)
+            last_silence_log = 0.0
+
+            def consume(mono: np.ndarray) -> None:
+                nonlocal last_silence_log
+                if self._paused.is_set():
                     chunks.clear()
-                    level = float(np.abs(audio).mean())
-                    if level < 0.001:
-                        logger.info("Candidate mic level too low to transcribe: %.6f", level)
-                        continue
-                    texts, _ = service.transcribe_array(
-                        audio, language="en", translate=False
-                    )
-                    for text in texts:
-                        clean = (text or "").strip()
-                        if clean:
-                            self._on_text(clean)
+                    return
+                if self._on_audio is not None:
+                    self._on_audio(mono)
+                chunks.append(mono)
+                if len(chunks) < 6:
+                    return
+                audio = np.concatenate(chunks)
+                chunks.clear()
+                level = float(np.abs(audio).mean())
+                if level < 0.001:
+                    now = time.monotonic()
+                    if now - last_silence_log >= 10.0:
+                        logger.info(
+                            "Candidate mic level too low to transcribe: %.6f",
+                            level,
+                        )
+                        last_silence_log = now
+                    return
+                texts, _ = service.transcribe_array(
+                    audio, language=language, translate=False
+                )
+                for text in texts:
+                    clean = (text or "").strip()
+                    if clean:
+                        self._on_text(clean)
+
+            self._on_status(f"Micrófono activo: {mic.name[:32]}")
+            try:
+                with mic.recorder(samplerate=sample_rate) as recorder:
+                    while not self._stop.is_set():
+                        data = recorder.record(numframes=block)
+                        consume(data.mean(axis=1).astype(np.float32))
+            except AssertionError:
+                logger.warning(
+                    "Soundcard rejected microphone format; using "
+                    "sounddevice fallback for %s",
+                    mic.name,
+                )
+                self._capture_with_sounddevice(
+                    mic.name, sample_rate, block, consume
+                )
         except Exception as exc:
             logger.exception("Candidate microphone transcription failed: %s", exc)
             self._on_status(f"Error de micrófono: {exc}")
@@ -192,12 +255,129 @@ class CandidateListener:
                 except Exception:
                     pass
 
+    def _capture_with_sounddevice(
+        self,
+        microphone_name: str,
+        sample_rate: int,
+        block: int,
+        consume,
+    ) -> None:
+        try:
+            import sounddevice as sd
+        except ImportError as exc:
+            raise RuntimeError(
+                "El micrófono requiere sounddevice como motor alternativo."
+            ) from exc
+
+        input_devices = [
+            (index, device)
+            for index, device in enumerate(sd.query_devices())
+            if int(device.get("max_input_channels", 0)) > 0
+        ]
+        exact = [
+            item
+            for item in input_devices
+            if item[1].get("name") == microphone_name
+        ]
+        prefix = microphone_name[:28].casefold()
+        similar = [
+            item
+            for item in input_devices
+            if prefix in str(item[1].get("name", "")).casefold()
+            and item not in exact
+        ]
+        # Soundcard and sounddevice name the same Windows endpoint differently
+        # (for example "PD200X Podcast Microphone" vs
+        # "Micrófono (PD200X Podcast Microphone)"). Match distinctive tokens
+        # so we do not silently fall back to the first virtual mapper.
+        def normalized_tokens(value: str) -> set[str]:
+            value = unicodedata.normalize("NFKD", value.casefold())
+            plain = "".join(ch for ch in value if not unicodedata.combining(ch))
+            return {
+                token for token in re.findall(r"[a-z0-9]+", plain)
+                if len(token) >= 4 and token not in {"microfono", "microphone"}
+            }
+
+        wanted = normalized_tokens(microphone_name)
+        token_matches = [
+            item for item in input_devices
+            if wanted & normalized_tokens(str(item[1].get("name", "")))
+            and item not in exact
+            and item not in similar
+        ]
+        candidates = exact + token_matches + similar
+        if not candidates:
+            default_input = getattr(sd.default, "device", (-1, -1))[0]
+            candidates = sorted(
+                input_devices, key=lambda item: item[0] != default_input
+            )
+        last_exc: Exception | None = None
+
+        for device_index, device in candidates:
+            try:
+                with sd.InputStream(
+                    samplerate=sample_rate,
+                    blocksize=block,
+                    device=device_index,
+                    channels=1,
+                    dtype="float32",
+                ) as stream:
+                    self._on_status(
+                        "Micrófono activo (alternativo): "
+                        f"{str(device['name'])[:28]}"
+                    )
+                    logger.info(
+                        "Candidate microphone fallback device=%s index=%s",
+                        device["name"],
+                        device_index,
+                    )
+                    exact_zero_blocks = 0
+                    while not self._stop.is_set():
+                        started = time.monotonic()
+                        data, overflowed = stream.read(block)
+                        if overflowed:
+                            logger.warning(
+                                "Candidate microphone input overflow"
+                            )
+                        mono = data[:, 0].astype(np.float32)
+                        if mono.size and not np.any(mono):
+                            exact_zero_blocks += 1
+                            if exact_zero_blocks >= 6:
+                                raise RuntimeError(
+                                    "el dispositivo devuelve audio vacío"
+                                )
+                        else:
+                            exact_zero_blocks = 0
+                        consume(mono)
+                        # Some Windows host/device combinations return an empty
+                        # block immediately instead of blocking for its audio
+                        # duration. Pace that broken path so it cannot spin at
+                        # hundreds of iterations per second and starve the Live
+                        # session after the first question.
+                        elapsed = time.monotonic() - started
+                        expected = block / float(sample_rate)
+                        if elapsed < expected:
+                            self._stop.wait(expected - elapsed)
+                return
+            except Exception as exc:
+                last_exc = exc
+                logger.warning(
+                    "Alternative microphone device %s failed: %s",
+                    device.get("name"),
+                    exc,
+                )
+        raise RuntimeError(
+            "No se pudo abrir el micrófono con el motor alternativo: "
+            f"{last_exc or 'sin dispositivos disponibles'}"
+        )
+
 
 class InterviewFrame(ctk.CTkFrame):
     """Guided preparation, active interview, and closing flow."""
 
-    def __init__(self, parent):
+    def __init__(self, parent, fixed_mode: str | None = None):
         super().__init__(parent, fg_color="transparent")
+        self._fixed_mode = fixed_mode if fixed_mode in MODE_LABELS.values() else None
         self.out_dir = DEFAULT_DIR
         self.interviewer_queue: queue.Queue[str] = queue.Queue()
         self.candidate_queue: queue.Queue[str] = queue.Queue()
@@ -211,7 +391,11 @@ class InterviewFrame(ctk.CTkFrame):
         )
         self._source_map: dict[str, tuple[str, object]] = {}
         self._microphone_map: dict[str, str | None] = {}
+        self._notebook_map: dict[str, notebooklm_service.NotebookRef] = {}
+        self._active_notebook_id: str | None = None
+        self._active_notebook_context: str | None = None
         self._session_ended = False
+        self._session_paused = False
         self._mic_error_shown = False
         self._build_header()
         self._build_preparation()
@@ -222,10 +406,13 @@ class InterviewFrame(ctk.CTkFrame):
         self.after(100, self._drain_queues)
 
     def _build_header(self) -> None:
+        resolver = self._fixed_mode == "resolver"
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill=tk.X, padx=24, pady=(20, 8))
         ctk.CTkLabel(
-            header, text="🎯  Entrevista", font=("Segoe UI Semibold", 22),
+            header,
+            text="🧠  Resolver preguntas" if resolver else "🎯  Entrevista",
+            font=("Segoe UI Semibold", 22),
             text_color=TEXT,
         ).pack(side=tk.LEFT)
         self.status_label = ctk.CTkLabel(
@@ -235,36 +422,60 @@ class InterviewFrame(ctk.CTkFrame):
         self.status_label.pack(side=tk.RIGHT)
         ctk.CTkLabel(
             self,
-            text="Escuchá al entrevistador, seguí el hilo y respondé con mayor fluidez. El audio se guarda para reproducirlo en Historial.",
+            text=(
+                "Capturá la pregunta de una llamada o videoconferencia y obtené respuestas basadas en el tema."
+                if resolver
+                else "Escuchá al entrevistador, seguí el hilo y respondé con mayor fluidez. El audio se guarda para reproducirlo en Historial."
+            ),
             font=("Segoe UI", 12), text_color=MUTED,
         ).pack(anchor=tk.W, padx=24, pady=(0, 10))
 
+    def _mode_labels(self) -> list[str]:
+        allowed = (
+            RESOLVER_MODES
+            if self._fixed_mode == "resolver"
+            else INTERVIEW_MODES
+        )
+        return [
+            label
+            for mode in allowed
+            for label, mapped_mode in MODE_LABELS.items()
+            if mapped_mode == mode
+        ]
+
     def _build_preparation(self) -> None:
+        resolver = self._fixed_mode == "resolver"
         # Scrollable: the prep form outgrew small windows and the start button
         # was getting clipped at the bottom.
         self.prep = ctk.CTkScrollableFrame(
             self, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1
         )
         ctk.CTkLabel(
-            self.prep, text="①  Prepará la entrevista",
+            self.prep,
+            text="①  Prepará el tema" if resolver else "①  Prepará la entrevista",
             font=("Segoe UI Semibold", 17), text_color=TEXT,
         ).pack(anchor=tk.W, padx=18, pady=(16, 2))
         ctk.CTkLabel(
             self.prep,
-            text="Elegí el modo, pegá tu CV y listo. Al terminar, la entrevista queda en Historial con audio para escuchar.",
+            text=(
+                "Pegá el material, elegí el audio de la llamada y el micrófono con el que vas a responder."
+                if resolver
+                else "Elegí el modo, pegá tu CV y listo. Al terminar, la entrevista queda en Historial con audio para escuchar."
+            ),
             font=("Segoe UI", 11), text_color=MUTED,
         ).pack(anchor=tk.W, padx=18, pady=(0, 10))
 
         mode_row = ctk.CTkFrame(self.prep, fg_color="transparent")
         mode_row.pack(fill=tk.X, padx=18, pady=(0, 10))
         ctk.CTkLabel(
-            mode_row, text="🎛  MODO DE SESIÓN",
+            mode_row,
+            text="🎛  TIPO DE AYUDA" if resolver else "🎛  MODO DE SESIÓN",
             font=("Segoe UI Semibold", 9), text_color="#A78BFA",
         ).pack(anchor=tk.W)
         self.mode_var = tk.StringVar(value=self._load_saved_mode_label())
         self.mode_combo = ctk.CTkComboBox(
             mode_row, variable=self.mode_var, state="readonly",
-            values=list(MODE_LABELS),
+            values=self._mode_labels(),
             fg_color=PANEL_DARK, border_color=BORDER, button_color=BORDER,
             dropdown_fg_color=PANEL, dropdown_hover_color=ACCENT,
             command=self._on_mode_change,
@@ -302,6 +513,26 @@ class InterviewFrame(ctk.CTkFrame):
             border_width=1, font=("Segoe UI", 11),
         )
         self.cv_button.pack(side=tk.RIGHT)
+        self.clear_context_button = ctk.CTkButton(
+            context_header, text="🧹  Limpiar",
+            command=self._clear_written_context, width=82, height=24,
+            fg_color=PANEL_DARK, hover_color=ACCENT, border_color=BORDER,
+            border_width=1, font=("Segoe UI", 11),
+        )
+        self.clear_context_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.use_written_context_var = tk.BooleanVar(value=True)
+        self.use_written_context_check = ctk.CTkCheckBox(
+            context_header,
+            text="Usar este contexto",
+            variable=self.use_written_context_var,
+            command=self._select_written_context,
+            width=140,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            border_color=BORDER,
+            text_color=TEXT,
+        )
+        self.use_written_context_check.pack(side=tk.RIGHT, padx=(0, 10))
 
         self.context_box = ctk.CTkTextbox(
             self.prep, height=110, fg_color=PANEL_DARK, text_color=TEXT,
@@ -309,24 +540,128 @@ class InterviewFrame(ctk.CTkFrame):
             font=("Segoe UI", 12),
         )
         self.context_box.pack(fill=tk.X, padx=18, pady=(0, 14))
+        self.context_box.bind(
+            "<KeyRelease>", lambda _event: self._apply_context_source_state()
+        )
         self._context_placeholder = CONTEXT_PLACEHOLDER
         self._current_mode = None
         self._mode_contexts: dict[str, str] = {}  # contexto por modo (cache de sesión)
         # Sincroniza etiqueta/placeholder/botón CV y carga el contexto del modo guardado.
         self._on_mode_change(self.mode_var.get())
 
+        if resolver:
+            notebook_card = ctk.CTkFrame(
+                self.prep, fg_color=PANEL_DARK, corner_radius=8
+            )
+            notebook_card.pack(fill=tk.X, padx=18, pady=(0, 14))
+            notebook_header = ctk.CTkFrame(
+                notebook_card, fg_color="transparent"
+            )
+            notebook_header.pack(fill=tk.X, padx=12, pady=(10, 2))
+            ctk.CTkLabel(
+                notebook_header,
+                text="📓  NOTEBOOKLM · MATERIA",
+                font=("Segoe UI Semibold", 9),
+                text_color="#63B3ED",
+            ).pack(side=tk.LEFT)
+            self.use_notebook_var = tk.BooleanVar(value=False)
+            self.use_notebook_check = ctk.CTkCheckBox(
+                notebook_header,
+                text="Usar NotebookLM",
+                variable=self.use_notebook_var,
+                command=self._select_notebook_context,
+                width=125,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOVER,
+                border_color=BORDER,
+                text_color=TEXT,
+            )
+            self.use_notebook_check.pack(side=tk.RIGHT)
+            self.notebook_var = tk.StringVar(
+                value=NOTEBOOK_PLACEHOLDER
+            )
+            self.notebook_combo = ctk.CTkComboBox(
+                notebook_card,
+                variable=self.notebook_var,
+                state="readonly",
+                values=[self.notebook_var.get()],
+                fg_color=PANEL,
+                border_color=BORDER,
+                button_color=BORDER,
+                dropdown_fg_color=PANEL,
+                dropdown_hover_color=ACCENT,
+                command=self._on_notebook_change,
+            )
+            self.notebook_combo.pack(fill=tk.X, padx=12, pady=(4, 8))
+            notebook_actions = ctk.CTkFrame(
+                notebook_card, fg_color="transparent"
+            )
+            notebook_actions.pack(fill=tk.X, padx=12)
+            self.notebook_login_button = ctk.CTkButton(
+                notebook_actions,
+                text="🔐  Conectar",
+                width=110,
+                height=28,
+                command=self._login_notebooklm,
+                fg_color=PANEL,
+                hover_color=ACCENT,
+            )
+            self.notebook_login_button.pack(side=tk.LEFT)
+            self.notebook_refresh_button = ctk.CTkButton(
+                notebook_actions,
+                text="🔄  Actualizar materias",
+                width=150,
+                height=28,
+                command=self._refresh_notebooks,
+                fg_color=PANEL,
+                hover_color=ACCENT,
+            )
+            self.notebook_refresh_button.pack(side=tk.LEFT, padx=6)
+            self.notebook_sync_button = ctk.CTkButton(
+                notebook_actions,
+                text="↻  Sincronizar materia",
+                width=150,
+                height=28,
+                command=self._sync_notebook,
+                fg_color=ACCENT,
+                hover_color=ACCENT_HOVER,
+            )
+            # Kept as an internal retry control; normal synchronization starts
+            # automatically when the user chooses a subject.
+            self.notebook_status = ctk.CTkLabel(
+                notebook_card,
+                text="Podés seguir usando material local sin conectar NotebookLM.",
+                font=("Segoe UI", 10),
+                text_color=MUTED,
+            )
+            self.notebook_status.pack(
+                anchor=tk.W, padx=12, pady=(7, 10)
+            )
+            # The CLI keeps its authenticated browser session. On subsequent
+            # launches, restore the catalog and last selected subject silently.
+            self._apply_context_source_state()
+            self.after(250, self._refresh_notebooks)
+
         sources = ctk.CTkFrame(self.prep, fg_color="transparent")
         sources.pack(fill=tk.X, padx=18)
         sources.grid_columnconfigure(0, weight=1)
         sources.grid_columnconfigure(1, weight=1)
-        ctk.CTkLabel(
-            sources, text="🎧  ENTREVISTADOR · AUDIO DEL SISTEMA",
+        self.source_label = ctk.CTkLabel(
+            sources,
+            text=(
+                "🔊  PREGUNTA · AUDIO DEL SISTEMA"
+                if resolver
+                else "🎧  ENTREVISTADOR · AUDIO DEL SISTEMA"
+            ),
             font=("Segoe UI Semibold", 9), text_color=INTERVIEWER,
-        ).grid(row=0, column=0, sticky="w", padx=(0, 8))
-        ctk.CTkLabel(
-            sources, text="🎤  VOS · MICRÓFONO",
+        )
+        self.source_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
+        self.mic_label = ctk.CTkLabel(
+            sources,
+            text="🎤  TU RESPUESTA · MICRÓFONO" if resolver else "🎤  VOS · MICRÓFONO",
             font=("Segoe UI Semibold", 9), text_color=CANDIDATE,
-        ).grid(row=0, column=1, sticky="w", padx=(8, 0))
+        )
+        self.mic_label.grid(row=0, column=1, sticky="w", padx=(8, 0))
         self.source_var = tk.StringVar(value=WHOLE_SYSTEM_LABEL)
         self.source_combo = ctk.CTkComboBox(
             sources, variable=self.source_var, state="readonly",
@@ -341,46 +676,72 @@ class InterviewFrame(ctk.CTkFrame):
             dropdown_fg_color=PANEL, dropdown_hover_color=ACCENT,
         )
         self.mic_combo.grid(row=1, column=1, sticky="ew", padx=(8, 0), pady=(4, 0))
-
         consent = ctk.CTkFrame(self.prep, fg_color=PANEL_DARK, corner_radius=8)
         consent.pack(fill=tk.X, padx=18, pady=14)
         ctk.CTkLabel(
             consent,
-            text="🌐  Gemini procesa el audio del entrevistador. Tu voz se transcribe localmente y se envía como texto para mantener el contexto.",
+            text=(
+                "🌐  Gemini procesa la pregunta del audio del sistema. Tu respuesta del micrófono se transcribe localmente y se incorpora al historial."
+                if resolver
+                else "🌐  Gemini procesa el audio del entrevistador. Tu voz se transcribe localmente y se envía como texto para mantener el contexto."
+            ),
             wraplength=840, justify=tk.LEFT, font=("Segoe UI", 11), text_color=MUTED,
         ).pack(anchor=tk.W, padx=12, pady=10)
         # On by default so Historial can play the interview back.
         self.record_var = tk.BooleanVar(value=True)
         ctk.CTkCheckBox(
             self.prep,
-            text="🎙  Guardar audio de la entrevista (ambos) — activado, podés reproducirlo en Historial",
+            text=(
+                "🎙  Guardar audio de las preguntas y tus respuestas"
+                if resolver
+                else "🎙  Guardar audio de la entrevista (ambos) — activado, podés reproducirlo en Historial"
+            ),
             variable=self.record_var, fg_color=REC, hover_color="#C04058",
             border_color=BORDER, text_color=TEXT,
         ).pack(anchor=tk.W, padx=18)
         ctk.CTkLabel(
-            self.prep, text="🎧  Tip: usá auriculares para evitar eco entre el sistema y el micrófono.",
+            self.prep,
+            text=(
+                "💡  Usá auriculares: la pregunta llega desde la llamada y tu respuesta se toma por el micrófono."
+                if resolver
+                else "🎧  Tip: usá auriculares para evitar eco entre el sistema y el micrófono."
+            ),
             font=("Segoe UI", 10), text_color=MUTED,
         ).pack(anchor=tk.W, padx=18, pady=(6, 12))
-        ctk.CTkButton(
-            self.prep, text="▶  Iniciar entrevista", command=self.start_session,
+        self.start_button = ctk.CTkButton(
+            self.prep,
+            text="▶  Empezar a resolver" if resolver else "▶  Iniciar entrevista",
+            command=self.start_session,
             height=40, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             font=("Segoe UI Semibold", 12),
-        ).pack(anchor=tk.E, padx=18, pady=(0, 18))
+        )
+        self.start_button.pack(anchor=tk.E, padx=18, pady=(0, 18))
+        if resolver:
+            self._apply_context_source_state()
 
     def _build_active(self) -> None:
+        resolver = self._fixed_mode == "resolver"
         self.active = ctk.CTkFrame(self, fg_color="transparent")
         top = ctk.CTkFrame(self.active, fg_color="transparent")
         top.pack(fill=tk.X, padx=24, pady=(0, 8))
         ctk.CTkLabel(
             top, text="②  Sesión activa", font=("Segoe UI Semibold", 16), text_color=SUCCESS
         ).pack(side=tk.LEFT)
+        self.pause_button = ctk.CTkButton(
+            top, text="⏸  Pausar", width=110, fg_color=PANEL_DARK,
+            hover_color="#20212D", command=self.toggle_pause,
+        )
+        self.pause_button.pack(side=tk.RIGHT, padx=(0, 8))
         ctk.CTkButton(
             top, text="⏹  Detener", width=110, fg_color="#B8324A", hover_color="#96283D",
             command=self.finish_session,
         ).pack(side=tk.RIGHT)
 
         self.question_label = self._section(
-            self.active, "🗣  PREGUNTA EN ESPAÑOL", "Esperando al entrevistador...", 17,
+            self.active,
+            "🗣  PREGUNTA DETECTADA" if resolver else "🗣  PREGUNTA EN ESPAÑOL",
+            "Esperando una pregunta..." if resolver else "Esperando al entrevistador...",
+            17,
             title_color="#F6AD55",
         )
         ctk.CTkLabel(
@@ -394,8 +755,8 @@ class InterviewFrame(ctk.CTkFrame):
         replies.grid_columnconfigure(1, weight=1)
         self.reply_boxes = []
         reply_titles = (
-            ("✨  RESPUESTA RECOMENDADA", ACCENT),
-            ("⚡  ALTERNATIVA BREVE", "#F6E05E"),
+            ("✨  RESPUESTA COMPLETA" if resolver else "✨  RESPUESTA RECOMENDADA", ACCENT),
+            ("⚡  OTRA FORMA DE RESPONDER" if resolver else "⚡  ALTERNATIVA BREVE", "#F6E05E"),
         )
         for i, (title, title_color) in enumerate(reply_titles):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
@@ -412,8 +773,8 @@ class InterviewFrame(ctk.CTkFrame):
                 hover_color="#20212D", command=lambda n=i: self._copy_reply(n),
             ).pack(side=tk.RIGHT)
             box = ctk.CTkTextbox(
-                card, height=74, fg_color=PANEL_DARK, text_color=TEXT,
-                border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 12),
+                card, height=150 if resolver else 74, fg_color=PANEL_DARK, text_color=TEXT,
+                border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 16),
             )
             box._reply_text = ""
             self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
@@ -425,7 +786,11 @@ class InterviewFrame(ctk.CTkFrame):
         support.pack(fill=tk.X, padx=24, pady=6)
         self.ideas_label = self._small_card(
             support, "💡  IDEAS CLAVE",
-            "Se adaptarán a tu CV y al hilo de la conversación.",
+            (
+                "Se extraerán del tema y de la respuesta."
+                if resolver
+                else "Se adaptarán a tu CV y al hilo de la conversación."
+            ),
             title_color="#F6E05E",
         )
 
@@ -434,14 +799,20 @@ class InterviewFrame(ctk.CTkFrame):
         transcripts.grid_columnconfigure(0, weight=1)
         transcripts.grid_columnconfigure(1, weight=1)
         transcripts.grid_rowconfigure(1, weight=1)
-        ctk.CTkLabel(
-            transcripts, text="🎧  ENTREVISTADOR", font=("Segoe UI Semibold", 9),
+        self.interviewer_transcript_label = ctk.CTkLabel(
+            transcripts,
+            text="🎤  PREGUNTA ESCUCHADA" if resolver else "🎧  ENTREVISTADOR",
+            font=("Segoe UI Semibold", 9),
             text_color=INTERVIEWER,
-        ).grid(row=0, column=0, sticky="w")
-        ctk.CTkLabel(
-            transcripts, text="🎤  VOS", font=("Segoe UI Semibold", 9),
+        )
+        self.interviewer_transcript_label.grid(row=0, column=0, sticky="w")
+        self.candidate_transcript_label = ctk.CTkLabel(
+            transcripts,
+            text="🎤  TU RESPUESTA" if resolver else "🎤  VOS",
+            font=("Segoe UI Semibold", 9),
             text_color=CANDIDATE,
-        ).grid(row=0, column=1, sticky="w", padx=(12, 0))
+        )
+        self.candidate_transcript_label.grid(row=0, column=1, sticky="w", padx=(12, 0))
         self.interviewer_box = self._transcript_box(transcripts)
         self.interviewer_box.grid(row=1, column=0, sticky="nsew", padx=(0, 6), pady=(4, 0))
         self.interviewer_box._textbox.bind("<Button-3>", self._speak_word_at)
@@ -450,9 +821,11 @@ class InterviewFrame(ctk.CTkFrame):
         self.candidate_box._textbox.bind("<Button-3>", self._speak_word_at)
 
     def _build_closing(self) -> None:
+        resolver = self._fixed_mode == "resolver"
         self.closing = ctk.CTkFrame(self, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
         ctk.CTkLabel(
-            self.closing, text="③  Entrevista lista",
+            self.closing,
+            text="③  Resolución finalizada" if resolver else "③  Entrevista lista",
             font=("Segoe UI Semibold", 18), text_color=SUCCESS,
         ).pack(pady=(24, 6))
         self.closing_summary = ctk.CTkLabel(self.closing, text="", font=("Segoe UI", 12), text_color=MUTED)
@@ -466,11 +839,15 @@ class InterviewFrame(ctk.CTkFrame):
         actions = ctk.CTkFrame(self.closing, fg_color="transparent")
         actions.pack(pady=(0, 24))
         ctk.CTkButton(
-            actions, text="💾  Guardar con nombre", command=self.save_session,
+            actions,
+            text="💾  Guardar preguntas y respuestas" if resolver else "💾  Guardar con nombre",
+            command=self.save_session,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
         ).pack(side=tk.LEFT, padx=6)
         ctk.CTkButton(
-            actions, text="🔄  Nueva entrevista", command=self.reset_session,
+            actions,
+            text="🔄  Resolver otra pregunta" if resolver else "🔄  Nueva entrevista",
+            command=self.reset_session,
             fg_color=PANEL_DARK, hover_color="#20212D",
         ).pack(side=tk.LEFT, padx=6)
         ctk.CTkButton(
@@ -519,7 +896,11 @@ class InterviewFrame(ctk.CTkFrame):
         interviewer_words = len(self.interviewer_box.get("1.0", tk.END).split())
         candidate_words = len(self.candidate_box.get("1.0", tk.END).split())
         self.closing_summary.configure(
-            text=f"🎧 Entrevistador: {interviewer_words} palabras · 🎤 Vos: {candidate_words} palabras"
+            text=(
+                f"🎤 Preguntas detectadas: {interviewer_words} palabras"
+                if self._fixed_mode == "resolver"
+                else f"🎧 Entrevistador: {interviewer_words} palabras · 🎤 Vos: {candidate_words} palabras"
+            )
         )
         recording = bool(self.record_var.get())
         self.closing_hint.configure(
@@ -534,6 +915,24 @@ class InterviewFrame(ctk.CTkFrame):
     def _combined_transcript(self) -> str:
         interviewer = self.interviewer_box.get("1.0", tk.END).strip()
         candidate = self.candidate_box.get("1.0", tk.END).strip()
+        if self._fixed_mode == "resolver":
+            answers = [
+                box._reply_text.strip()
+                for box in self.reply_boxes
+                if box._reply_text.strip()
+            ]
+            if not interviewer and not answers:
+                return ""
+            answer_text = "\n\n".join(
+                f"RESPUESTA {index}\n{text}"
+                for index, text in enumerate(answers, start=1)
+            )
+            user_answer = (
+                f"\n\nTU RESPUESTA\n{candidate}"
+                if candidate
+                else ""
+            )
+            return f"PREGUNTA\n{interviewer}\n\n{answer_text}{user_answer}\n"
         if not interviewer and not candidate:
             return ""
         return f"ENTREVISTADOR\n{interviewer}\n\nCANDIDATO\n{candidate}\n"
@@ -573,17 +972,22 @@ class InterviewFrame(ctk.CTkFrame):
         else:
             self.out_dir.mkdir(parents=True, exist_ok=True)
             stamp = dt.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-            file_path = str(self.out_dir / f"entrevista_{stamp}.txt")
+            prefix = "resolucion" if self._fixed_mode == "resolver" else "entrevista"
+            file_path = str(self.out_dir / f"{prefix}_{stamp}.txt")
             Path(file_path).write_text(transcript, encoding="utf-8")
         secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
         try:
             config.repository.save(
                 TranscriptionRecord(
                     file_path=file_path,
-                    file_name=f"Entrevista {dt.datetime.now():%Y-%m-%d %H.%M}",
+                    file_name=(
+                        f"Resolución {dt.datetime.now():%Y-%m-%d %H.%M}"
+                        if self._fixed_mode == "resolver"
+                        else f"Entrevista {dt.datetime.now():%Y-%m-%d %H.%M}"
+                    ),
                     duration=f"{secs // 60:02d}:{secs % 60:02d}",
                     transcription=transcript,
-                    language="en",
+                    language="es" if self._fixed_mode == "resolver" else "en",
                 )
             )
             self._set_status(
@@ -605,10 +1009,19 @@ class InterviewFrame(ctk.CTkFrame):
 
     def save_session(self) -> None:
         combined = self._combined_transcript()
+        resolver = self._fixed_mode == "resolver"
         if not combined:
-            show_warning(self, "Entrevista", "No hay conversación para guardar.")
+            show_warning(
+                self,
+                "Resolver preguntas" if resolver else "Entrevista",
+                "No hay preguntas para guardar." if resolver else "No hay conversación para guardar.",
+            )
             return
-        name = ask_input(self, "Guardar entrevista", "Nombre de la entrevista:")
+        name = ask_input(
+            self,
+            "Guardar resolución" if resolver else "Guardar entrevista",
+            "Nombre del tema:" if resolver else "Nombre de la entrevista:",
+        )
         if not name:
             return
         name = name.strip()
@@ -621,14 +1034,18 @@ class InterviewFrame(ctk.CTkFrame):
         file_path = str(wav) if has_audio else str(path)
         secs = int(getattr(self.worker, "duration_seconds", 0) or 0)
         if config.repository is None:
-            show_error(self, "Entrevista", "No hay base de datos disponible.")
+            show_error(
+                self,
+                "Resolver preguntas" if resolver else "Entrevista",
+                "No hay base de datos disponible.",
+            )
             return
         config.repository.save(TranscriptionRecord(
             file_path=file_path,
             file_name=safe,
             duration=f"{secs // 60:02d}:{secs % 60:02d}",
             transcription=combined,
-            language="en",
+            language="es" if resolver else "en",
         ))
         self._set_status("Guardada", SUCCESS)
         msg = (
@@ -636,7 +1053,7 @@ class InterviewFrame(ctk.CTkFrame):
             if has_audio
             else "Guardada en Historial (solo texto; no hay audio para reproducir)."
         )
-        show_info(self, "Entrevista", msg)
+        show_info(self, "Resolver preguntas" if resolver else "Entrevista", msg)
 
     def refresh_devices(self) -> None:
         self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
@@ -663,6 +1080,243 @@ class InterviewFrame(ctk.CTkFrame):
         self.mic_combo.configure(values=labels)
         if self.mic_var.get() not in self._microphone_map:
             self.mic_var.set(labels[0])
+
+    def _set_notebook_status(
+        self, text: str, color: str = MUTED
+    ) -> None:
+        if hasattr(self, "notebook_status"):
+            self.notebook_status.configure(text=text, text_color=color)
+
+    def _login_notebooklm(self) -> None:
+        try:
+            notebooklm_service.launch_login()
+        except Exception as exc:
+            self._set_notebook_status(str(exc), ERROR)
+            return
+        self._set_notebook_status(
+            "Completá el inicio de sesión y luego tocá «Actualizar materias».",
+            ACCENT,
+        )
+
+    def _refresh_notebooks(self) -> None:
+        self._set_notebook_status("Consultando materias de NotebookLM…", ACCENT)
+
+        def work():
+            try:
+                notebooks = notebooklm_service.list_notebooks()
+            except Exception as exc:
+                self.after(
+                    0, lambda message=str(exc): self._set_notebook_status(
+                        message, ERROR
+                    )
+                )
+                return
+
+            def apply():
+                self._notebook_map = {
+                    notebook.label: notebook for notebook in notebooks
+                }
+                labels = list(self._notebook_map)
+                if not labels:
+                    self._set_notebook_status(
+                        "No se encontraron materias con fuentes.", ERROR
+                    )
+                    return
+                self.notebook_combo.configure(values=labels)
+                current = self.notebook_var.get()
+                selected = current if current in self._notebook_map else None
+                self.notebook_var.set(selected or NOTEBOOK_PLACEHOLDER)
+                self._set_notebook_status(
+                    (
+                        f"{len(labels)} materias disponibles · seleccionada: "
+                        f"{self._notebook_map[selected].title}"
+                        if selected
+                        else f"{len(labels)} materias disponibles · elegí una."
+                    ),
+                    SUCCESS,
+                )
+
+            self.after(0, apply)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _load_setting(self, key: str) -> str | None:
+        if config.repository is None:
+            return None
+        try:
+            value = config.repository.get_setting(key)
+            return value.strip() if value and value.strip() else None
+        except Exception as exc:
+            logger.exception("Failed loading setting %s: %s", key, exc)
+            return None
+
+    def _save_notebook_selection(
+        self, notebook: notebooklm_service.NotebookRef
+    ) -> None:
+        if config.repository is None:
+            return
+        try:
+            config.repository.set_setting(NOTEBOOK_ID_SETTING_KEY, notebook.id)
+            config.repository.set_setting(
+                NOTEBOOK_TITLE_SETTING_KEY, notebook.title
+            )
+        except Exception as exc:
+            logger.exception("Failed saving NotebookLM selection: %s", exc)
+
+    def _on_notebook_change(self, choice: str) -> None:
+        notebook = self._notebook_map.get(choice)
+        if notebook is None:
+            return
+        self._deactivate_notebook_context()
+        self.notebook_combo.configure(border_color=BORDER)
+        cached = self._load_setting(
+            f"{NOTEBOOK_CONTEXT_SETTING_PREFIX}{notebook.id}"
+        )
+        if cached:
+            self._active_notebook_id = notebook.id
+            self._active_notebook_context = cached
+        self._apply_context_source_state()
+        self._save_notebook_selection(notebook)
+        self._set_notebook_status(
+            (
+                f"✓ {notebook.title} lista desde caché · actualizando…"
+                if cached
+                else f"Sincronizando {notebook.title} automáticamente…"
+            ),
+            ACCENT,
+        )
+        self._sync_notebook()
+
+    def _deactivate_notebook_context(self) -> None:
+        self._active_notebook_id = None
+        self._active_notebook_context = None
+
+    def _select_written_context(self) -> None:
+        self._apply_context_source_state()
+
+    def _select_notebook_context(self) -> None:
+        self._apply_context_source_state()
+        if (
+            self.use_notebook_var.get()
+            and self.notebook_var.get() in self._notebook_map
+            and not self._active_notebook_context
+        ):
+            self._sync_notebook()
+
+    def _has_written_context(self) -> bool:
+        value = self.context_box.get("1.0", tk.END).strip()
+        return bool(value and value not in ALL_PLACEHOLDERS)
+
+    def _apply_context_source_state(self) -> None:
+        """Enable each context source independently; both may be active."""
+        notebook_active = (
+            hasattr(self, "use_notebook_var") and self.use_notebook_var.get()
+        )
+        written_active = self.use_written_context_var.get()
+        self.context_box.configure(state="normal" if written_active else "disabled")
+        self.cv_button.configure(state="normal" if written_active else "disabled")
+        if not hasattr(self, "notebook_combo"):
+            return
+        control_state = "normal" if notebook_active else "disabled"
+        self.notebook_combo.configure(
+            state="readonly" if notebook_active else "disabled"
+        )
+        self.notebook_login_button.configure(state=control_state)
+        self.notebook_refresh_button.configure(state=control_state)
+        self.notebook_sync_button.configure(state=control_state)
+        notebook_ready = bool(self._active_notebook_context)
+        written_ready = written_active and self._has_written_context()
+        if hasattr(self, "start_button"):
+            self.start_button.configure(
+                state=(
+                    "normal"
+                    if not notebook_active or notebook_ready or written_ready
+                    else "disabled"
+                )
+            )
+        self._set_notebook_status(
+            (
+                "Elegí una materia: se sincronizará automáticamente."
+                if notebook_active
+                else "NotebookLM desactivado."
+            ),
+            ACCENT if notebook_active else MUTED,
+        )
+
+    def _sync_notebook(self) -> None:
+        notebook = self._notebook_map.get(self.notebook_var.get())
+        if notebook is None:
+            self._set_notebook_status(
+                "Primero actualizá y seleccioná una materia.", ERROR
+            )
+            return
+        logger.info(
+            "NotebookLM sync started: id=%s title=%s",
+            notebook.id,
+            notebook.title,
+        )
+        self.notebook_sync_button.configure(state="disabled")
+        self._set_notebook_status(
+            f"Preparando material de {notebook.title}…", ACCENT
+        )
+
+        def work():
+            try:
+                context = notebooklm_service.sync_study_context(notebook.id)
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): finish_error(message))
+                return
+            self.after(0, lambda: finish_success(context))
+
+        def finish_error(message: str):
+            self.notebook_sync_button.configure(state="normal")
+            logger.error(
+                "NotebookLM sync failed: id=%s title=%s error=%s",
+                notebook.id,
+                notebook.title,
+                message,
+            )
+            if self._active_notebook_context:
+                self._apply_context_source_state()
+                self._set_notebook_status(
+                    f"✓ Usando la copia guardada de {notebook.title}.",
+                    WARNING,
+                )
+                return
+            self._set_notebook_status(message, ERROR)
+
+        def finish_success(context: str):
+            value = f"[NotebookLM · {notebook.title}]\n{context}"
+            self._active_notebook_id = notebook.id
+            self._active_notebook_context = value
+            self._save_notebook_selection(notebook)
+            if config.repository is not None:
+                try:
+                    config.repository.set_setting(
+                        f"{NOTEBOOK_CONTEXT_SETTING_PREFIX}{notebook.id}",
+                        value,
+                    )
+                except Exception as exc:
+                    logger.exception(
+                        "Failed caching NotebookLM context: %s", exc
+                    )
+            logger.info(
+                "NotebookLM sync complete: id=%s title=%s chars=%s",
+                notebook.id,
+                notebook.title,
+                len(value),
+            )
+            self.notebook_sync_button.configure(state="normal")
+            self.notebook_combo.configure(border_color=BORDER)
+            self._apply_context_source_state()
+            self._set_notebook_status(
+                f"✓ {notebook.title} lista. Se combinará con el contexto escrito"
+                if self.use_written_context_var.get()
+                else f"✓ {notebook.title} lista para usar.",
+                SUCCESS,
+            )
+
+        threading.Thread(target=work, daemon=True).start()
 
     def _upload_cv_file(self) -> None:
         from tkinter import filedialog
@@ -694,6 +1348,20 @@ class InterviewFrame(ctk.CTkFrame):
         self.context_box.delete("1.0", tk.END)
         self.context_box.insert("1.0", text.strip())
         self._save_context(text.strip(), self._current_mode or "entrevista")
+        self._apply_context_source_state()
+
+    def _clear_written_context(self) -> None:
+        """Clear the editable written context without restoring its placeholder."""
+        was_disabled = self.context_box._textbox.cget("state") == "disabled"
+        if was_disabled:
+            self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", tk.END)
+        if self._current_mode:
+            self._mode_contexts[self._current_mode] = ""
+        if was_disabled:
+            self.context_box.configure(state="disabled")
+        self._save_context("", self._current_mode or "entrevista")
+        self._apply_context_source_state()
 
     @staticmethod
     def _extract_cv_text(path: str) -> str:
@@ -712,16 +1380,21 @@ class InterviewFrame(ctk.CTkFrame):
             return fh.read()
 
     def _load_saved_mode_label(self) -> str:
-        default_label = next(iter(MODE_LABELS))
+        default_label = self._mode_labels()[0]
         if config.repository is None:
             return default_label
+        setting_key = (
+            RESOLVER_MODE_SETTING_KEY
+            if self._fixed_mode == "resolver"
+            else MODE_SETTING_KEY
+        )
         try:
-            saved = config.repository.get_setting(MODE_SETTING_KEY)
+            saved = config.repository.get_setting(setting_key)
         except Exception as exc:
             logger.exception("Failed loading saved assist mode: %s", exc)
             return default_label
         for label, mode in MODE_LABELS.items():
-            if mode == saved:
+            if mode == saved and label in self._mode_labels():
                 return label
         return default_label
 
@@ -734,6 +1407,7 @@ class InterviewFrame(ctk.CTkFrame):
         """
         new_mode = MODE_LABELS.get(choice, "entrevista")
         cfg = MODE_CONTEXT.get(new_mode, MODE_CONTEXT["entrevista"])
+        oral_mode = new_mode in interview_live.ORAL_ASSIST_MODES
         prev = getattr(self, "_current_mode", None)
 
         # Guardar lo escrito en el modo anterior antes de cambiar.
@@ -753,17 +1427,32 @@ class InterviewFrame(ctk.CTkFrame):
         # Cargar el contexto y el idioma propios del nuevo modo (solo si cambió).
         if prev != new_mode:
             saved = self._load_saved_context(new_mode)
+            context_was_disabled = (
+                self.context_box._textbox.cget("state") == "disabled"
+            )
+            if context_was_disabled:
+                self.context_box.configure(state="normal")
             self.context_box.delete("1.0", tk.END)
             self.context_box.insert("1.0", saved or cfg["placeholder"])
+            if context_was_disabled:
+                self.context_box.configure(state="disabled")
             # Un examen oral se rinde en español y una entrevista suele ser en
             # inglés: cada modo arranca con su idioma y recuerda tu elección.
             self.lang_var.set(self._lang_label_for(new_mode))
+
+        if oral_mode:
+            self.lang_var.set("Español")
+            self.lang_combo.configure(state="disabled")
+        else:
+            self.lang_combo.configure(state="readonly")
 
         self._context_placeholder = cfg["placeholder"]
         self._current_mode = new_mode
 
     def _lang_label_for(self, mode: str) -> str:
         """Saved answer language for `mode`, or the mode's default."""
+        if mode in interview_live.ORAL_ASSIST_MODES:
+            return "Español"
         cfg = MODE_CONTEXT.get(mode, MODE_CONTEXT["entrevista"])
         code = self._mode_langs.get(mode) or cfg.get("default_lang", "en")
         if mode not in self._mode_langs and config.repository is not None:
@@ -823,25 +1512,69 @@ class InterviewFrame(ctk.CTkFrame):
 
     def start_session(self) -> None:
         if not interview_live.is_configured():
-            show_info(self, "Entrevista", "Configurá una clave Gemini en Ajustes antes de iniciar.")
+            show_info(
+                self,
+                "Resolver preguntas" if self._fixed_mode == "resolver" else "Entrevista",
+                "Configurá una clave Gemini en Ajustes antes de iniciar.",
+            )
             return
-        context = self.context_box.get("1.0", tk.END).strip()
-        if context in ALL_PLACEHOLDERS:
-            context = ""
-        self._save_context(context, self._current_mode or "entrevista")
+        written_context = self.context_box.get("1.0", tk.END).strip()
+        if written_context in ALL_PLACEHOLDERS:
+            written_context = ""
+        use_notebook = (
+            hasattr(self, "use_notebook_var")
+            and self.use_notebook_var.get()
+        )
+        written_ready = self.use_written_context_var.get() and bool(written_context)
+        if use_notebook and not self._active_notebook_context and not written_ready:
+            self.notebook_combo.configure(border_color=ERROR)
+            self._set_notebook_status(
+                "Seleccioná y sincronizá una materia para continuar.",
+                ERROR,
+            )
+            self.notebook_combo.focus_set()
+            return
+        if use_notebook and not self._active_notebook_context:
+            logger.info(
+                "Starting with written context while NotebookLM sync is pending"
+            )
+        context_parts = []
+        if self.use_written_context_var.get() and written_context:
+            context_parts.append(
+                f"[Contexto escrito]\n{written_context}"
+                if use_notebook
+                else written_context
+            )
+        if use_notebook and self._active_notebook_context:
+            context_parts.append(self._active_notebook_context)
+        context = "\n\n".join(context_parts)
+        # Only the user's written context is persistent. NotebookLM material is
+        # opt-in for the current app session and never overwrites this field.
+        self._save_context(written_context, self._current_mode or "entrevista")
         assist_mode = MODE_LABELS.get(self.mode_var.get(), "entrevista")
         if config.repository is not None:
             try:
-                config.repository.set_setting(MODE_SETTING_KEY, assist_mode)
+                setting_key = (
+                    RESOLVER_MODE_SETTING_KEY
+                    if self._fixed_mode == "resolver"
+                    else MODE_SETTING_KEY
+                )
+                config.repository.set_setting(setting_key, assist_mode)
             except Exception as exc:
                 logger.exception("Failed saving assist mode: %s", exc)
-        answer_lang = LANG_LABELS.get(self.lang_var.get(), "en")
+        answer_lang = interview_live.resolve_answer_lang(
+            assist_mode, LANG_LABELS.get(self.lang_var.get(), "en")
+        )
         # El STT del interlocutor tiene que ir en el idioma en que habla, o el
         # coach recibe basura. Nunca 'auto': el tab Live fija el idioma (ver
         # Transcriber._locked_language), así que 'auto' cae al inglés histórico.
         stt_lang = answer_lang if answer_lang in ("es", "en") else "en"
-        source_type, source_value = self._source_map.get(self.source_var.get(), ("loopback", None))
+        source_type, source_value = self._source_map.get(
+            self.source_var.get(), ("loopback", None)
+        )
         self._session_ended = False
+        self._session_paused = False
+        self.pause_button.configure(text="⏸  Pausar")
         self._mic_error_shown = False
         self.show_active()
         self._set_status("Conectando...", ACCENT)
@@ -853,7 +1586,10 @@ class InterviewFrame(ctk.CTkFrame):
             interview_answer_lang=answer_lang,
             assist_queue=self.assist_queue,
         )
-        self.candidate_listener.start(self._microphone_map.get(self.mic_var.get()))
+        self.candidate_listener.start(
+            self._microphone_map.get(self.mic_var.get()),
+            language=answer_lang if answer_lang in ("es", "en") else None,
+        )
 
     def finish_session(self) -> None:
         self.stop_session()
@@ -864,9 +1600,32 @@ class InterviewFrame(ctk.CTkFrame):
         # before registering the file in the history DB.
         self.after(1500, self._register_in_history)
 
+    def toggle_pause(self) -> None:
+        """Pause or resume both audio sources while keeping this session open."""
+        if self._session_paused:
+            self.worker.resume()
+            self.candidate_listener.resume()
+            self._session_paused = False
+            self.pause_button.configure(text="⏸  Pausar")
+            self._set_status(
+                "Grabando audio" if self.record_var.get() else "Sesión activa",
+                REC if self.record_var.get() else ACCENT,
+            )
+            return
+
+        if not (self.worker.is_running() or self.candidate_listener.is_running()):
+            return
+        self.worker.pause()
+        self.candidate_listener.pause()
+        self._session_paused = True
+        self.pause_button.configure(text="▶  Reanudar")
+        self._set_status("En pausa", "#F6AD55")
+
     def stop_session(self) -> None:
         self.worker.stop()
         self.candidate_listener.stop()
+        self._session_paused = False
+        self.pause_button.configure(text="⏸  Pausar")
 
     # Widget line cap: full transcript is always in transcript_*.txt, so trimming
     # the on-screen tail keeps the UI thread fast during long sessions.
@@ -879,8 +1638,14 @@ class InterviewFrame(ctk.CTkFrame):
             items.append(source.get_nowait())
         if not items:
             return
-        prefix = "" if box.get("1.0", "1.1") == "" else "\n"
-        box.insert(tk.END, prefix + "\n".join(items))
+        if role == "interviewer":
+            # Gemini Live emits streaming deltas and may split in the middle of
+            # a word. Preserve its whitespace instead of putting every delta on
+            # a new line.
+            box.insert(tk.END, "".join(items))
+        else:
+            prefix = "" if box.get("1.0", "1.1") == "" else "\n"
+            box.insert(tk.END, prefix + "\n".join(items))
         try:
             if int(str(box.index("end-1c")).split(".")[0]) > self._BOX_MAX_LINES:
                 box.delete("1.0", f"{self._BOX_TRIM_LINES}.0")
@@ -892,13 +1657,25 @@ class InterviewFrame(ctk.CTkFrame):
                 self.worker.add_candidate_turn(text)
 
     def _apply_assist(self, assist) -> None:
-        self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
+        # While the coach is still streaming, the answer line lands before the
+        # question gloss and the key ideas. Blanking those fields on every
+        # partial would make them flash placeholder text, so a partial only ever
+        # fills in what it actually carries.
+        partial = getattr(assist, "partial", False)
+
+        if assist.pregunta_es or not partial:
+            self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
+
         for i, box in enumerate(self.reply_boxes):
             text = assist.respuestas[i] if i < len(assist.respuestas) else ""
+            if partial and not text:
+                continue
             box._reply_text = text
             self._set_box_text(box, text or "Sin sugerencia")
+
         ideas = assist.ideas_clave or []
-        self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
+        if ideas or not partial:
+            self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
 
     def _set_box_text(self, box, text: str) -> None:
         """Escribe en una caja de solo-lectura (habilita, reemplaza, deshabilita)."""
@@ -954,7 +1731,13 @@ class InterviewFrame(ctk.CTkFrame):
         self.stop_session()
         for box in (self.interviewer_box, self.candidate_box):
             box.delete("1.0", tk.END)
-        self.question_label.configure(text="Esperando al entrevistador...")
+        self.question_label.configure(
+            text=(
+                "Esperando una pregunta..."
+                if self._fixed_mode == "resolver"
+                else "Esperando al entrevistador..."
+            )
+        )
         for box in self.reply_boxes:
             box._reply_text = ""
             self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
@@ -968,7 +1751,8 @@ class InterviewFrame(ctk.CTkFrame):
     def _drain_queues(self) -> None:
         while not self.status_queue.empty():
             status = self.status_queue.get_nowait()
-            self._set_status(status)
+            if not self._session_paused:
+                self._set_status(status)
             if status.startswith("Error de micrófono") and not self._mic_error_shown:
                 self._mic_error_shown = True
                 show_error(self, "Micrófono", status)

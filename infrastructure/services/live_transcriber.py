@@ -1,17 +1,29 @@
 """Shared coordinator for real-time audio capture and transcription."""
 
+import contextlib
 import datetime as dt
+import os
 import queue
+import subprocess
+import tempfile
 import threading
+import time
+import warnings
 import wave
 from pathlib import Path
 
 import numpy as np
 import soundcard as sc
 
+warnings.filterwarnings(
+    "once",
+    message="data discontinuity in recording",
+    category=getattr(sc, "SoundcardRuntimeWarning", Warning),
+)
+
 import config
 from config import logger
-from infrastructure.services import interview_live
+from infrastructure.services import interview_live, latency_log
 
 SAMPLE_RATE = config.SAMPLE_RATE
 CHUNK_SECONDS = 5
@@ -61,7 +73,7 @@ WINDOWS_STT_LANG = {
 # Writes "READY:<culture>" to stderr when ready, then recognized phrases to stdout.
 # Writes "ERROR_NO_RECOGNIZER" or "ERROR:<msg>" to stderr on failure.
 _WINDOWS_STT_PS_SCRIPT = r"""
-param([string]$lang = "es-ES")
+param([string]$lang = "es-ES", [string]$wav = "")
 Add-Type -AssemblyName System.Speech
 
 $installed = [System.Speech.Recognition.SpeechRecognitionEngine]::InstalledRecognizers()
@@ -81,14 +93,28 @@ if (-not $culture) { $culture = $installed[0].Culture }
 try {
     $engine = New-Object System.Speech.Recognition.SpeechRecognitionEngine($culture)
     $engine.LoadGrammar((New-Object System.Speech.Recognition.DictationGrammar))
-    $engine.SetInputToDefaultAudioDevice()
+    if ($wav) {
+        $engine.SetInputToWaveFile($wav)
+    } else {
+        $engine.SetInputToDefaultAudioDevice()
+    }
     [Console]::Error.WriteLine("READY:" + $culture.Name)
     [Console]::Error.Flush()
     while ($true) {
-        $result = $engine.Recognize([TimeSpan]::FromSeconds(2))
+        if ($wav) {
+            # No timeout on a file: Recognize() blocks until it produces a
+            # result or reaches end of stream. A 2 s timeout would return null
+            # on any silence longer than that and cut the file short.
+            $result = $engine.Recognize()
+        } else {
+            $result = $engine.Recognize([TimeSpan]::FromSeconds(2))
+        }
         if ($result -and $result.Text.Trim()) {
             [Console]::Out.WriteLine($result.Text)
             [Console]::Out.Flush()
+        } elseif ($wav) {
+            # End of the wave stream.
+            break
         }
     }
 } catch {
@@ -100,6 +126,48 @@ try {
 
 DEFAULT_DIR = Path.home() / "Documents" / "LiveTranscribe"
 WHOLE_SYSTEM_LABEL = "🔊  Todo el sistema"
+
+
+@contextlib.contextmanager
+def windows_stt_process(lang: str, wav: str | None = None):
+    """Run the System.Speech recognizer, from the microphone or from a WAV.
+
+    Shared by the live capture path and the file adapter used by the benchmark
+    so both drive the same script and the same handshake. Yields
+    ``(proc, first_line)`` where ``first_line`` is the recognizer's handshake on
+    stderr: ``READY:<culture>``, ``ERROR_NO_RECOGNIZER`` or ``ERROR:<msg>``.
+    Recognised phrases then stream on stdout, one per line.
+    """
+    with tempfile.NamedTemporaryFile(
+        mode="w", suffix=".ps1", delete=False, encoding="utf-8"
+    ) as f:
+        f.write(_WINDOWS_STT_PS_SCRIPT)
+        ps_path = f.name
+
+    args = ["powershell", "-ExecutionPolicy", "Bypass", "-File", ps_path, "-lang", lang]
+    if wav:
+        args += ["-wav", str(wav)]
+
+    proc = None
+    try:
+        proc = subprocess.Popen(
+            args,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        first = proc.stderr.readline().strip()
+        yield proc, first
+    finally:
+        if proc and proc.poll() is None:
+            proc.terminate()
+        try:
+            os.unlink(ps_path)
+        except OSError:
+            pass
 
 
 def to_mono(data: np.ndarray) -> np.ndarray:
@@ -135,6 +203,7 @@ class Transcriber:
         self._text_queue = text_queue
         self._status_queue = status_queue
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._thread = None
         self._log_file = None
         self._wav_file = None
@@ -194,6 +263,7 @@ class Transcriber:
         self._assist_queue = assist_queue
         self._live_session = None
         self._stop.clear()
+        self._paused.clear()
         import time
         self.start_time = time.time()
         self.duration_seconds = 0
@@ -210,6 +280,7 @@ class Transcriber:
 
     def stop(self):
         self._stop.set()
+        self._paused.clear()
         live = self._live_session
         if live is not None:
             try:
@@ -223,6 +294,17 @@ class Transcriber:
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
+    def pause(self) -> None:
+        """Temporarily discard captured audio without closing the live session."""
+        if self.is_running():
+            self._paused.set()
+
+    def resume(self) -> None:
+        self._paused.clear()
+
+    def is_paused(self) -> bool:
+        return self._paused.is_set()
+
     def add_candidate_turn(self, text: str) -> None:
         live = self._live_session
         if live is not None:
@@ -230,7 +312,7 @@ class Transcriber:
 
     def push_candidate_audio(self, mono: np.ndarray) -> None:
         """Append candidate microphone samples for WAV mixing (not sent to Gemini)."""
-        if not (self._save_audio and self._interview_mode):
+        if self._paused.is_set() or not (self._save_audio and self._interview_mode):
             return
         chunk = mono.astype(np.float32).flatten()
         if chunk.size == 0:
@@ -377,79 +459,50 @@ class Transcriber:
         Settings → Time & Language → Speech → Add a speech language.
         Shows a setup dialog when the language pack is missing.
         """
-        import subprocess
-        import tempfile
-        import os
-        import threading as _threading
-
         lang = WINDOWS_STT_LANG.get(self._language, "es-ES")
 
-        with tempfile.NamedTemporaryFile(
-            mode='w', suffix='.ps1', delete=False, encoding='utf-8'
-        ) as f:
-            f.write(_WINDOWS_STT_PS_SCRIPT)
-            ps_path = f.name
-
-        proc = None
         try:
-            proc = subprocess.Popen(
-                ["powershell", "-ExecutionPolicy", "Bypass", "-File", ps_path, "-lang", lang],
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-                text=True,
-                encoding='utf-8',
-                errors='replace',
-                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-            )
+            with windows_stt_process(lang) as (proc, first):
+                # Kill the PS process when the stop flag fires
+                def _killer():
+                    self._stop.wait()
+                    try:
+                        proc.terminate()
+                    except Exception:
+                        pass
+                threading.Thread(target=_killer, daemon=True).start()
 
-            # Kill PS process when stop flag fires
-            def _killer():
-                self._stop.wait()
-                try:
-                    proc.terminate()
-                except Exception:
-                    pass
-            _threading.Thread(target=_killer, daemon=True).start()
+                if first == "ERROR_NO_RECOGNIZER":
+                    self._status_queue.put(
+                        "WINSTT_SETUP:Windows Speech Recognition no está disponible. "
+                        "Para usarlo, instalá un paquete de voz en:\n"
+                        "Configuración → Hora e idioma → Voz → Agregar idioma de voz"
+                    )
+                    return
 
-            # First stderr line: READY:<culture> | ERROR_NO_RECOGNIZER | ERROR:<msg>
-            first = proc.stderr.readline().strip()
+                if first.startswith("ERROR:"):
+                    self._status_queue.put(f"Error Windows STT: {first[6:]}")
+                    return
 
-            if first == "ERROR_NO_RECOGNIZER":
-                self._status_queue.put(
-                    "WINSTT_SETUP:Windows Speech Recognition no está disponible. "
-                    "Para usarlo, instalá un paquete de voz en:\n"
-                    "Configuración → Hora e idioma → Voz → Agregar idioma de voz"
-                )
-                return
+                if first.startswith("READY:"):
+                    active_lang = first[6:]
+                    self._status_queue.put(f"Escuchando: Windows STT ({active_lang})")
 
-            if first.startswith("ERROR:"):
-                self._status_queue.put(f"Error Windows STT: {first[6:]}")
-                return
-
-            if first.startswith("READY:"):
-                active_lang = first[6:]
-                self._status_queue.put(f"Escuchando: Windows STT ({active_lang})")
-
-            # Stream recognized phrases until the process exits
-            for line in proc.stdout:
-                text = line.strip()
-                if text:
-                    self._emit(text)
+                # Stream recognized phrases until the process exits
+                for line in proc.stdout:
+                    text = line.strip()
+                    if text:
+                        self._emit(text)
 
         except FileNotFoundError:
             self._status_queue.put("Error: PowerShell no encontrado en el sistema.")
         except Exception as exc:
             logger.exception("Windows STT failed: %s", exc)
             self._status_queue.put(f"Error Windows STT: {exc}")
-        finally:
-            if proc and proc.poll() is None:
-                proc.terminate()
-            try:
-                os.unlink(ps_path)
-            except Exception:
-                pass
 
     def _push(self, mono):
+        if self._paused.is_set():
+            return
         try:
             if self._interview_mode and self._live_session is not None:
                 pcm = interview_live.float32_to_pcm16(mono)
@@ -574,26 +627,48 @@ class Transcriber:
         target = int(SAMPLE_RATE * CHUNK_SECONDS)
         buf: list = []
         have = 0
+        fill_start = 0.0
         while not self._stop.is_set():
             try:
                 chunk = self._audio_q.get(timeout=0.5)
             except queue.Empty:
                 continue
             try:
+                if not buf:
+                    fill_start = time.perf_counter()
                 buf.append(chunk)
                 have += len(chunk)
                 if have < target:
                     continue
 
                 audio = np.concatenate(buf)
+                audio_ms = len(audio) / SAMPLE_RATE * 1000.0
                 buf, have = [], 0
+                # Nothing is transcribed until CHUNK_SECONDS of audio exists, so
+                # this wait is a floor under live latency regardless of model speed.
+                latency_log.log_stage(
+                    "live_local",
+                    "buffer_fill",
+                    (time.perf_counter() - fill_start) * 1000.0,
+                    audio_ms=f"{audio_ms:.0f}",
+                )
                 if is_silent(audio):
                     continue
 
                 lang = self._language if self._language is not None else self._locked_language
                 if config.transcription_service is not None:
+                    _t0 = time.perf_counter()
                     texts, detected = config.transcription_service.transcribe_array(
                         audio, language=lang, translate=self._translate
+                    )
+                    _elapsed = (time.perf_counter() - _t0) * 1000.0
+                    latency_log.log_stage(
+                        "live_local",
+                        "transcribe_chunk",
+                        _elapsed,
+                        audio_ms=f"{audio_ms:.0f}",
+                        rtf=latency_log.rtf(_elapsed, audio_ms),
+                        segments=len(texts),
                     )
                 else:
                     raise RuntimeError("El servicio de transcripción no está inicializado en config.")

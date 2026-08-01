@@ -10,6 +10,7 @@ from infrastructure.services.interview_live import (
     ANSWER_LANGS,
     DEFAULT_ANSWER_LANG,
     coach_assist,
+    resolve_answer_lang,
 )
 
 
@@ -24,7 +25,7 @@ class _Recorder:
         raise RuntimeError("stop after capturing the prompt")
 
 
-def _prompt_for(lang: str | None) -> str:
+def _prompt_for(lang: str | None, *, mode: str = "entrevista", utterance: str = "explique la herencia") -> str:
     """Capture the prompt coach_assist would send, without touching the network.
 
     _get_client caches clients per API key, so patching it (rather than the
@@ -32,11 +33,12 @@ def _prompt_for(lang: str | None) -> str:
     """
     recorder = _Recorder()
     client = mock.MagicMock()
-    client.models.generate_content.side_effect = recorder
+    # The coach streams now, so this is the call that carries the prompt.
+    client.models.generate_content_stream.side_effect = recorder
 
     kwargs = {} if lang is None else {"answer_lang": lang}
     with mock.patch.object(interview_live, "_get_client", return_value=client):
-        coach_assist("temario", "explique la herencia", api_key="k", **kwargs)
+        coach_assist("temario", utterance, api_key="k", mode=mode, **kwargs)
     return recorder.prompt
 
 
@@ -64,6 +66,39 @@ class AnswerLangTests(unittest.TestCase):
 
     def test_prompt_no_longer_hardcodes_english_answers(self):
         self.assertNotIn("respuesta recomendada corta en inglés", _prompt_for("es"))
+
+
+    def test_oral_modes_force_spanish(self):
+        self.assertEqual(resolve_answer_lang("examen_oral", "en"), "es")
+        self.assertEqual(resolve_answer_lang("prueba_oral", "auto"), "es")
+        self.assertIn(ANSWER_LANGS["es"], _prompt_for("en", mode="examen_oral"))
+        self.assertEqual(resolve_answer_lang("resolver", "en"), "es")
+
+    def test_non_oral_modes_keep_the_selected_language(self):
+        self.assertEqual(resolve_answer_lang("entrevista", "en"), "en")
+        self.assertEqual(resolve_answer_lang("general", "auto"), "auto")
+
+    def test_live_transcription_is_not_told_to_translate(self):
+        self.assertIn("never translate", interview_live._LIVE_SYSTEM)
+
+    def test_one_word_question_reaches_the_coach(self):
+        self.assertIn("¿Cuándo?", _prompt_for("es", mode="examen_oral", utterance="¿Cuándo?"))
+
+    def test_resolver_prompt_asks_for_a_complete_direct_answer(self):
+        prompt = _prompt_for("en", mode="resolver", utterance="¿Qué es la fotosíntesis?")
+        self.assertIn("Contestá exactamente lo preguntado", prompt)
+        self.assertIn("COMPLETA, directa, correcta", prompt)
+        self.assertIn("UNA sola respuesta final", prompt)
+        self.assertIn("máximo 80 palabras", prompt)
+        self.assertIn("Sin introducciones", prompt)
+        self.assertIn(ANSWER_LANGS["es"], prompt)
+        self.assertIn("No inventes términos", prompt)
+        self.assertIn("debe repetirse", prompt)
+
+    def test_oral_question_waits_through_natural_pauses(self):
+        self.assertGreaterEqual(
+            interview_live.InterviewLiveSession._FLUSH_IDLE_SECONDS, 2.5
+        )
 
 
 if __name__ == "__main__":

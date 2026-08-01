@@ -1,9 +1,11 @@
 import os
 import sys
+import time
 from typing import Callable, Any
 from core.interfaces.interfaces import TranscriptionService
 from faster_whisper import WhisperModel
 import config
+from infrastructure.services import latency_log
 
 class OfflineTranscriptionService(TranscriptionService):
     def __init__(self, model_size: str = "small", logger=config.logger):
@@ -28,12 +30,15 @@ class OfflineTranscriptionService(TranscriptionService):
                     model_path_or_size = possible_path
                     self.logger.info(f"Usando modelo empaquetado local desde: {model_path_or_size}")
 
-            self._model = WhisperModel(
-                model_path_or_size,
-                device="cpu",
-                compute_type="int8",
-                cpu_threads=int(os.environ.get("OMP_NUM_THREADS", 4))
-            )
+            # Lazy one-time load: this cost lands on whoever transcribes first,
+            # so it must be visible separately from the transcription itself.
+            with latency_log.timed("model", "load", size=self.model_size):
+                self._model = WhisperModel(
+                    model_path_or_size,
+                    device="cpu",
+                    compute_type="int8",
+                    cpu_threads=int(os.environ.get("OMP_NUM_THREADS", 4))
+                )
             self.logger.info("Modelo de transcripción cargado exitosamente.")
         return self._model
 
@@ -53,6 +58,7 @@ class OfflineTranscriptionService(TranscriptionService):
             if progress_cb:
                 progress_cb(0.1)
 
+            _t0 = time.perf_counter()
             # Perform transcription using voice activity detection (VAD) filter
             segments, info = model.transcribe(
                 file_path,
@@ -64,14 +70,16 @@ class OfflineTranscriptionService(TranscriptionService):
 
             results = []
             duration = info.duration if info else 1.0
-            
+            aborted = False
+
             for segment in segments:
                 if should_continue and not should_continue():
                     self.logger.warning("Transcripción interrumpida por el usuario.")
+                    aborted = True
                     break
-                    
+
                 results.append(segment.text)
-                
+
                 # Report progressive status
                 if progress_cb and duration > 0:
                     fraction = min(1.0, segment.end / duration)
@@ -80,6 +88,20 @@ class OfflineTranscriptionService(TranscriptionService):
 
             if progress_cb:
                 progress_cb(1.0)
+
+            # faster-whisper decodes lazily, so the real work happens in the loop
+            # above -- timing only the transcribe() call would report ~0 ms.
+            _elapsed = (time.perf_counter() - _t0) * 1000.0
+            _audio_ms = duration * 1000.0
+            latency_log.log_stage(
+                "file",
+                "transcribe_file",
+                _elapsed,
+                audio_ms=f"{_audio_ms:.0f}",
+                rtf=latency_log.rtf(_elapsed, _audio_ms),
+                segments=len(results),
+                aborted="yes" if aborted else None,
+            )
 
             return "".join(results).strip()
         except Exception as e:
@@ -102,6 +124,7 @@ class OfflineTranscriptionService(TranscriptionService):
             if progress_cb:
                 progress_cb(0.1)
 
+            _t0 = time.perf_counter()
             segments, info = model.transcribe(
                 file_path,
                 language=language,
@@ -112,22 +135,36 @@ class OfflineTranscriptionService(TranscriptionService):
 
             results = []
             duration = info.duration if info else 1.0
-            
+            aborted = False
+
             for segment in segments:
                 if should_continue and not should_continue():
                     self.logger.warning("Transcripción interrumpida por el usuario.")
+                    aborted = True
                     break
-                    
+
                 text = segment.text.strip()
                 if text:
                     results.append((segment.start, segment.end, text))
-                
+
                 if progress_cb and duration > 0:
                     fraction = min(1.0, segment.end / duration)
                     progress_cb(0.1 + fraction * 0.8)
 
             if progress_cb:
                 progress_cb(1.0)
+
+            _elapsed = (time.perf_counter() - _t0) * 1000.0
+            _audio_ms = duration * 1000.0
+            latency_log.log_stage(
+                "file",
+                "transcribe_file_segments",
+                _elapsed,
+                audio_ms=f"{_audio_ms:.0f}",
+                rtf=latency_log.rtf(_elapsed, _audio_ms),
+                segments=len(results),
+                aborted="yes" if aborted else None,
+            )
 
             return results
         except Exception as e:

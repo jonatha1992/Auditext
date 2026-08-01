@@ -604,7 +604,7 @@ class LiveFrame(ctk.CTkFrame):
             show_info(
                 self,
                 "Resumen no configurado",
-                "Falta GEMINI_API_KEY. Crea un archivo .env en la raíz del proyecto "
+                "Falta una clave Gemini o NVIDIA. Crea un archivo .env en la raíz del proyecto "
                 "con tu clave para habilitar el resumen.",
             )
             return

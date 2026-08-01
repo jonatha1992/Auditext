@@ -7,7 +7,7 @@ __pycache__/
 .env
 
 # Virtual environments
-.venv
+.venv*/
 venv/
 ENV/
 env/
@@ -89,7 +89,6 @@ pretrained_models/
 
 # Session audio recordings in data/
 data/audios/
-
 
 .claude/settings.local.json
 

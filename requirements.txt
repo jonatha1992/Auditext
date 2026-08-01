@@ -3,6 +3,7 @@
 customtkinter==5.2.2
 faster-whisper==1.2.1
 soundcard==0.4.6
+sounddevice==0.5.5
 # Per-application live capture (Windows WASAPI process loopback): pycaw enumerates
 # audio sessions, psutil resolves process names, comtypes powers the COM glue.
 pycaw==20251023
@@ -28,4 +29,7 @@ pypdf
 
 # Pronunciation playback in the interview tab (offline SAPI5 TTS on Windows).
 pyttsx3
+
+# Optional knowledge source for Resolver (community client; requires `nlm login`).
+notebooklm-mcp-cli==0.9.4
 
