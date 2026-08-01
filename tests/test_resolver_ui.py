@@ -126,6 +126,14 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertIn("programa", self.frame.context_box.get("1.0", "end").lower())
         self.assertIn("cronograma", self.frame.context_box.get("1.0", "end").lower())
 
+    def test_written_context_can_be_cleared(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Contenido para eliminar")
+
+        self.frame.clear_context_button.invoke()
+
+        self.assertEqual(self.frame.context_box.get("1.0", "end").strip(), "")
+
     def test_saved_resolution_includes_question_suggestions_and_user_answer(self):
         self.frame.interviewer_box.insert("1.0", "¿Qué es la fotosíntesis?")
         self.frame.candidate_box.insert("1.0", "Es el proceso que transforma la luz.")
@@ -292,6 +300,16 @@ class ResolverFrameTests(unittest.TestCase):
 
         self.assertEqual(self.frame.start_button.cget("state"), "normal")
         self.assertIn("caché", self.frame.notebook_status.cget("text"))
+
+    def test_written_material_allows_start_while_notebook_syncs(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Programa completo de ADS III")
+        self.frame.use_notebook_var.set(True)
+        self.frame._active_notebook_context = None
+
+        self.frame._apply_context_source_state()
+
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
 
 
 if __name__ == "__main__":

@@ -34,6 +34,21 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
                     value TEXT
                 )
             """)
+            # IF NOT EXISTS migrates existing databases on the next launch, the
+            # same way app_settings was added.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS chat_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    file_path TEXT NOT NULL,
+                    role TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("""
+                CREATE INDEX IF NOT EXISTS idx_chat_messages_file
+                ON chat_messages (file_path, id)
+            """)
             conn.commit()
             conn.close()
             self.logger.info("Base de datos SQLite inicializada exitosamente.")
@@ -177,6 +192,8 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM transcripciones WHERE file_path = ?", (file_path,))
+            # Otherwise the chat outlives the transcription it refers to.
+            cursor.execute("DELETE FROM chat_messages WHERE file_path = ?", (file_path,))
             conn.commit()
             conn.close()
             self.logger.info(f"Transcripción eliminada para: {file_path}")
@@ -224,6 +241,7 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM transcripciones")
+            cursor.execute("DELETE FROM chat_messages")
             conn.commit()
             conn.close()
             self.logger.info("Base de datos de transcripciones vaciada completamente.")
@@ -240,6 +258,49 @@ class SQLiteTranscriptionRepository(TranscriptionRepository):
             self.logger.info(f"Resumen actualizado para: {file_path}")
         except Exception as e:
             self.logger.error(f"Error al actualizar resumen: {e}")
+
+    def add_chat_message(self, file_path: str, role: str, content: str) -> None:
+        """Persist one chat turn. Saved as it happens, like the transcription."""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO chat_messages (file_path, role, content) VALUES (?, ?, ?)",
+                (file_path, role, content),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            self.logger.error(f"Error al guardar mensaje de chat: {e}")
+
+    def get_chat_messages(self, file_path: str) -> list[dict]:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT role, content, created_at FROM chat_messages "
+                "WHERE file_path = ? ORDER BY id",
+                (file_path,),
+            )
+            rows = cursor.fetchall()
+            conn.close()
+            return [
+                {"role": r[0], "content": r[1], "created_at": r[2]} for r in rows
+            ]
+        except Exception as e:
+            self.logger.error(f"Error al leer el chat: {e}")
+            return []
+
+    def clear_chat(self, file_path: str) -> None:
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM chat_messages WHERE file_path = ?", (file_path,))
+            conn.commit()
+            conn.close()
+            self.logger.info(f"Chat borrado para: {file_path}")
+        except Exception as e:
+            self.logger.error(f"Error al borrar el chat: {e}")
 
     def get_setting(self, key: str) -> str | None:
         try:

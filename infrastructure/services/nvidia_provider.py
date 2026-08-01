@@ -88,20 +88,29 @@ def is_retryable_error(exc: BaseException) -> bool:
     )
 
 
-def _request(key: str, prompt: str, max_tokens: int) -> str:
+_DEFAULT_SYSTEM = (
+    "/no_think\nSeguí exactamente las instrucciones. "
+    "Entregá únicamente la respuesta final."
+)
+
+
+def _request(
+    key: str,
+    prompt: str,
+    max_tokens: int,
+    history: list[dict] | None = None,
+    system: str | None = None,
+) -> str:
+    messages: list[dict] = [{"role": "system", "content": system or _DEFAULT_SYSTEM}]
+    # Prior turns go between the system prompt and the new question so the model
+    # can follow up without the caller re-stating the conversation by hand.
+    messages.extend(history or [])
+    messages.append({"role": "user", "content": prompt})
+
     body = json.dumps(
         {
             "model": NVIDIA_MODEL,
-            "messages": [
-                {
-                    "role": "system",
-                    "content": (
-                        "/no_think\nSeguí exactamente las instrucciones. "
-                        "Entregá únicamente la respuesta final."
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ],
+            "messages": messages,
             "temperature": 0.2,
             "max_tokens": max_tokens,
             "reasoning_budget": 0,
@@ -139,15 +148,24 @@ def _request(key: str, prompt: str, max_tokens: int) -> str:
     return text
 
 
-def generate(prompt: str, *, max_tokens: int = 480) -> str:
-    """Generate text, rotating through every configured NVIDIA key."""
+def generate(
+    prompt: str,
+    *,
+    max_tokens: int = 480,
+    history: list[dict] | None = None,
+    system: str | None = None,
+) -> str:
+    """Generate text, rotating through every configured NVIDIA key.
+
+    `history` carries prior chat turns as {"role": "user"|"assistant", "content": ...}.
+    """
     if not pool.is_configured():
         raise NvidiaError("No hay claves NVIDIA configuradas")
 
     last_exc: BaseException | None = None
     for key in pool.available():
         try:
-            text = _request(key, prompt, max_tokens)
+            text = _request(key, prompt, max_tokens, history, system)
             logger.info("Respuesta generada con %s modelo=%s", pool.label(key), NVIDIA_MODEL)
             return text
         except Exception as exc:

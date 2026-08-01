@@ -44,6 +44,21 @@ class TranscriptionRepository(ABC):
         pass
 
     @abstractmethod
+    def add_chat_message(self, file_path: str, role: str, content: str) -> None:
+        """Append one chat turn ('user' or 'assistant') for a transcription."""
+        pass
+
+    @abstractmethod
+    def get_chat_messages(self, file_path: str) -> list[dict]:
+        """Return the stored chat turns for a transcription, oldest first."""
+        pass
+
+    @abstractmethod
+    def clear_chat(self, file_path: str) -> None:
+        """Delete every stored chat turn for a transcription."""
+        pass
+
+    @abstractmethod
     def get_setting(self, key: str) -> str | None:
         """Retrieve an application setting value by key, or None if not set."""
         pass

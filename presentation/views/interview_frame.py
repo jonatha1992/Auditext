@@ -513,6 +513,13 @@ class InterviewFrame(ctk.CTkFrame):
             border_width=1, font=("Segoe UI", 11),
         )
         self.cv_button.pack(side=tk.RIGHT)
+        self.clear_context_button = ctk.CTkButton(
+            context_header, text="🧹  Limpiar",
+            command=self._clear_written_context, width=82, height=24,
+            fg_color=PANEL_DARK, hover_color=ACCENT, border_color=BORDER,
+            border_width=1, font=("Segoe UI", 11),
+        )
+        self.clear_context_button.pack(side=tk.RIGHT, padx=(0, 8))
         self.use_written_context_var = tk.BooleanVar(value=True)
         self.use_written_context_check = ctk.CTkCheckBox(
             context_header,
@@ -533,6 +540,9 @@ class InterviewFrame(ctk.CTkFrame):
             font=("Segoe UI", 12),
         )
         self.context_box.pack(fill=tk.X, padx=18, pady=(0, 14))
+        self.context_box.bind(
+            "<KeyRelease>", lambda _event: self._apply_context_source_state()
+        )
         self._context_placeholder = CONTEXT_PLACEHOLDER
         self._current_mode = None
         self._mode_contexts: dict[str, str] = {}  # contexto por modo (cache de sesión)
@@ -764,7 +774,7 @@ class InterviewFrame(ctk.CTkFrame):
             ).pack(side=tk.RIGHT)
             box = ctk.CTkTextbox(
                 card, height=150 if resolver else 74, fg_color=PANEL_DARK, text_color=TEXT,
-                border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 12),
+                border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 16),
             )
             box._reply_text = ""
             self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
@@ -1193,6 +1203,10 @@ class InterviewFrame(ctk.CTkFrame):
         ):
             self._sync_notebook()
 
+    def _has_written_context(self) -> bool:
+        value = self.context_box.get("1.0", tk.END).strip()
+        return bool(value and value not in ALL_PLACEHOLDERS)
+
     def _apply_context_source_state(self) -> None:
         """Enable each context source independently; both may be active."""
         notebook_active = (
@@ -1211,11 +1225,12 @@ class InterviewFrame(ctk.CTkFrame):
         self.notebook_refresh_button.configure(state=control_state)
         self.notebook_sync_button.configure(state=control_state)
         notebook_ready = bool(self._active_notebook_context)
+        written_ready = written_active and self._has_written_context()
         if hasattr(self, "start_button"):
             self.start_button.configure(
                 state=(
                     "normal"
-                    if not notebook_active or notebook_ready
+                    if not notebook_active or notebook_ready or written_ready
                     else "disabled"
                 )
             )
@@ -1333,6 +1348,20 @@ class InterviewFrame(ctk.CTkFrame):
         self.context_box.delete("1.0", tk.END)
         self.context_box.insert("1.0", text.strip())
         self._save_context(text.strip(), self._current_mode or "entrevista")
+        self._apply_context_source_state()
+
+    def _clear_written_context(self) -> None:
+        """Clear the editable written context without restoring its placeholder."""
+        was_disabled = self.context_box._textbox.cget("state") == "disabled"
+        if was_disabled:
+            self.context_box.configure(state="normal")
+        self.context_box.delete("1.0", tk.END)
+        if self._current_mode:
+            self._mode_contexts[self._current_mode] = ""
+        if was_disabled:
+            self.context_box.configure(state="disabled")
+        self._save_context("", self._current_mode or "entrevista")
+        self._apply_context_source_state()
 
     @staticmethod
     def _extract_cv_text(path: str) -> str:
@@ -1496,7 +1525,8 @@ class InterviewFrame(ctk.CTkFrame):
             hasattr(self, "use_notebook_var")
             and self.use_notebook_var.get()
         )
-        if use_notebook and not self._active_notebook_context:
+        written_ready = self.use_written_context_var.get() and bool(written_context)
+        if use_notebook and not self._active_notebook_context and not written_ready:
             self.notebook_combo.configure(border_color=ERROR)
             self._set_notebook_status(
                 "Seleccioná y sincronizá una materia para continuar.",
@@ -1504,6 +1534,10 @@ class InterviewFrame(ctk.CTkFrame):
             )
             self.notebook_combo.focus_set()
             return
+        if use_notebook and not self._active_notebook_context:
+            logger.info(
+                "Starting with written context while NotebookLM sync is pending"
+            )
         context_parts = []
         if self.use_written_context_var.get() and written_context:
             context_parts.append(
@@ -1623,13 +1657,25 @@ class InterviewFrame(ctk.CTkFrame):
                 self.worker.add_candidate_turn(text)
 
     def _apply_assist(self, assist) -> None:
-        self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
+        # While the coach is still streaming, the answer line lands before the
+        # question gloss and the key ideas. Blanking those fields on every
+        # partial would make them flash placeholder text, so a partial only ever
+        # fills in what it actually carries.
+        partial = getattr(assist, "partial", False)
+
+        if assist.pregunta_es or not partial:
+            self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
+
         for i, box in enumerate(self.reply_boxes):
             text = assist.respuestas[i] if i < len(assist.respuestas) else ""
+            if partial and not text:
+                continue
             box._reply_text = text
             self._set_box_text(box, text or "Sin sugerencia")
+
         ideas = assist.ideas_clave or []
-        self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
+        if ideas or not partial:
+            self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
 
     def _set_box_text(self, box, text: str) -> None:
         """Escribe en una caja de solo-lectura (habilita, reemplaza, deshabilita)."""

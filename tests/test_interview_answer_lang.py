@@ -33,7 +33,8 @@ def _prompt_for(lang: str | None, *, mode: str = "entrevista", utterance: str = 
     """
     recorder = _Recorder()
     client = mock.MagicMock()
-    client.models.generate_content.side_effect = recorder
+    # The coach streams now, so this is the call that carries the prompt.
+    client.models.generate_content_stream.side_effect = recorder
 
     kwargs = {} if lang is None else {"answer_lang": lang}
     with mock.patch.object(interview_live, "_get_client", return_value=client):

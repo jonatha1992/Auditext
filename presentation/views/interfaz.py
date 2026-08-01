@@ -13,6 +13,7 @@ from .ajustes_frame import AjustesFrame
 from .historial_frame import HistorialFrame
 from .tooltip import Tooltip
 from .app_dialog import ask_yes_no, show_error, show_info, show_warning
+from .chat_panel import TranscriptChatPanel
 
 # Design System Colors matching the mockup
 COLOR_BG = "#0B0C10"          # Deep dark window background
@@ -568,14 +569,19 @@ def crear_interfaz(ventana):
                     return
             
         boton_resumir.configure(state="disabled")
-        archivo_procesando.set("Resumiendo con IA usando Gemini...")
+        archivo_procesando.set("Resumiendo con IA...")
         frame_progress.pack(side=tk.TOP, fill=tk.X, pady=(10, 0))
         spinner.start()
         spinner.pack(side=tk.LEFT, padx=5)
         
         def run():
+            # A multi-hour recording is summarised tramo by tramo and can take
+            # well over half a minute; without this the UI looks frozen.
+            def progress_cb(message: str) -> None:
+                ventana.after(0, lambda m=message: archivo_procesando.set(m))
+
             try:
-                resumen = summarizer.summarize(texto)
+                resumen = summarizer.summarize(texto, progress_cb=progress_cb)
                 # Guardar el resumen en la BD si hay un archivo asociado
                 if _last_file_path:
                     config.repository.update_summary(_last_file_path, resumen)
@@ -596,21 +602,30 @@ def crear_interfaz(ventana):
         def mostrar_resumen_modal(summary):
             win = ctk.CTkToplevel(ventana)
             win.title("Resumen de IA")
-            win.geometry("560x520")
+            win.geometry("720x760")
             win.configure(fg_color=COLOR_BG)
-            
+
             # Make modal stay on top
             win.transient(ventana)
             win.grab_set()
-            
+
+            head = ctk.CTkFrame(win, fg_color="transparent")
+            head.pack(fill=tk.X, padx=20, pady=(16, 8))
             ctk.CTkLabel(
-                win, text="Resumen de la transcripción",
+                head, text="Resumen de la transcripción",
                 font=("Segoe UI Semibold", 18), text_color="#FFFFFF"
-            ).pack(anchor=tk.W, padx=20, pady=(16, 8))
-            
+            ).pack(side=tk.LEFT)
+            # The summary and the chat are persisted automatically; without this
+            # there is no sign of it and the work looks unsaved.
+            if _last_file_path:
+                ctk.CTkLabel(
+                    head, text="✓  Guardado en Historial",
+                    font=("Segoe UI", 11), text_color=COLOR_MUTED
+                ).pack(side=tk.RIGHT)
+
             card_box = ctk.CTkFrame(win, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
-            card_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 16))
-            
+            card_box.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+
             txt_resumen = ctk.CTkTextbox(
                 card_box, fg_color="#11121A", text_color=COLOR_TEXT_FG,
                 font=("Segoe UI", 12), corner_radius=8, border_width=0
@@ -618,7 +633,13 @@ def crear_interfaz(ventana):
             txt_resumen.pack(fill=tk.BOTH, expand=True, padx=12, pady=12)
             txt_resumen.insert("1.0", summary)
             txt_resumen.configure(state="disabled") # read-only
-            
+
+            chat_card = ctk.CTkFrame(win, fg_color=COLOR_PANEL, corner_radius=12, border_color=COLOR_BORDER, border_width=1)
+            chat_card.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 12))
+            TranscriptChatPanel(chat_card, texto, _last_file_path).pack(
+                fill=tk.BOTH, expand=True, padx=12, pady=12
+            )
+
             # Buttons row
             btn_row = ctk.CTkFrame(win, fg_color="transparent")
             btn_row.pack(fill=tk.X, padx=20, pady=(0, 16))
