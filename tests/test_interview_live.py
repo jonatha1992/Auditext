@@ -99,7 +99,8 @@ class TestInterviewHelpers(unittest.TestCase):
     def test_oral_exam_uses_low_variance_generation(self):
         config = _coach_config("gemini-2.5-flash", "examen_oral")
         self.assertEqual(config.temperature, 0.2)
-        self.assertEqual(config.max_output_tokens, 200)
+        # Dos respuestas por turno (corta + ampliada) necesitan más salida.
+        self.assertEqual(config.max_output_tokens, 300)
 
     def test_detects_real_ads_iii_exam_questions(self):
         questions = [

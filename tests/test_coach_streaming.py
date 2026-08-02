@@ -73,22 +73,34 @@ class IdleThresholdTests(unittest.TestCase):
 
 
 class ParseAssistLinesTests(unittest.TestCase):
-    def test_parses_the_three_lines(self):
+    def test_parses_the_four_lines(self):
         assist = parse_assist_lines(
             "R: El diagrama de clases es una vista estática.\n"
+            "A: Muestra las clases y cómo se relacionan, sin el paso del tiempo.\n"
             "P: ¿Qué vista representa el diagrama de clases?\n"
             "I: vista estática; estructura; UML\n"
         )
-        self.assertEqual(assist.respuestas, ["El diagrama de clases es una vista estática."])
+        # Izquierda = corta, derecha = ampliada.
+        self.assertEqual(
+            assist.respuestas,
+            [
+                "El diagrama de clases es una vista estática.",
+                "Muestra las clases y cómo se relacionan, sin el paso del tiempo.",
+            ],
+        )
         self.assertEqual(assist.pregunta_es, "¿Qué vista representa el diagrama de clases?")
         self.assertEqual(assist.ideas_clave, ["vista estática", "estructura", "UML"])
 
     def test_answer_alone_is_enough(self):
-        # The whole point: render as soon as the R line closes.
+        # The whole point: render as soon as the R line closes, before A exists.
         assist = parse_assist_lines("R: Es una vista estática.", partial=True)
         self.assertEqual(assist.respuestas, ["Es una vista estática."])
         self.assertTrue(assist.partial)
         self.assertEqual(assist.pregunta_es, "")
+
+    def test_expansion_without_a_short_answer_is_dropped(self):
+        # Would otherwise land in the left box, which is the one the user reads first.
+        self.assertIsNone(parse_assist_lines("A: Una explicación larga sin respuesta corta."))
 
     def test_empty_answer_means_no_clear_question(self):
         self.assertIsNone(parse_assist_lines("R:"))
@@ -135,6 +147,20 @@ class StreamCoachTests(unittest.TestCase):
         _stream_coach(client, "m", "prompt", None, partials.append)
         # "vis" must never reach the screen.
         self.assertNotIn("vis", [p.respuestas[0] for p in partials])
+
+    def test_short_answer_paints_before_the_expansion_closes(self):
+        partials: list[InterviewAssist] = []
+        client = self._client(
+            ["R: Es una ", "vista estática.\n", "A: Muestra las clases y ", "sus relaciones.\n"]
+        )
+        _stream_coach(client, "m", "prompt", None, partials.append)
+
+        # La corta ya estaba en pantalla antes de que llegara la ampliada.
+        self.assertEqual([len(p.respuestas) for p in partials], [1, 1, 2])
+        self.assertEqual(
+            partials[-1].respuestas,
+            ["Es una vista estática.", "Muestra las clases y sus relaciones."],
+        )
 
     def test_later_lines_are_only_emitted_once_closed(self):
         partials: list[InterviewAssist] = []

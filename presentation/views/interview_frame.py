@@ -754,11 +754,14 @@ class InterviewFrame(ctk.CTkFrame):
         replies.grid_columnconfigure(0, weight=1)
         replies.grid_columnconfigure(1, weight=1)
         self.reply_boxes = []
+        # Izquierda: la frase corta para contestar ya. Derecha: la misma respuesta
+        # explayada, para cuando repreguntan o hace falta más contexto. Por eso la
+        # derecha es más alta: llevan cantidades de texto distintas.
         reply_titles = (
-            ("✨  RESPUESTA COMPLETA" if resolver else "✨  RESPUESTA RECOMENDADA", ACCENT),
-            ("⚡  OTRA FORMA DE RESPONDER" if resolver else "⚡  ALTERNATIVA BREVE", "#F6E05E"),
+            ("⚡  RESPUESTA CORTA", ACCENT, 110 if resolver else 74),
+            ("📖  SI TE PIDEN MÁS", "#F6E05E", 190 if resolver else 150),
         )
-        for i, (title, title_color) in enumerate(reply_titles):
+        for i, (title, title_color, box_height) in enumerate(reply_titles):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
             card.grid(row=0, column=i, sticky="nsew", padx=(0, 6) if i == 0 else (6, 0))
             head = ctk.CTkFrame(card, fg_color="transparent")
@@ -773,7 +776,7 @@ class InterviewFrame(ctk.CTkFrame):
                 hover_color="#20212D", command=lambda n=i: self._copy_reply(n),
             ).pack(side=tk.RIGHT)
             box = ctk.CTkTextbox(
-                card, height=150 if resolver else 74, fg_color=PANEL_DARK, text_color=TEXT,
+                card, height=box_height, fg_color=PANEL_DARK, text_color=TEXT,
                 border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 16),
             )
             box._reply_text = ""
@@ -916,16 +919,16 @@ class InterviewFrame(ctk.CTkFrame):
         interviewer = self.interviewer_box.get("1.0", tk.END).strip()
         candidate = self.candidate_box.get("1.0", tk.END).strip()
         if self._fixed_mode == "resolver":
+            labels = ("RESPUESTA CORTA", "RESPUESTA AMPLIADA")
             answers = [
-                box._reply_text.strip()
-                for box in self.reply_boxes
-                if box._reply_text.strip()
+                (labels[i] if i < len(labels) else f"RESPUESTA {i + 1}", text)
+                for i, box in enumerate(self.reply_boxes)
+                if (text := box._reply_text.strip())
             ]
             if not interviewer and not answers:
                 return ""
             answer_text = "\n\n".join(
-                f"RESPUESTA {index}\n{text}"
-                for index, text in enumerate(answers, start=1)
+                f"{label}\n{text}" for label, text in answers
             )
             user_answer = (
                 f"\n\nTU RESPUESTA\n{candidate}"

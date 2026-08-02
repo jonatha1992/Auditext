@@ -48,7 +48,9 @@ class ResolverFrameTests(unittest.TestCase):
         )
         self.assertTrue(bool(self.frame.candidate_box.grid_info()))
         self.assertTrue(self.frame.source_combo.winfo_ismapped())
-        self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 150)
+        # La corta ocupa menos que la ampliada: llevan cantidades de texto distintas.
+        self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 110)
+        self.assertEqual(int(self.frame.reply_boxes[1].cget("height")), 190)
         self.assertTrue(hasattr(self.frame, "notebook_combo"))
         self.assertEqual(
             self.frame.notebook_var.get(), "Seleccioná una materia…"
@@ -138,11 +140,13 @@ class ResolverFrameTests(unittest.TestCase):
         self.frame.interviewer_box.insert("1.0", "¿Qué es la fotosíntesis?")
         self.frame.candidate_box.insert("1.0", "Es el proceso que transforma la luz.")
         self.frame.reply_boxes[0]._reply_text = "La fotosíntesis convierte energía lumínica en química."
+        self.frame.reply_boxes[1]._reply_text = "La planta usa la luz del sol para fabricar su alimento."
 
         combined = self.frame._combined_transcript()
 
         self.assertIn("PREGUNTA\n¿Qué es la fotosíntesis?", combined)
-        self.assertIn("RESPUESTA 1\nLa fotosíntesis", combined)
+        self.assertIn("RESPUESTA CORTA\nLa fotosíntesis", combined)
+        self.assertIn("RESPUESTA AMPLIADA\nLa planta usa", combined)
         self.assertIn("TU RESPUESTA\nEs el proceso", combined)
 
     def test_interview_module_does_not_offer_resolver_or_oral_modes(self):

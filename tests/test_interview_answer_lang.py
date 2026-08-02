@@ -88,8 +88,11 @@ class AnswerLangTests(unittest.TestCase):
         prompt = _prompt_for("en", mode="resolver", utterance="¿Qué es la fotosíntesis?")
         self.assertIn("Contestá exactamente lo preguntado", prompt)
         self.assertIn("COMPLETA, directa, correcta", prompt)
-        self.assertIn("UNA sola respuesta final", prompt)
-        self.assertIn("máximo 80 palabras", prompt)
+        # Dos respuestas por turno: corta para contestar ya, ampliada por si repreguntan.
+        self.assertIn("R: la respuesta directa en 1 o 2 oraciones", prompt)
+        self.assertIn("A: la misma respuesta desarrollada", prompt)
+        self.assertIn("máximo 40 palabras", prompt)
+        self.assertIn("110 palabras", prompt)
         self.assertIn("Sin introducciones", prompt)
         self.assertIn(ANSWER_LANGS["es"], prompt)
         self.assertIn("No inventes términos", prompt)
