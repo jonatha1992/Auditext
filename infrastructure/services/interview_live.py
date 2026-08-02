@@ -106,8 +106,11 @@ _MODE_INSTRUCTIONS = {
         "REGLA CENTRAL: NO des respuestas completas — el usuario debe formular con sus palabras. "
         "ideas_clave es el campo principal: 3 o 4 conceptos o palabras clave del temario que responden "
         "la pregunta, ordenados como esqueleto de respuesta. "
-        "respuestas: SOLO arranques de frase cortos (máximo 6 palabras, terminados en ...), "
+        "La respuesta corta es SOLO un arranque de frase (máximo 6 palabras, terminado en ...), "
         "p. ej. 'El concepto central es...' o 'The main idea is...'. "
+        "La respuesta ampliada es el esqueleto en 3 pasos de lo que conviene decir "
+        "(p. ej. '1) definí X. 2) nombrá sus partes. 3) cerrá con un ejemplo.'), "
+        "nunca la respuesta ya redactada. "
         "pregunta_es: glosa clara de la pregunta del examinador."
     ),
     "resolver": (
@@ -130,23 +133,33 @@ _MODE_INSTRUCTIONS = {
 _MAX_CONTEXT_CHARS = 2500
 _COACH_HISTORY_TURNS = 6
 
+# El usuario habla en voz alta con sus propias palabras: un texto correcto pero
+# enciclopédico no le sirve. Estas reglas van en TODOS los modos.
+_PLAIN_LANGUAGE_RULES = (
+    "REGISTRO: escribí como habla una persona, no como un manual. Frases cortas y directas. "
+    "Conservá el término técnico solo cuando ese término es lo que se pregunta o no tiene "
+    "equivalente común; todo lo demás explicalo con palabras de todos los días. "
+    "Nada de 'cabe destacar', 'en el ámbito de', enumeraciones ni definiciones de diccionario."
+)
+
 _DEFAULT_RESPONSE_RULES = (
-    "Devolvé UNA sola respuesta, directa y fácil de decir en voz alta. "
-    "Máximo 2 oraciones y 55 palabras. Sin introducciones, consejos ni información lateral."
+    "R: una sola oración, máximo 25 palabras, lista para decir ya. "
+    "A: la misma idea explayada en 2 o 3 oraciones, máximo 60 palabras, con el detalle o el "
+    "ejemplo que R deja afuera. Sin introducciones, consejos ni información lateral."
 )
 _RESOLVER_RESPONSE_RULES = (
-    "Devolvé UNA sola respuesta final. Contestá directamente en 2 a 3 oraciones, "
-    "máximo 80 palabras, lista para decir en voz alta. Sin introducciones, consejos, "
-    "alternativas ni frases como 'podrías decir'. No agregues información lateral."
+    "R: la respuesta directa en 1 o 2 oraciones, máximo 40 palabras, lista para decir en voz alta. "
+    "A: la misma respuesta desarrollada, hasta 4 oraciones y 110 palabras, con el porqué, el "
+    "ejemplo o el detalle que R no alcanza a cubrir. "
+    "Sin introducciones, alternativas ni frases como 'podrías decir'."
 )
 _EXAM_RESPONSE_RULES = (
-    "Redactá UNA respuesta breve y natural, como la daría un estudiante preparado en "
-    "un examen oral. Usá entre 2 y 3 oraciones y entre 40 y 80 palabras. "
-    "Primero contestá directamente y luego agregá solo la justificación o el ejemplo "
-    "imprescindible. Conservá la terminología técnica, pero evitá lenguaje rebuscado, "
-    "repeticiones y explicaciones enciclopédicas. No uses muletillas, felicitaciones, "
-    "preguntas de seguimiento, consejos ni expresiones como 'podrías decir'. "
-    "No atribuyas decisiones al trabajo práctico si el contexto no las confirma."
+    "R: la respuesta directa en una oración, máximo 30 palabras, como la diría un estudiante "
+    "preparado al que le preguntan de golpe. "
+    "A: la misma respuesta desarrollada en 2 a 4 oraciones, entre 40 y 90 palabras, agregando la "
+    "justificación o el ejemplo que R omite, por si el examinador repregunta. "
+    "No uses muletillas, felicitaciones, preguntas de seguimiento, consejos ni expresiones como "
+    "'podrías decir'. No atribuyas decisiones al trabajo práctico si el contexto no las confirma."
 )
 
 
@@ -197,16 +210,21 @@ Conversación reciente, separada por rol:
 {history}
 ---
 
-IDIOMA DE LAS RESPUESTAS: escribí la línea R {answer_lang}.
+IDIOMA DE LAS RESPUESTAS: escribí las líneas R y A {answer_lang}.
 Las líneas P e I van siempre en español.
 
-Respondé EXACTAMENTE en estas tres líneas, sin markdown, sin JSON y sin texto extra:
-R: la respuesta recomendada, lista para decir en voz alta
+Respondé EXACTAMENTE en estas cuatro líneas, sin markdown, sin JSON y sin texto extra:
+R: la respuesta corta, lista para decir en voz alta ya mismo
+A: la misma respuesta explayada, con el contexto que R deja afuera
 P: glosa clara en español de lo que dijo o pidió el interlocutor
 I: 2 o 3 ideas relevantes separadas por punto y coma
 
 La línea R va PRIMERA y es la más importante: se muestra en pantalla apenas llega,
-antes de que termines de escribir las otras dos. Nunca la dejes para el final.
+antes de que termines de escribir las otras. Nunca la dejes para el final.
+A responde lo mismo que R pero con más información: agrega el porqué, un ejemplo o una
+consecuencia. NUNCA repitas R textual ni cambies de tema en A.
+
+{plain_language_rules}
 
 Reglas específicas de salida:
 {response_rules}
@@ -356,21 +374,25 @@ def parse_assist_text(text: str) -> InterviewAssist | None:
     return InterviewAssist(pregunta, respuestas, ideas)
 
 
-_ASSIST_LINE = re.compile(r"^\s*([RPI])\s*[:：]\s*(.*)$")
+_ASSIST_LINE = re.compile(r"^\s*([RAPI])\s*[:：]\s*(.*)$")
 
 
 def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | None:
-    """Extract InterviewAssist from the line format (R:/P:/I:).
+    """Extract InterviewAssist from the line format (R:/A:/P:/I:).
 
     Unlike JSON, this parses correctly while the model is still streaming, which
     is the whole reason the coach stopped emitting JSON: the answer can be shown
     as soon as its line closes instead of after the last token.
+
+    R is the short answer and A the expanded one; they feed the left and right
+    reply boxes. A without R is dropped: the short answer is what the user says
+    first, so a lone expansion would fill the wrong box.
     """
     raw = (text or "").strip()
     if not raw:
         return None
 
-    respuesta = pregunta = ""
+    respuesta = ampliada = pregunta = ""
     ideas: list[str] = []
     for line in raw.splitlines():
         match = _ASSIST_LINE.match(line)
@@ -379,6 +401,8 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
         tag, value = match.group(1), match.group(2).strip()
         if tag == "R":
             respuesta = value
+        elif tag == "A":
+            ampliada = value
         elif tag == "P":
             pregunta = value
         elif tag == "I":
@@ -386,9 +410,12 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
 
     if not respuesta and not pregunta:
         return None
+    respuestas = [respuesta] if respuesta else []
+    if respuesta and ampliada:
+        respuestas.append(ampliada)
     return InterviewAssist(
         pregunta,
-        [respuesta] if respuesta else [],
+        respuestas,
         ideas,
         partial=partial,
     )
@@ -454,12 +481,15 @@ def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE):
 
     # Plain text, not JSON: the line format is what makes partial output
     # renderable mid-stream, and it spends no tokens on syntax.
+    # Two answers per turn (short + expanded) need more output room. This does
+    # not move TTFT — the short line still paints first — only the moment the
+    # expansion lands.
     kwargs = dict(
         temperature=0.2 if mode in ORAL_ASSIST_MODES else 0.4,
         max_output_tokens=(
-            320 if mode == "resolver"
-            else 200 if mode == "examen_oral"
-            else 160
+            440 if mode == "resolver"
+            else 300 if mode == "examen_oral"
+            else 240
         ),
     )
     if "2.0" not in model:
@@ -547,6 +577,7 @@ def coach_assist(
         context=_select_context(context, utterance) or "(sin contexto)",
         utterance=utterance,
         history=(conversation_history or "").strip() or "(sin historial previo)",
+        plain_language_rules=_PLAIN_LANGUAGE_RULES,
         response_rules=(
             _RESOLVER_RESPONSE_RULES
             if mode == "resolver"
@@ -587,9 +618,9 @@ def coach_assist(
                 nvidia_provider.generate(
                     prompt,
                     max_tokens=(
-                        360 if mode == "resolver"
-                        else 220 if mode == "examen_oral"
-                        else 190
+                        480 if mode == "resolver"
+                        else 320 if mode == "examen_oral"
+                        else 270
                     ),
                 )
             )
@@ -640,9 +671,9 @@ def coach_assist(
                 nvidia_provider.generate(
                     prompt,
                     max_tokens=(
-                        360 if mode == "resolver"
-                        else 220 if mode == "examen_oral"
-                        else 190
+                        480 if mode == "resolver"
+                        else 320 if mode == "examen_oral"
+                        else 270
                     ),
                 )
             )
