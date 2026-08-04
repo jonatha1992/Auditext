@@ -9,6 +9,7 @@ from unittest import mock
 import customtkinter as ctk
 
 import config
+from infrastructure.services import notebooklm_service
 from presentation.views.interview_frame import InterviewFrame
 
 
@@ -49,8 +50,8 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertTrue(bool(self.frame.candidate_box.grid_info()))
         self.assertTrue(self.frame.source_combo.winfo_ismapped())
         # La corta ocupa menos que la ampliada: llevan cantidades de texto distintas.
-        self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 110)
-        self.assertEqual(int(self.frame.reply_boxes[1].cget("height")), 190)
+        self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 150)
+        self.assertEqual(int(self.frame.reply_boxes[1].cget("height")), 210)
         self.assertTrue(hasattr(self.frame, "notebook_combo"))
         self.assertEqual(
             self.frame.notebook_var.get(), "Seleccioná una materia…"
@@ -81,9 +82,88 @@ class ResolverFrameTests(unittest.TestCase):
             self.frame.context_box._textbox.cget("state"), "normal"
         )
         self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+        # Turning NotebookLM off does not make an empty form startable: the
+        # resolver needs material from some source.
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Unidad 1: derivadas")
+        self.frame._apply_context_source_state()
+
         self.assertEqual(self.frame.start_button.cget("state"), "normal")
 
+    def test_start_is_locked_until_some_material_is_loaded(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame._apply_context_source_state()
+
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+        self.assertIn("Cargá el material", self.frame.start_ready_label.cget("text"))
+
+        self.frame.context_box.insert("1.0", "Temario de Álgebra")
+        self.frame._apply_context_source_state()
+
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
+        self.assertIn("Contexto escrito", self.frame.start_ready_label.cget("text"))
+
+    def test_synced_subject_stays_ready_after_typing(self):
+        self.frame.use_notebook_var.set(True)
+        self.frame._active_notebook_id = "nb-1"
+        self.frame._active_notebook_title = "Álgebra"
+        self.frame._active_notebook_context = "[NotebookLM · Álgebra]\nUnidad 1"
+        self.frame.context_box.delete("1.0", "end")
+        self.frame._apply_context_source_state()
+
+        self.assertIn("lista para usar", self.frame.notebook_status.cget("text"))
+
+        # A keystroke in the written box used to wipe the ready message even
+        # though the material was still loaded.
+        self.frame.context_box.insert("1.0", "a")
+        self.frame._apply_context_source_state()
+
+        self.assertIn("Álgebra", self.frame.notebook_status.cget("text"))
+        self.assertIn("lista", self.frame.notebook_status.cget("text"))
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
+
+    def test_last_subject_is_restored_from_the_local_cache(self):
+        notebook = notebooklm_service.NotebookRef(
+            id="nb-1", title="Álgebra", source_count=3
+        )
+        self.frame._notebook_map = {notebook.label: notebook}
+        settings = {
+            "notebooklm_selected_id": "nb-1",
+            "notebooklm_context_nb-1": "[NotebookLM · Álgebra]\nUnidad 1",
+        }
+
+        with mock.patch.object(
+            self.frame, "_load_setting", side_effect=settings.get
+        ):
+            label = self.frame._restore_saved_notebook()
+
+        self.assertEqual(label, notebook.label)
+        self.assertEqual(self.frame._active_notebook_id, "nb-1")
+        self.assertEqual(self.frame._active_notebook_title, "Álgebra")
+        self.assertIn("Unidad 1", self.frame._active_notebook_context)
+
+    def test_resolver_refuses_to_start_without_material(self):
+        self.frame.context_box.delete("1.0", "end")
+        with (
+            mock.patch(
+                "presentation.views.interview_frame.interview_live.is_configured",
+                return_value=True,
+            ),
+            mock.patch(
+                "presentation.views.interview_frame.show_warning"
+            ) as warning,
+            mock.patch.object(self.frame.worker, "start") as worker_start,
+        ):
+            self.frame.start_session()
+
+        warning.assert_called_once()
+        worker_start.assert_not_called()
+
     def test_resolver_routes_system_as_question_and_mic_as_user(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Temario de la materia")
         selected_source = self.frame._source_map.get(
             self.frame.source_var.get()
         )

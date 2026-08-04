@@ -1,0 +1,40 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Iniciar Auditext",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "python": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "cwd": "${workspaceFolder}",
+      "console": "integratedTerminal",
+      "justMyCode": true,
+      "env": {
+        "PYTHONPATH": "${workspaceFolder}",
+        "PYTHONUTF8": "1",
+        "PYGAME_HIDE_SUPPORT_PROMPT": "1",
+        "PYDEVD_USE_SYS_MONITORING": "false",
+        "PYDEVD_USE_FRAME_EVAL": "NO"
+      }
+    },
+    {
+      // Compila con PyInstaller (respaldando la base) y despues abre el .exe.
+      // Tarda varios minutos: empaqueta Whisper small, ffmpeg y customtkinter.
+      "name": "Compilar y abrir AudioText.exe",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./dist/AudioText/AudioText.exe",
+      "cwd": "${workspaceFolder}",
+      "preLaunchTask": "Compilar Auditext (con respaldo)"
+    },
+    {
+      // Abre el ejecutable ya compilado, sin volver a compilar.
+      "name": "Abrir AudioText.exe compilado",
+      "type": "node-terminal",
+      "request": "launch",
+      "command": "./dist/AudioText/AudioText.exe",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

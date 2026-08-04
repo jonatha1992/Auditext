@@ -8,7 +8,7 @@ class TestOfflineTranscriptionService(unittest.TestCase):
     def setUp(self):
         # We search for the test audio relative to the test file location
         self.audio_path = os.path.abspath(
-            os.path.join(os.path.dirname(__file__), "..", "..", "Audios", "PRUEBA (2).wav")
+            os.path.join(os.path.dirname(__file__), "..", "Audios", "PRUEBA (2).wav")
         )
         # Use a tiny model for fast testing
         self.service = OfflineTranscriptionService(model_size="tiny")

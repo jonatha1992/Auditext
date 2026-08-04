@@ -47,7 +47,6 @@ tmp/
 
 # IDE files
 .idea/
-.vscode/
 *.sublime-project
 *.sublime-workspace
 .project

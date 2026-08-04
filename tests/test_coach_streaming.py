@@ -43,6 +43,108 @@ class LooksCompleteQuestionTests(unittest.TestCase):
         self.assertFalse(looks_complete_question("¿Qué?"))
 
 
+class OralCommandDetectionTests(unittest.TestCase):
+    """Un examinador manda tanto preguntando como dando una consigna."""
+
+    def test_detects_commands_without_a_question_mark(self):
+        from infrastructure.services.interview_live import extract_question_candidate
+
+        for text in (
+            "Defina bucle, aristas múltiples, multigrafo y vértice aislado.",
+            "Definime esto también.",
+            "Enumerá los tipos de grafos.",
+            "Nombrá tres ejemplos.",
+            "Contame qué es un multigrafo.",
+            "Resolvé el ejercicio 3.",
+            "Diferenciá bucle de arista múltiple.",
+            "Hablame de los multigrafos.",
+            "Explicanos la diferencia.",
+            "Señale los vértices aislados.",
+        ):
+            with self.subTest(text=text):
+                self.assertTrue(extract_question_candidate(text))
+
+    def test_keeps_a_question_the_stt_left_unclosed(self):
+        # Caso real del log: el examinador aclaró "la repito una vez más", la
+        # STT no cerró con "?" y el turno se descartó entero.
+        from infrastructure.services.interview_live import extract_question_candidate
+
+        self.assertEqual(
+            extract_question_candidate(
+                "Por supuesto. La repito una vez más. "
+                "En el simulador del trabajo, ¿cuál es la diferencia"
+            ),
+            "¿cuál es la diferencia",
+        )
+
+    def test_prefers_the_latest_question_in_the_buffer(self):
+        from infrastructure.services.interview_live import extract_question_candidate
+
+        self.assertEqual(
+            extract_question_candidate(
+                "¿Qué es un grafo? Perfecto. ¿Cuál es la diferencia entre dirigido y no dirigido?"
+            ),
+            "¿Cuál es la diferencia entre dirigido y no dirigido?",
+        )
+
+    def test_ignores_conjugations_that_are_not_commands(self):
+        # Un falso positivo dispara una llamada al coach por pura charla.
+        from infrastructure.services.interview_live import extract_question_candidate
+
+        for text in (
+            "Hablamos de grafos la clase pasada.",
+            "Estuve analizando el trabajo práctico.",
+            "Definitivamente eso no es correcto.",
+            "Vamos a comparar los resultados después.",
+            "Bueno, contando desde el primero.",
+        ):
+            with self.subTest(text=text):
+                self.assertFalse(extract_question_candidate(text))
+
+
+class TurnSeparatorTests(unittest.TestCase):
+    """Sin marca de fin de turno, el siguiente arranca pegado al anterior."""
+
+    def test_closing_a_turn_emits_a_line_break(self):
+        import asyncio
+
+        emitted: list[str] = []
+
+        async def run():
+            session = InterviewLiveSession(
+                context="",
+                on_transcript=emitted.append,
+                on_assist=lambda _a: None,
+                on_status=lambda _s: None,
+                mode="examen_oral",
+            )
+            # Turno sin consigna: se descarta, pero la línea igual se cierra.
+            session._utterance_buf = "Perfecto, esa respuesta está muy bien."
+            session._flush_utterance()
+
+        asyncio.run(run())
+        self.assertEqual(emitted, ["\n"])
+
+    def test_empty_buffer_emits_nothing(self):
+        import asyncio
+
+        emitted: list[str] = []
+
+        async def run():
+            session = InterviewLiveSession(
+                context="",
+                on_transcript=emitted.append,
+                on_assist=lambda _a: None,
+                on_status=lambda _s: None,
+                mode="examen_oral",
+            )
+            session._utterance_buf = "   "
+            session._flush_utterance()
+
+        asyncio.run(run())
+        self.assertEqual(emitted, [])
+
+
 class IdleThresholdTests(unittest.TestCase):
     def _session(self) -> InterviewLiveSession:
         return InterviewLiveSession(
@@ -101,6 +203,70 @@ class ParseAssistLinesTests(unittest.TestCase):
     def test_expansion_without_a_short_answer_is_dropped(self):
         # Would otherwise land in the left box, which is the one the user reads first.
         self.assertIsNone(parse_assist_lines("A: Una explicación larga sin respuesta corta."))
+
+    def test_expansion_is_split_into_bullets(self):
+        # El modelo debe mandar A en UNA línea (el formato se parsea línea a
+        # línea), así que las viñetas las pone la app al mostrar.
+        assist = parse_assist_lines(
+            "R: Un bucle es una arista que une un vértice consigo mismo.\n"
+            "A: Por ejemplo, en un grafo de 3 vértices, una arista de A hacia A. "
+            "Otro caso: en un multigrafo dirigido, dos bucles sobre el mismo vértice.\n"
+        )
+        self.assertEqual(
+            assist.respuestas[1],
+            "• Por ejemplo, en un grafo de 3 vértices, una arista de A hacia A.\n"
+            "• Otro caso: en un multigrafo dirigido, dos bucles sobre el mismo vértice.",
+        )
+        # La corta se muestra tal cual, sin viñetas.
+        self.assertNotIn("•", assist.respuestas[0])
+
+    def test_strips_latex_from_a_spoken_answer(self):
+        # Caso real: el TTS leía "$a$" como "dólar a dólar".
+        assist = parse_assist_lines(
+            "R: El máximo común divisor de $a$ y $b$ debe dividir a $c$.\n"
+            "A: Si no se cumple, no existen enteros $x$ e $y$ que satisfagan la ecuación.\n"
+        )
+        self.assertEqual(
+            assist.respuestas[0],
+            "El máximo común divisor de a y b debe dividir a c.",
+        )
+        self.assertEqual(
+            assist.respuestas[1],
+            "Si no se cumple, no existen enteros x e y que satisfagan la ecuación.",
+        )
+
+    def test_translates_math_instead_of_deleting_it(self):
+        # Borrar la notación dejaría la respuesta incompleta: hay que decirla.
+        assist = parse_assist_lines(
+            "R: La probabilidad es \\frac{3}{4} del total.\n"
+            "A: Como \\sqrt{16} es 4 y a \\cdot b \\neq 0, queda \\frac{a}{b}.\n"
+        )
+        self.assertEqual(assist.respuestas[0], "La probabilidad es 3 sobre 4 del total.")
+        self.assertEqual(
+            assist.respuestas[1],
+            "Como raíz de 16 es 4 y a por b distinto de 0, queda a sobre b.",
+        )
+
+    def test_unknown_command_keeps_its_name(self):
+        # "\\gcd" sin el nombre dejaría "(a,b)", que no se entiende al leerlo.
+        assist = parse_assist_lines("R: El \\gcd(a,b) tiene que dividir a c.")
+        self.assertEqual(assist.respuestas[0], "El gcd(a,b) tiene que dividir a c.")
+
+    def test_plain_arithmetic_is_left_alone(self):
+        assist = parse_assist_lines("R: La mitad de 8 es 4 y 3/4 es mayor que 1/2.")
+        self.assertEqual(
+            assist.respuestas[0], "La mitad de 8 es 4 y 3/4 es mayor que 1/2."
+        )
+
+    def test_strips_markdown_and_latex_wrappers(self):
+        assist = parse_assist_lines(
+            "R: Es la **vista estática** del sistema.\n"
+            "A: Se escribe \\text{gcd} y se lee en voz alta.\n"
+            "I: `UML`; \\(x\\) mayor a cero; diseño\n"
+        )
+        self.assertEqual(assist.respuestas[0], "Es la vista estática del sistema.")
+        self.assertEqual(assist.respuestas[1], "Se escribe gcd y se lee en voz alta.")
+        self.assertEqual(assist.ideas_clave, ["UML", "x mayor a cero", "diseño"])
 
     def test_empty_answer_means_no_clear_question(self):
         self.assertIsNone(parse_assist_lines("R:"))

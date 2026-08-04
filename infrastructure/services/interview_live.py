@@ -142,22 +142,38 @@ _PLAIN_LANGUAGE_RULES = (
     "Nada de 'cabe destacar', 'en el ámbito de', enumeraciones ni definiciones de diccionario."
 )
 
+# A es el ejemplo, no el resumen. Reformular R con otras palabras hacía que las
+# dos cajas dijeran lo mismo, que es exactamente lo que el usuario no quiere.
+_EXAMPLE_RULES = (
+    "A NO vuelve a explicar ni reformula lo que ya dice R: eso sería repetir. "
+    "A son DOS ejemplos y nada más, arrancando directo con 'Por ejemplo,' y después 'Otro caso:'. "
+    "El primero, el caso típico. El segundo, un caso límite o una excepción que se preste a "
+    "confusión. Matemático: resueltos con números hasta el resultado. Conceptual: situaciones "
+    "puntuales, no genéricas. Sin definiciones, sin introducción y sin cierre. "
+    "Máximo 25 palabras por ejemplo y 60 en total."
+)
+
 _DEFAULT_RESPONSE_RULES = (
     "R: una sola oración, máximo 25 palabras, lista para decir ya. "
-    "A: la misma idea explayada en 2 o 3 oraciones, máximo 60 palabras, con el detalle o el "
-    "ejemplo que R deja afuera. Sin introducciones, consejos ni información lateral."
+    "A: NO reformula R. Es un solo ejemplo concreto, arrancando con 'Por ejemplo,', "
+    "máximo 40 palabras. Sin introducciones, consejos ni información lateral."
+)
+# Este modo existe para que el usuario formule con sus palabras, así que no
+# hereda las reglas por defecto: un ejemplo resuelto le entregaría la respuesta.
+_PRACTICE_RESPONSE_RULES = (
+    "R: SOLO un arranque de frase, máximo 6 palabras, terminado en puntos suspensivos. "
+    "A: el esqueleto de la respuesta en 3 pasos numerados, diciendo QUÉ mencionar en cada uno, "
+    "nunca el contenido ya redactado. Ningún ejemplo resuelto: la respuesta la arma el usuario."
 )
 _RESOLVER_RESPONSE_RULES = (
     "R: la respuesta directa en 1 o 2 oraciones, máximo 40 palabras, lista para decir en voz alta. "
-    "A: la misma respuesta desarrollada, hasta 4 oraciones y 110 palabras, con el porqué, el "
-    "ejemplo o el detalle que R no alcanza a cubrir. "
+    + _EXAMPLE_RULES + " "
     "Sin introducciones, alternativas ni frases como 'podrías decir'."
 )
 _EXAM_RESPONSE_RULES = (
     "R: la respuesta directa en una oración, máximo 30 palabras, como la diría un estudiante "
     "preparado al que le preguntan de golpe. "
-    "A: la misma respuesta desarrollada en 2 a 4 oraciones, entre 40 y 90 palabras, agregando la "
-    "justificación o el ejemplo que R omite, por si el examinador repregunta. "
+    + _EXAMPLE_RULES + " "
     "No uses muletillas, felicitaciones, preguntas de seguimiento, consejos ni expresiones como "
     "'podrías decir'. No atribuyas decisiones al trabajo práctico si el contexto no las confirma."
 )
@@ -212,17 +228,29 @@ Conversación reciente, separada por rol:
 
 IDIOMA DE LAS RESPUESTAS: escribí las líneas R y A {answer_lang}.
 Las líneas P e I van siempre en español.
+No mezcles idiomas ni uses palabras de otro idioma parecido: se escribe "ecuación",
+nunca "equação"; "función", nunca "função". Si dudás, usá la palabra más común del idioma pedido.
+
+Todo lo que escribas se dice EN VOZ ALTA y se lee tal cual: nada de LaTeX, markdown ni
+símbolos sueltos. Prohibido usar $, asteriscos, guiones bajos, comillas invertidas y barras
+invertidas. Las variables y fórmulas van en palabras: "el máximo común divisor de a y b tiene
+que dividir a c", nunca su versión simbólica entre signos de dólar.
+
+Esto NO significa evitar la matemática: si la pregunta pide una cuenta, resolvela y dá el
+resultado. Solo escribilo como se pronuncia. Las fracciones son "tres cuartos" o "tres sobre
+cuatro"; las potencias, "x al cuadrado"; las raíces, "raíz de dos"; los subíndices, "a sub uno".
 
 Respondé EXACTAMENTE en estas cuatro líneas, sin markdown, sin JSON y sin texto extra:
 R: la respuesta corta, lista para decir en voz alta ya mismo
-A: la misma respuesta explayada, con el contexto que R deja afuera
+A: los ejemplos que respaldan a R, sin volver a explicarla
 P: glosa clara en español de lo que dijo o pidió el interlocutor
 I: 2 o 3 ideas relevantes separadas por punto y coma
 
 La línea R va PRIMERA y es la más importante: se muestra en pantalla apenas llega,
 antes de que termines de escribir las otras. Nunca la dejes para el final.
-A responde lo mismo que R pero con más información: agrega el porqué, un ejemplo o una
-consecuencia. NUNCA repitas R textual ni cambies de tema en A.
+A no repite ni reformula R con otras palabras: si lo hace, las dos cajas dicen lo mismo y
+la segunda no sirve de nada. A muestra, R explica. Cuántos ejemplos lleva y de qué largo
+lo fijan las reglas de salida de más abajo. Tampoco cambies de tema en A.
 
 {plain_language_rules}
 
@@ -274,16 +302,65 @@ def merge_transcript_delta(current: str, chunk: str) -> str:
     return current + raw if current else raw.lstrip()
 
 
+# Un examinador pide tanto con pregunta ("¿qué es...?") como con consigna
+# ("Defina bucle y vértice aislado."). Sin la segunda forma el turno se
+# descartaba en silencio y el coach nunca respondía.
+_ORAL_COMMAND_STEMS = (
+    "explic", "describ", "defin", "mencion", "justific", "compar",
+    "analiz", "desarroll", "enumer", "nombr", "indic", "señal", "senal",
+    "diferenci", "distingu", "relacion", "ejemplific", "caracteriz",
+    "clasific", "argument", "fundament", "resolv", "calcul", "demostr",
+    "plante", "detall", "ampli", "profundiz", "cont", r"cu[eé]nt", "habl",
+    "decim", "dec", r"d[ií]g", "resuelv", "pens", "piens",
+)
+# Terminación de imperativo/subjuntivo (voseo, tuteo y usted) más el pronombre
+# pegado que usa el habla real: "definime", "contame", "explicanos".
+_ORAL_COMMAND_RE = (
+    r"(?:" + "|".join(_ORAL_COMMAND_STEMS) + r")"
+    r"[aáeéií](?:me|nos|lo|la|los|las|le|les)?"
+)
+
 _QUESTION_START = re.compile(
     r"^\s*¿?\s*(?:"
-    r"qu[eé]|por\s+qu[eé]|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|d[oó]nde|"
+    r"qu[eé]|por\s+qu[eé]|para\s+qu[eé]|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|d[oó]nde|"
     r"qui[eé]n(?:es)?|cu[aá]nt[oa]s?|"
-    r"explic(?:á|a|e)|describ(?:í|a|e)|defin(?:í|a|e)|"
-    r"mencion(?:á|a|e)|justific(?:á|a|e)|compar(?:á|a|e)|"
-    r"analiz(?:á|a|e)|desarroll(?:á|a|e)"
+    + _ORAL_COMMAND_RE +
     r")\b",
     re.IGNORECASE,
 )
+
+# Las confirmaciones de borde heredan el signo de pregunta, pero no convierten
+# la afirmación vecina en una pregunta. Se quitan antes de buscar una consigna.
+_CONFIRMATION_TAG = (
+    r"(?:no|verdad|cierto|s[ií]|ok|viste|entend[eé]s|se\s+entiende|"
+    r"me\s+explico|correcto|vale)"
+)
+_LEADING_CONFIRMATION_TAG = re.compile(
+    r"^\s*¿\s*" + _CONFIRMATION_TAG + r"\s*\?\s*", re.IGNORECASE
+)
+_TRAILING_CONFIRMATION_TAG = re.compile(
+    r"\s*,?\s*¿\s*" + _CONFIRMATION_TAG + r"\s*\?\s*$", re.IGNORECASE
+)
+_LEADING_DISCOURSE = re.compile(
+    r"^\s*(?:bueno(?:\s+a\s+ver)?|bien|y\s+bueno|eh|este|a\s+ver|"
+    r"entonces|ahora|est[aá]\s+bien|mir[aá])\s*[,.:;!?-]*\s*",
+    re.IGNORECASE,
+)
+_ORAL_COMMAND_START = re.compile(
+    r"^\s*(?:" + _ORAL_COMMAND_RE + r")\b", re.IGNORECASE
+)
+
+
+def _strip_leading_discourse(text: str) -> str:
+    """Expose the examiner's verb after a short run of conversational filler."""
+    clean = text
+    # El límite evita borrar contenido real si el reconocedor repite muletillas.
+    for _ in range(4):
+        stripped = _LEADING_DISCOURSE.sub("", clean, count=1)
+        if stripped == clean:
+            break
+        clean = stripped
+    return clean
 
 
 def extract_question_candidate(text: str) -> str:
@@ -292,11 +369,33 @@ def extract_question_candidate(text: str) -> str:
     if len(clean) < 12:
         return ""
 
-    # Prefer an explicitly punctuated question and discard the preceding answer
-    # or classroom chatter captured from the same system-audio stream.
-    marked = re.findall(r"(¿[^?]{8,}\?)", clean)
-    if marked:
-        return marked[-1].strip()
+    # Un "¿no?" inicial o final sólo pide asentimiento. El texto restante debe
+    # aportar por sí mismo una pregunta o consigna para gastar una llamada.
+    had_leading_confirmation = False
+    while True:
+        without_leading_tag = _LEADING_CONFIRMATION_TAG.sub("", clean, count=1)
+        if without_leading_tag == clean:
+            break
+        had_leading_confirmation = True
+        clean = without_leading_tag.strip()
+    clean = _TRAILING_CONFIRMATION_TAG.sub("", clean, count=1).strip()
+    if len(clean) < 12:
+        return ""
+
+    # The opening "¿" is the strongest signal there is, so anchor on the LAST
+    # one and take everything from there. Requiring a closing "?" threw away
+    # real questions: the STT drops final punctuation constantly, and an
+    # examiner who prefaces the question ("En el simulador del trabajo, ¿cuál
+    # es la diferencia") leaves the marker mid-sentence, where the sentence-level
+    # scan below can never see it.
+    last_open = clean.rfind("¿")
+    if last_open >= 0:
+        tail = clean[last_open:]
+        closed = re.match(r"¿[^?]{8,}\?", tail)
+        if closed:
+            return closed.group(0).strip()
+        if len(tail) >= 12:
+            return tail[:600].strip()
 
     sentences = [
         part.strip(" -–—")
@@ -304,10 +403,14 @@ def extract_question_candidate(text: str) -> str:
         if part.strip()
     ]
     for sentence in reversed(sentences):
-        if len(sentence) >= 12 and (
-            sentence.endswith("?") or _QUESTION_START.match(sentence)
-        ):
-            return sentence[-600:]
+        candidate = _strip_leading_discourse(sentence)
+        qualifies = candidate.endswith("?") or bool(_QUESTION_START.match(candidate))
+        if had_leading_confirmation and not candidate.endswith("?"):
+            # Después de una coletilla inicial, "que..." suele continuar una
+            # afirmación truncada; sólo una consigna verbal sigue siendo señal.
+            qualifies = bool(_ORAL_COMMAND_START.match(candidate))
+        if len(candidate) >= 12 and qualifies:
+            return candidate[-600:]
     return ""
 
 
@@ -364,17 +467,94 @@ def parse_assist_text(text: str) -> InterviewAssist | None:
     respuestas_raw = data.get("respuestas") or []
     if not isinstance(respuestas_raw, list):
         respuestas_raw = [respuestas_raw]
-    respuestas = [str(r).strip() for r in respuestas_raw if str(r).strip()][:2]
+    respuestas = [c for r in respuestas_raw if (c := _clean_spoken(str(r)))][:2]
     ideas_raw = data.get("ideas_clave") or []
     if not isinstance(ideas_raw, list):
         ideas_raw = [ideas_raw]
-    ideas = [str(v).strip() for v in ideas_raw if str(v).strip()][:3]
+    ideas = [c for v in ideas_raw if (c := _clean_spoken(str(v)))][:3]
     if not pregunta and not respuestas:
         return None
     return InterviewAssist(pregunta, respuestas, ideas)
 
 
 _ASSIST_LINE = re.compile(r"^\s*([RAPI])\s*[:：]\s*(.*)$")
+
+# Las respuestas se dicen en voz alta y el TTS las lee literal: "$a$" se escucha
+# "dólar a dólar", y en pantalla tampoco se entiende. El prompt ya prohíbe LaTeX
+# y markdown, pero los modelos lite recaen en cuanto la pregunta es matemática,
+# así que la limpieza es la red de seguridad.
+_LATEX_WRAPPER = re.compile(
+    r"\\(?:text|textbf|textit|mathrm|mathit|mathbf|operatorname)\s*\{([^{}]*)\}"
+)
+# Una fracción no se borra: se dice. Perder "\frac{3}{4}" dejaría la respuesta
+# incompleta, así que se traduce a la forma hablada en lugar de eliminarla.
+_LATEX_FRACTION = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_LATEX_SQRT = re.compile(r"\\sqrt\s*\{([^{}]*)\}")
+_LATEX_OPERATORS = {
+    r"\cdot": " por ",
+    r"\times": " por ",
+    r"\div": " dividido ",
+    r"\leq": " menor o igual que ",
+    r"\le": " menor o igual que ",
+    r"\geq": " mayor o igual que ",
+    r"\ge": " mayor o igual que ",
+    r"\neq": " distinto de ",
+    r"\equiv": " congruente con ",
+    r"\pm": " más o menos ",
+    r"\mid": " divide a ",
+    r"\in": " pertenece a ",
+    r"\infty": " infinito ",
+}
+# Más largos primero: sin esto "\le" se comería el prefijo de "\leq".
+_LATEX_OPERATOR_RE = re.compile(
+    "|".join(re.escape(k) for k in sorted(_LATEX_OPERATORS, key=len, reverse=True))
+)
+_MATH_DELIMS = re.compile(r"\$\$?|\\[()\[\]]|\\\\")
+# Comandos sin traducción: se conserva el nombre, que suele ser la palabra que
+# hace falta ("\gcd" -> "gcd"). Los puramente tipográficos sí se descartan.
+_LATEX_LEFTOVER = re.compile(r"\\([a-zA-Z]+)")
+_LATEX_TYPOGRAPHIC = frozenset(
+    {"left", "right", "displaystyle", "textstyle", "quad", "qquad", "limits"}
+)
+_BRACES = re.compile(r"[{}]")
+_MD_MARKS = re.compile(r"\*\*|__|`+")
+
+
+# El modelo debe emitir A en UNA línea (el formato R:/A:/P:/I: se parsea línea a
+# línea, y un salto lo rompería), pero en pantalla eso queda como un bloque
+# corrido ilegible. Las viñetas las pone la app al mostrar, no el modelo.
+_EXAMPLE_MARKERS = re.compile(
+    r"\s*\b(Por ejemplo,|Otro caso:|Otro ejemplo:|Segundo caso:)\s*",
+    re.IGNORECASE,
+)
+
+
+def _format_examples(value: str) -> str:
+    """Split the expansion into bullets so the examples are scannable."""
+    if not value:
+        return value
+    text = _EXAMPLE_MARKERS.sub(lambda m: "\n• " + m.group(1) + " ", value)
+    return text.strip()
+
+
+def _clean_spoken(value: str) -> str:
+    """Turn LaTeX/markdown markup into something sayable out loud.
+
+    Notation is translated, not deleted: an answer about fractions that loses
+    its fractions is worse than one that keeps them. Nested braces are out of
+    scope — the prompt is the primary defence and this is the safety net.
+    """
+    text = _LATEX_WRAPPER.sub(r"\1", value or "")
+    text = _LATEX_FRACTION.sub(r"\1 sobre \2", text)
+    text = _LATEX_SQRT.sub(r"raíz de \1", text)
+    text = _LATEX_OPERATOR_RE.sub(lambda m: _LATEX_OPERATORS[m.group(0)], text)
+    text = _MATH_DELIMS.sub("", text)
+    text = _LATEX_LEFTOVER.sub(
+        lambda m: "" if m.group(1) in _LATEX_TYPOGRAPHIC else m.group(1), text
+    )
+    text = _BRACES.sub("", text)
+    text = _MD_MARKS.sub("", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | None:
@@ -398,7 +578,7 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
         match = _ASSIST_LINE.match(line)
         if not match:
             continue
-        tag, value = match.group(1), match.group(2).strip()
+        tag, value = match.group(1), _clean_spoken(match.group(2))
         if tag == "R":
             respuesta = value
         elif tag == "A":
@@ -412,7 +592,7 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
         return None
     respuestas = [respuesta] if respuesta else []
     if respuesta and ampliada:
-        respuestas.append(ampliada)
+        respuestas.append(_format_examples(ampliada))
     return InterviewAssist(
         pregunta,
         respuestas,
@@ -481,14 +661,14 @@ def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE):
 
     # Plain text, not JSON: the line format is what makes partial output
     # renderable mid-stream, and it spends no tokens on syntax.
-    # Two answers per turn (short + expanded) need more output room. This does
-    # not move TTFT — the short line still paints first — only the moment the
-    # expansion lands.
+    # Two answers per turn (short + expanded, and the expansion closes with a
+    # worked example) need more output room. This does not move TTFT — the short
+    # line still paints first — only the moment the expansion lands.
     kwargs = dict(
         temperature=0.2 if mode in ORAL_ASSIST_MODES else 0.4,
         max_output_tokens=(
-            440 if mode == "resolver"
-            else 300 if mode == "examen_oral"
+            420 if mode == "resolver"
+            else 340 if mode == "examen_oral"
             else 240
         ),
     )
@@ -583,6 +763,8 @@ def coach_assist(
             if mode == "resolver"
             else _EXAM_RESPONSE_RULES
             if mode == "examen_oral"
+            else _PRACTICE_RESPONSE_RULES
+            if mode == "prueba_oral"
             else _DEFAULT_RESPONSE_RULES
         ),
     )
@@ -618,8 +800,8 @@ def coach_assist(
                 nvidia_provider.generate(
                     prompt,
                     max_tokens=(
-                        480 if mode == "resolver"
-                        else 320 if mode == "examen_oral"
+                        460 if mode == "resolver"
+                        else 380 if mode == "examen_oral"
                         else 270
                     ),
                 )
@@ -671,8 +853,8 @@ def coach_assist(
                 nvidia_provider.generate(
                     prompt,
                     max_tokens=(
-                        480 if mode == "resolver"
-                        else 320 if mode == "examen_oral"
+                        460 if mode == "resolver"
+                        else 380 if mode == "examen_oral"
                         else 270
                     ),
                 )
@@ -971,6 +1153,11 @@ class InterviewLiveSession:
         buf = self._utterance_buf.strip()
         fast = looks_complete_question(buf)
         self._utterance_buf = ""
+        # Cerrar el turno en pantalla. Los deltas se concatenan sin espacio
+        # (correcto dentro de una frase), así que sin esta marca el turno
+        # siguiente arranca pegado al anterior: "...MQTT real.Por supuesto".
+        if buf:
+            self._on_transcript("\n")
         now = asyncio.get_event_loop().time()
         speech_start, speech_end = self._utterance_start_ts, self._last_transcript_ts
         if not (buf and self._api_key):
@@ -990,6 +1177,11 @@ class InterviewLiveSession:
                 )
                 return
             buf = question
+        # El turno DESCARTADO se loguea arriba, pero el ACEPTADO no se registraba
+        # en ningún lado: cuando el coach contestaba cualquier cosa era imposible
+        # saber con qué texto se había disparado. Sin esto no se puede afinar el
+        # corte de turno con evidencia.
+        logger.info("Coach turn accepted (%d chars): %s", len(buf), buf[:200])
         # Streaming STT deltas arrive while they talk, so this is how long they
         # spoke — not a delay. The delay is flush_wait.
         if speech_start:

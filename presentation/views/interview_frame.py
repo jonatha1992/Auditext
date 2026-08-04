@@ -37,6 +37,7 @@ MUTED = "#8A8F9E"
 ACCENT = "#7000FF"
 ACCENT_HOVER = "#5900CC"
 SUCCESS = "#4EC98A"
+WARNING = "#F6AD55"
 ERROR = "#E0506A"
 INTERVIEWER = "#4DA3FF"
 CANDIDATE = "#4EC98A"
@@ -393,7 +394,11 @@ class InterviewFrame(ctk.CTkFrame):
         self._microphone_map: dict[str, str | None] = {}
         self._notebook_map: dict[str, notebooklm_service.NotebookRef] = {}
         self._active_notebook_id: str | None = None
+        self._active_notebook_title: str | None = None
         self._active_notebook_context: str | None = None
+        # While a sync is in flight the sync flow owns the status line, so the
+        # generic state refresh must not overwrite its progress messages.
+        self._notebook_syncing = False
         self._session_ended = False
         self._session_paused = False
         self._mic_error_shown = False
@@ -715,8 +720,18 @@ class InterviewFrame(ctk.CTkFrame):
             height=40, fg_color=ACCENT, hover_color=ACCENT_HOVER,
             font=("Segoe UI Semibold", 12),
         )
-        self.start_button.pack(anchor=tk.E, padx=18, pady=(0, 18))
+        self.start_button.pack(anchor=tk.E, padx=18, pady=(0, 4 if resolver else 18))
         if resolver:
+            # Resolving without material is the one failure the user cannot see:
+            # the coach answers from general knowledge and nothing says so. The
+            # button stays locked until at least one source actually has content.
+            self.start_ready_label = ctk.CTkLabel(
+                self.prep,
+                text="",
+                font=("Segoe UI", 10),
+                text_color=MUTED,
+            )
+            self.start_ready_label.pack(anchor=tk.E, padx=18, pady=(0, 18))
             self._apply_context_source_state()
 
     def _build_active(self) -> None:
@@ -758,8 +773,10 @@ class InterviewFrame(ctk.CTkFrame):
         # explayada, para cuando repreguntan o hace falta más contexto. Por eso la
         # derecha es más alta: llevan cantidades de texto distintas.
         reply_titles = (
-            ("⚡  RESPUESTA CORTA", ACCENT, 110 if resolver else 74),
-            ("📖  SI TE PIDEN MÁS", "#F6E05E", 190 if resolver else 150),
+            # Lo que se mira mientras hablás es esto, no las transcripciones de
+            # abajo: se les da la altura que aquellas dejan libre.
+            ("⚡  RESPUESTA CORTA", ACCENT, 150 if resolver else 110),
+            ("📖  SI TE PIDEN MÁS", "#F6E05E", 210 if resolver else 170),
         )
         for i, (title, title_color, box_height) in enumerate(reply_titles):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
@@ -782,7 +799,9 @@ class InterviewFrame(ctk.CTkFrame):
             box._reply_text = ""
             self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
             box._textbox.bind("<Button-3>", self._speak_word_at)
-            box.pack(fill=tk.X, padx=12, pady=(0, 12))
+            # BOTH/expand: las dos tarjetas comparten fila, así que la más baja
+            # dejaba un recuadro cortado con aire muerto abajo.
+            box.pack(fill=tk.BOTH, expand=True, padx=12, pady=(0, 12))
             self.reply_boxes.append(box)
 
         support = ctk.CTkFrame(self.active, fg_color="transparent")
@@ -875,7 +894,9 @@ class InterviewFrame(ctk.CTkFrame):
         return label
 
     def _transcript_box(self, parent):
-        return ctk.CTkTextbox(parent, height=115, fg_color=PANEL_DARK, text_color=TEXT, border_width=1, border_color=BORDER, corner_radius=8)
+        # Bajo a propósito: es control de que el audio entra, no algo que se lea
+        # durante la sesión. El alto que cede va a las cajas de respuesta.
+        return ctk.CTkTextbox(parent, height=70, fg_color=PANEL_DARK, text_color=TEXT, border_width=1, border_color=BORDER, corner_radius=8)
 
     def show_preparation(self) -> None:
         self.active.pack_forget()
@@ -1128,7 +1149,12 @@ class InterviewFrame(ctk.CTkFrame):
                 self.notebook_combo.configure(values=labels)
                 current = self.notebook_var.get()
                 selected = current if current in self._notebook_map else None
+                if selected is None:
+                    selected = self._restore_saved_notebook()
                 self.notebook_var.set(selected or NOTEBOOK_PLACEHOLDER)
+                self._apply_context_source_state()
+                if self._active_notebook_context:
+                    return
                 self._set_notebook_status(
                     (
                         f"{len(labels)} materias disponibles · seleccionada: "
@@ -1152,6 +1178,29 @@ class InterviewFrame(ctk.CTkFrame):
         except Exception as exc:
             logger.exception("Failed loading setting %s: %s", key, exc)
             return None
+
+    def _restore_saved_notebook(self) -> str | None:
+        """Re-select the last used subject and reuse its cached material.
+
+        The selection was being persisted but never read back, so every launch
+        started with no subject. Restoring from the local cache keeps the flow
+        offline: syncing again is the user's call via «Sincronizar materia».
+        """
+        saved_id = self._load_setting(NOTEBOOK_ID_SETTING_KEY)
+        if not saved_id:
+            return None
+        for label, notebook in self._notebook_map.items():
+            if notebook.id != saved_id:
+                continue
+            cached = self._load_setting(
+                f"{NOTEBOOK_CONTEXT_SETTING_PREFIX}{notebook.id}"
+            )
+            if cached:
+                self._active_notebook_id = notebook.id
+                self._active_notebook_title = notebook.title
+                self._active_notebook_context = cached
+            return label
+        return None
 
     def _save_notebook_selection(
         self, notebook: notebooklm_service.NotebookRef
@@ -1177,6 +1226,7 @@ class InterviewFrame(ctk.CTkFrame):
         )
         if cached:
             self._active_notebook_id = notebook.id
+            self._active_notebook_title = notebook.title
             self._active_notebook_context = cached
         self._apply_context_source_state()
         self._save_notebook_selection(notebook)
@@ -1192,6 +1242,7 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _deactivate_notebook_context(self) -> None:
         self._active_notebook_id = None
+        self._active_notebook_title = None
         self._active_notebook_context = None
 
     def _select_written_context(self) -> None:
@@ -1227,24 +1278,52 @@ class InterviewFrame(ctk.CTkFrame):
         self.notebook_login_button.configure(state=control_state)
         self.notebook_refresh_button.configure(state=control_state)
         self.notebook_sync_button.configure(state=control_state)
-        notebook_ready = bool(self._active_notebook_context)
+        notebook_ready = notebook_active and bool(self._active_notebook_context)
         written_ready = written_active and self._has_written_context()
-        if hasattr(self, "start_button"):
-            self.start_button.configure(
-                state=(
-                    "normal"
-                    if not notebook_active or notebook_ready or written_ready
-                    else "disabled"
-                )
+        self._update_start_readiness(notebook_ready, written_ready)
+        if self._notebook_syncing:
+            # A sync in flight is already narrating its own progress.
+            return
+        if not notebook_active:
+            self._set_notebook_status("NotebookLM desactivado.", MUTED)
+        elif notebook_ready:
+            self._set_notebook_status(self._notebook_ready_text(), SUCCESS)
+        else:
+            self._set_notebook_status(
+                "Elegí una materia: se sincronizará automáticamente.", ACCENT
             )
-        self._set_notebook_status(
-            (
-                "Elegí una materia: se sincronizará automáticamente."
-                if notebook_active
-                else "NotebookLM desactivado."
-            ),
-            ACCENT if notebook_active else MUTED,
-        )
+
+    def _notebook_ready_text(self) -> str:
+        title = self._active_notebook_title or "La materia"
+        if self.use_written_context_var.get() and self._has_written_context():
+            return f"✓ {title} lista. Se combinará con el contexto escrito."
+        return f"✓ {title} lista para usar."
+
+    def _update_start_readiness(
+        self, notebook_ready: bool, written_ready: bool
+    ) -> None:
+        """Unlock the session only once some source actually carries material."""
+        if not hasattr(self, "start_button"):
+            return
+        ready = notebook_ready or written_ready
+        self.start_button.configure(state="normal" if ready else "disabled")
+        if not hasattr(self, "start_ready_label"):
+            return
+        if notebook_ready and written_ready:
+            text, color = "✓ Materia y contexto escrito listos.", SUCCESS
+        elif notebook_ready:
+            text, color = (
+                f"✓ {self._active_notebook_title or 'Materia'} lista.",
+                SUCCESS,
+            )
+        elif written_ready:
+            text, color = "✓ Contexto escrito listo.", SUCCESS
+        else:
+            text, color = (
+                "Cargá el material: pegá el tema o sincronizá una materia.",
+                WARNING,
+            )
+        self.start_ready_label.configure(text=text, text_color=color)
 
     def _sync_notebook(self) -> None:
         notebook = self._notebook_map.get(self.notebook_var.get())
@@ -1259,6 +1338,7 @@ class InterviewFrame(ctk.CTkFrame):
             notebook.title,
         )
         self.notebook_sync_button.configure(state="disabled")
+        self._notebook_syncing = True
         self._set_notebook_status(
             f"Preparando material de {notebook.title}…", ACCENT
         )
@@ -1273,6 +1353,7 @@ class InterviewFrame(ctk.CTkFrame):
 
         def finish_error(message: str):
             self.notebook_sync_button.configure(state="normal")
+            self._notebook_syncing = False
             logger.error(
                 "NotebookLM sync failed: id=%s title=%s error=%s",
                 notebook.id,
@@ -1291,6 +1372,7 @@ class InterviewFrame(ctk.CTkFrame):
         def finish_success(context: str):
             value = f"[NotebookLM · {notebook.title}]\n{context}"
             self._active_notebook_id = notebook.id
+            self._active_notebook_title = notebook.title
             self._active_notebook_context = value
             self._save_notebook_selection(notebook)
             if config.repository is not None:
@@ -1310,14 +1392,11 @@ class InterviewFrame(ctk.CTkFrame):
                 len(value),
             )
             self.notebook_sync_button.configure(state="normal")
+            self._notebook_syncing = False
             self.notebook_combo.configure(border_color=BORDER)
+            # _apply_context_source_state now renders the ready message itself,
+            # so it no longer wipes it on the next keystroke.
             self._apply_context_source_state()
-            self._set_notebook_status(
-                f"✓ {notebook.title} lista. Se combinará con el contexto escrito"
-                if self.use_written_context_var.get()
-                else f"✓ {notebook.title} lista para usar.",
-                SUCCESS,
-            )
 
         threading.Thread(target=work, daemon=True).start()
 
@@ -1551,6 +1630,18 @@ class InterviewFrame(ctk.CTkFrame):
         if use_notebook and self._active_notebook_context:
             context_parts.append(self._active_notebook_context)
         context = "\n\n".join(context_parts)
+        # The button is already gated on readiness, but a stale widget state must
+        # never let the resolver run blind: the coach would answer from general
+        # knowledge and nothing in the UI would say the material was missing.
+        if self._fixed_mode == "resolver" and not context:
+            show_warning(
+                self,
+                "Resolver preguntas",
+                "Cargá el material antes de empezar: pegá el tema o "
+                "sincronizá una materia de NotebookLM.",
+            )
+            self._apply_context_source_state()
+            return
         # Only the user's written context is persistent. NotebookLM material is
         # opt-in for the current app session and never overwrites this field.
         self._save_context(written_context, self._current_mode or "entrevista")

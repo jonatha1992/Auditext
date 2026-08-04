@@ -99,8 +99,8 @@ class TestInterviewHelpers(unittest.TestCase):
     def test_oral_exam_uses_low_variance_generation(self):
         config = _coach_config("gemini-2.5-flash", "examen_oral")
         self.assertEqual(config.temperature, 0.2)
-        # Dos respuestas por turno (corta + ampliada) necesitan más salida.
-        self.assertEqual(config.max_output_tokens, 300)
+        # Corta + dos ejemplos breves: alcanza con esto y llega antes a pantalla.
+        self.assertEqual(config.max_output_tokens, 340)
 
     def test_detects_real_ads_iii_exam_questions(self):
         questions = [
@@ -126,6 +126,54 @@ class TestInterviewHelpers(unittest.TestCase):
             extract_question_candidate(transcript),
             "¿Cuáles son los elementos de un diagrama de secuencia?",
         )
+
+    def test_rejects_confirmation_tags_as_question_signals(self):
+        statements = [
+            "¿no? Simulada. Exactamente, sí.",
+            "¿no? Que que que si van iban tomando.",
+            "¿no? Pero después en un contexto real se ven afectados. Sí. Mhm.",
+            "pero pero una cosa que estaría para mí interesante es poder hacer algún tener algún pequeño laboratorio como para poder este realizar trabajo que se puedan palpar más que nada, ¿no?",
+            "Eh Pero bueno, eso es lo que lo que me dijo me dijeron a mí, ¿no?",
+            "Bueno, chicos, eh fue un gusto este haberlos tenido en el grupo trabajando la verdad que muchas gracias por todo, ¿no?",
+            "No, pero fíjate que acá cuando a mí me dieron esta materia al principio de marzo, empezamos en abril, ¿no?",
+        ]
+        for statement in statements:
+            with self.subTest(statement=statement):
+                self.assertEqual(extract_question_candidate(statement), "")
+
+    def test_accepts_commands_after_discourse_markers(self):
+        commands = [
+            "Bueno, cuéntame un poquito cómo lo pensaron, qué lo cómo los llevaron a cabo. Desarrollaron el tema.",
+            "Bien. Bueno, cuénteme cómo lo vieron, cómo se sintieron cuando realizaron esto, los protocolos que que estuvieron utiliz…",
+        ]
+        for command in commands:
+            with self.subTest(command=command):
+                self.assertTrue(extract_question_candidate(command))
+
+    def test_question_detection_real_session_regression_matrix(self):
+        accepted = [
+            "¿qué limitaciones detectaron en la simulación y qué mejoras propondrían para un uso real del sistema?",
+            "¿cómo explican el rol del Jason?",
+            "¿Y por qué es importante el formato en el envío de datos?",
+            "¿Y qué ventaja tiene ese intervalo?",
+            "Defina bucle y vértice aislado.",
+            "En el simulador del trabajo, ¿cuál es la diferencia",
+        ]
+        ignored = [
+            "Muy bien.",
+            "Claro.",
+            "Sí.",
+            "Perfecto, gracias. Está bien, en serio.",
+            "Ahí le muestro, profe.",
+            "Por supuesto, al exponer su proyecto explican el rol del Jason y por qué es importante el formato en el envío de datos.",
+            "Desarrollaron el tema.",
+        ]
+        for text in accepted:
+            with self.subTest(expected="accepted", text=text):
+                self.assertTrue(extract_question_candidate(text))
+        for text in ignored:
+            with self.subTest(expected="ignored", text=text):
+                self.assertEqual(extract_question_candidate(text), "")
 
     def test_ignores_feedback_without_a_question(self):
         self.assertEqual(

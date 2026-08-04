@@ -88,15 +88,43 @@ class AnswerLangTests(unittest.TestCase):
         prompt = _prompt_for("en", mode="resolver", utterance="¿Qué es la fotosíntesis?")
         self.assertIn("Contestá exactamente lo preguntado", prompt)
         self.assertIn("COMPLETA, directa, correcta", prompt)
-        # Dos respuestas por turno: corta para contestar ya, ampliada por si repreguntan.
+        # Dos respuestas por turno: corta para contestar ya, ejemplos por si repreguntan.
         self.assertIn("R: la respuesta directa en 1 o 2 oraciones", prompt)
-        self.assertIn("A: la misma respuesta desarrollada", prompt)
         self.assertIn("máximo 40 palabras", prompt)
-        self.assertIn("110 palabras", prompt)
+        # La caja derecha no reformula: son ejemplos, y cortos.
+        self.assertIn("NO vuelve a explicar ni reformula", prompt)
+        self.assertIn("DOS ejemplos y nada más", prompt)
+        self.assertIn("un caso límite", prompt)
+        self.assertIn("Máximo 25 palabras por ejemplo y 60 en total", prompt)
+        # Nada del prompt puede volver a pedirle que reformule R.
+        self.assertNotIn("la misma respuesta desarrollada", prompt)
+        self.assertNotIn("la misma respuesta explayada", prompt)
         self.assertIn("Sin introducciones", prompt)
         self.assertIn(ANSWER_LANGS["es"], prompt)
         self.assertIn("No inventes términos", prompt)
         self.assertIn("debe repetirse", prompt)
+
+    def test_prompt_bans_notation_without_banning_maths(self):
+        # Prohibir LaTeX no puede leerse como "no resuelvas la cuenta".
+        prompt = _prompt_for("es", mode="examen_oral", utterance="¿Cuánto es un medio más un cuarto?")
+        self.assertIn("nada de LaTeX", prompt)
+        self.assertIn("NO significa evitar la matemática", prompt)
+        self.assertIn("resolvela y dá el", prompt)
+        self.assertIn("tres cuartos", prompt)
+
+    def test_practice_mode_never_gets_worked_examples(self):
+        # Su regla central es que el usuario formule solo: un ejemplo resuelto
+        # le entregaría la respuesta hecha.
+        prompt = _prompt_for("es", mode="prueba_oral", utterance="¿Qué es una clase abstracta?")
+        self.assertIn("esqueleto de la respuesta en 3 pasos", prompt)
+        self.assertIn("Ningún ejemplo resuelto", prompt)
+        self.assertNotIn("DOS ejemplos concretos", prompt)
+
+    def test_prompt_forbids_mixing_languages(self):
+        # Caso real: devolvió "equação" (portugués) en una respuesta en español.
+        prompt = _prompt_for("es", mode="examen_oral", utterance="¿Qué es una ecuación diofántica?")
+        self.assertIn("No mezcles idiomas", prompt)
+        self.assertIn("equação", prompt)
 
     def test_oral_question_waits_through_natural_pauses(self):
         self.assertGreaterEqual(
