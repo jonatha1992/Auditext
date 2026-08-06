@@ -1,0 +1,83 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      // PyInstaller borra y recrea dist/AudioText por completo, y ahi vive la
+      // base de datos del ejecutable. Sin este respaldo cada compilacion se
+      // lleva puesto el historial de transcripciones.
+      "label": "Respaldar base del ejecutable",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "New-Item -ItemType Directory -Force -Path 'build' | Out-Null; if (Test-Path 'dist/AudioText/auditext.db') { Copy-Item 'dist/AudioText/auditext.db' 'build/auditext.db.bak' -Force; Write-Host 'Base respaldada en build/auditext.db.bak' } else { Write-Host 'Sin base previa que respaldar' }"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Compilar Auditext (PyInstaller)",
+      "type": "process",
+      "command": "${workspaceFolder}/.venv/Scripts/python.exe",
+      "args": [
+        "-m",
+        "PyInstaller",
+        "AudioText.spec",
+        "--noconfirm",
+        "--clean"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      "label": "Restaurar base del ejecutable",
+      "type": "process",
+      "command": "powershell.exe",
+      "args": [
+        "-NoProfile",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-Command",
+        "if (Test-Path 'build/auditext.db.bak') { Copy-Item 'build/auditext.db.bak' 'dist/AudioText/auditext.db' -Force; Write-Host 'Base restaurada en dist/AudioText' } else { Write-Host 'Sin respaldo que restaurar' }"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "presentation": {
+        "reveal": "silent",
+        "panel": "shared"
+      },
+      "problemMatcher": []
+    },
+    {
+      // Esta es la que conviene usar: respalda, compila y devuelve la base.
+      "label": "Compilar Auditext (con respaldo)",
+      "dependsOrder": "sequence",
+      "dependsOn": [
+        "Respaldar base del ejecutable",
+        "Compilar Auditext (PyInstaller)",
+        "Restaurar base del ejecutable"
+      ],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "problemMatcher": []
+    }
+  ]
+}

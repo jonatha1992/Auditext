@@ -127,8 +127,88 @@ class AjustesFrame(ctk.CTkFrame):
         )
         btn_clear_db.pack(anchor=tk.W, padx=16, pady=(0, 16))
 
+        # ----------------------------------------------------
+        # CARD 4: BITACORA DE ERRORES
+        # ----------------------------------------------------
+        # Los fallos de proveedor (saturacion, cuota, timeout) terminaban solo
+        # en un archivo que nadie abre, asi que la app parecia colgada sin
+        # motivo. Aca se ven los ultimos, sin salir del programa.
+        card_log = ctk.CTkFrame(
+            scroll_frame, fg_color="#15161E", corner_radius=12,
+            border_color="#2A2B36", border_width=1,
+        )
+        card_log.pack(fill=tk.X, pady=(0, 16))
+
+        ctk.CTkLabel(
+            card_log, text="🧾  BITÁCORA DE ERRORES",
+            font=("Segoe UI Semibold", 11), text_color="#E53E3E"
+        ).pack(anchor=tk.W, padx=16, pady=(16, 12))
+
+        self.log_box = ctk.CTkTextbox(
+            card_log, height=150, font=("Consolas", 11),
+            fg_color="#0F1017", text_color="#C9CBD4", wrap="none",
+        )
+        self.log_box.pack(fill=tk.X, padx=16, pady=(0, 12))
+        self.log_box.configure(state="disabled")
+
+        row_log = ctk.CTkFrame(card_log, fg_color="transparent")
+        row_log.pack(fill=tk.X, padx=16, pady=(0, 16))
+
+        ctk.CTkButton(
+            row_log, text="🔄  Actualizar", font=("Segoe UI Semibold", 12),
+            fg_color="#1A1B26", text_color="#4DA3FF", hover_color="#1D2A3D",
+            width=130, height=36, corner_radius=8, command=self.refresh_error_log,
+        ).pack(side=tk.LEFT)
+
+        ctk.CTkButton(
+            row_log, text="📂  Abrir carpeta", font=("Segoe UI Semibold", 12),
+            fg_color="#1A1B26", text_color="#48BB78", hover_color="#1D3D2A",
+            width=140, height=36, corner_radius=8, command=self.on_open_logs,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
+        ctk.CTkButton(
+            row_log, text="🗑  Vaciar", font=("Segoe UI Semibold", 12),
+            fg_color="#1A1B26", text_color="#E53E3E", hover_color="#3D1D1D",
+            width=110, height=36, corner_radius=8, command=self.on_clear_log,
+        ).pack(side=tk.LEFT, padx=(8, 0))
+
         # Refresh stats immediately
         self.refresh_db_stats()
+        self.refresh_error_log()
+
+    def refresh_error_log(self):
+        """Show the newest journal entries, newest first."""
+        from core.errors import recent
+
+        try:
+            entries = recent(limit=40)
+        except Exception as exc:
+            text = f"No se pudo leer la bitácora: {exc}"
+        else:
+            text = "\n".join(
+                f"{e.get('time', '')}  [{e.get('severity', 'error')}]  "
+                f"{e.get('context', '')}: {e.get('error_type', '')}: "
+                f"{(e.get('message') or '')[:160]}"
+                for e in entries
+            ) or "Sin errores registrados."
+        self.log_box.configure(state="normal")
+        self.log_box.delete("1.0", tk.END)
+        self.log_box.insert("1.0", text)
+        self.log_box.configure(state="disabled")
+
+    def on_open_logs(self):
+        try:
+            os.startfile(config.log_directory)
+        except Exception as exc:
+            show_error(self, "Bitácora", f"No se pudo abrir la carpeta: {exc}")
+
+    def on_clear_log(self):
+        if not ask_yes_no(self, "Bitácora", "¿Vaciar la bitácora de errores?"):
+            return
+        from core.errors import clear
+
+        clear()
+        self.refresh_error_log()
 
     def on_model_change(self, selected_label):
         models = {

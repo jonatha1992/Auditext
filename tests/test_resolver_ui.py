@@ -9,6 +9,7 @@ from unittest import mock
 import customtkinter as ctk
 
 import config
+from infrastructure.services import notebooklm_service
 from presentation.views.interview_frame import InterviewFrame
 
 
@@ -46,11 +47,25 @@ class ResolverFrameTests(unittest.TestCase):
             self.frame.question_label.cget("text"),
             "Esperando una pregunta...",
         )
-        self.assertTrue(bool(self.frame.candidate_box.grid_info()))
+        self.assertTrue(bool(self.frame.transcripts_frame.pack_info()))
+        self.assertTrue(bool(self.frame.interviewer_transcript_label.grid_info()))
+        self.assertTrue(bool(self.frame.interviewer_box.grid_info()))
+        self.assertFalse(bool(self.frame.candidate_transcript_label.grid_info()))
+        self.assertFalse(bool(self.frame.candidate_box.grid_info()))
+        active_order = self.frame.active.pack_slaves()
+        self.assertLess(
+            active_order.index(self.frame.transcripts_frame),
+            active_order.index(self.frame.question_label.master),
+        )
         self.assertTrue(self.frame.source_combo.winfo_ismapped())
-        # La corta ocupa menos que la ampliada: llevan cantidades de texto distintas.
-        self.assertEqual(int(self.frame.reply_boxes[0].cget("height")), 110)
-        self.assertEqual(int(self.frame.reply_boxes[1].cget("height")), 190)
+        # La ampliación sigue a la respuesta, en el mismo flujo de lectura.
+        first = self.frame.reply_cards[0].grid_info()
+        second = self.frame.reply_cards[1].grid_info()
+        self.assertEqual(int(first["column"]), 0)
+        self.assertEqual(int(second["column"]), 0)
+        self.assertGreater(int(second["row"]), int(first["row"]))
+        self.assertGreaterEqual(int(self.frame.reply_boxes[0].cget("height")), 150)
+        self.assertGreaterEqual(int(self.frame.reply_boxes[1].cget("height")), 180)
         self.assertTrue(hasattr(self.frame, "notebook_combo"))
         self.assertEqual(
             self.frame.notebook_var.get(), "Seleccioná una materia…"
@@ -77,13 +92,116 @@ class ResolverFrameTests(unittest.TestCase):
 
         self.assertTrue(self.frame.use_written_context_var.get())
         self.assertFalse(self.frame.use_notebook_var.get())
+
+    def test_audio_apps_can_refresh_after_chrome_starts(self):
+        with mock.patch(
+            "infrastructure.audio.process_loopback.list_audio_apps",
+            return_value=[("chrome.exe", 4242)],
+        ):
+            self.frame._refresh_audio_sources()
+
+        values = list(self.frame.source_combo.cget("values"))
+        self.assertTrue(any("chrome.exe" in value for value in values))
+        self.assertTrue(hasattr(self.frame, "refresh_sources_button"))
+
+    def test_audio_source_refresh_preserves_current_selection(self):
+        label = "💻  App: chrome.exe (PID 4242)"
+        self.frame._source_map[label] = ("app", 4242)
+        self.frame.source_var.set(label)
+
+        with mock.patch(
+            "infrastructure.audio.process_loopback.list_audio_apps",
+            return_value=[("chrome.exe", 4242), ("vlc.exe", 99)],
+        ):
+            self.frame._refresh_audio_sources()
+
+        self.assertEqual(self.frame.source_var.get(), label)
         self.assertEqual(
             self.frame.context_box._textbox.cget("state"), "normal"
         )
         self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+        # Turning NotebookLM off does not make an empty form startable: the
+        # resolver needs material from some source.
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Unidad 1: derivadas")
+        self.frame._apply_context_source_state()
+
         self.assertEqual(self.frame.start_button.cget("state"), "normal")
 
+    def test_start_is_locked_until_some_material_is_loaded(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame._apply_context_source_state()
+
+        self.assertEqual(self.frame.start_button.cget("state"), "disabled")
+        self.assertIn("Cargá el material", self.frame.start_ready_label.cget("text"))
+
+        self.frame.context_box.insert("1.0", "Temario de Álgebra")
+        self.frame._apply_context_source_state()
+
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
+        self.assertIn("Contexto escrito", self.frame.start_ready_label.cget("text"))
+
+    def test_synced_subject_stays_ready_after_typing(self):
+        self.frame.use_notebook_var.set(True)
+        self.frame._active_notebook_id = "nb-1"
+        self.frame._active_notebook_title = "Álgebra"
+        self.frame._active_notebook_context = "[NotebookLM · Álgebra]\nUnidad 1"
+        self.frame.context_box.delete("1.0", "end")
+        self.frame._apply_context_source_state()
+
+        self.assertIn("lista para usar", self.frame.notebook_status.cget("text"))
+
+        # A keystroke in the written box used to wipe the ready message even
+        # though the material was still loaded.
+        self.frame.context_box.insert("1.0", "a")
+        self.frame._apply_context_source_state()
+
+        self.assertIn("Álgebra", self.frame.notebook_status.cget("text"))
+        self.assertIn("lista", self.frame.notebook_status.cget("text"))
+        self.assertEqual(self.frame.start_button.cget("state"), "normal")
+
+    def test_last_subject_is_restored_from_the_local_cache(self):
+        notebook = notebooklm_service.NotebookRef(
+            id="nb-1", title="Álgebra", source_count=3
+        )
+        self.frame._notebook_map = {notebook.label: notebook}
+        settings = {
+            "notebooklm_selected_id": "nb-1",
+            "notebooklm_context_nb-1": "[NotebookLM · Álgebra]\nUnidad 1",
+        }
+
+        with mock.patch.object(
+            self.frame, "_load_setting", side_effect=settings.get
+        ):
+            label = self.frame._restore_saved_notebook()
+
+        self.assertEqual(label, notebook.label)
+        self.assertEqual(self.frame._active_notebook_id, "nb-1")
+        self.assertEqual(self.frame._active_notebook_title, "Álgebra")
+        self.assertIn("Unidad 1", self.frame._active_notebook_context)
+
+    def test_resolver_refuses_to_start_without_material(self):
+        self.frame.context_box.delete("1.0", "end")
+        with (
+            mock.patch(
+                "presentation.views.interview_frame.interview_live.is_configured",
+                return_value=True,
+            ),
+            mock.patch(
+                "presentation.views.interview_frame.show_warning"
+            ) as warning,
+            mock.patch.object(self.frame.worker, "start") as worker_start,
+        ):
+            self.frame.start_session()
+
+        warning.assert_called_once()
+        worker_start.assert_not_called()
+
     def test_resolver_routes_system_as_question_and_mic_as_user(self):
+        self.frame.context_box.delete("1.0", "end")
+        self.frame.context_box.insert("1.0", "Temario de la materia")
         selected_source = self.frame._source_map.get(
             self.frame.source_var.get()
         )
@@ -148,6 +266,24 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertIn("RESPUESTA CORTA\nLa fotosíntesis", combined)
         self.assertIn("RESPUESTA AMPLIADA\nLa planta usa", combined)
         self.assertIn("TU RESPUESTA\nEs el proceso", combined)
+
+    def test_answer_loading_indicator_marks_a_new_response(self):
+        self.frame._set_answer_loading(True)
+
+        self.assertTrue(self.frame._answer_loading)
+        self.assertTrue(bool(self.frame.answer_loading_label.grid_info()))
+        self.assertIn("respuesta nueva", self.frame.answer_loading_label.cget("text").lower())
+        self.assertEqual(self.frame.reply_boxes[0]._reply_text, "")
+
+        assist = mock.Mock(
+            pregunta_es="Pregunta",
+            respuestas=["Respuesta nueva", "Detalle nuevo"],
+            ideas_clave=[],
+            partial=False,
+        )
+        self.frame._apply_assist(assist)
+        self.assertFalse(self.frame._answer_loading)
+        self.assertFalse(bool(self.frame.answer_loading_label.grid_info()))
 
     def test_interview_module_does_not_offer_resolver_or_oral_modes(self):
         interview = InterviewFrame(self.root)

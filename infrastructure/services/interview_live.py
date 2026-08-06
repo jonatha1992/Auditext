@@ -33,12 +33,23 @@ LIVE_MODELS = [
 ]
 
 # Latency-sensitive: lite models first, thinking disabled (see _coach_config).
-COACH_MODELS = [
-    os.getenv("GEMINI_COACH_MODEL", "").strip() or "gemini-2.5-flash-lite",
-    "gemini-flash-lite-latest",
-    os.getenv("GEMINI_MODEL", "").strip() or "gemini-2.5-flash",
-    "gemini-2.0-flash-lite",
-]
+# Latency-sensitive, ordered by measured time-to-answer on this account
+# (2026-08-06). The 2.5 family was removed: `gemini-2.5-flash-lite` and
+# `gemini-2.5-flash` now answer 404 "no longer available" on every key, so
+# keeping them first meant every session opened with two dead round-trips.
+# 3.1-flash-lite leads because it is the only current lite model that still
+# accepts thinking_budget=0. Measured end to end on the resolver prompt:
+# 3.1-flash-lite 5.3 s vs 3.5-flash-lite 6.7 s — the newer model has to think
+# before answering, and that thinking lands entirely in the wait the user feels.
+COACH_MODELS = gemini_keys.usable_models(
+    [
+        os.getenv("GEMINI_COACH_MODEL", "").strip() or "gemini-3.1-flash-lite",
+        "gemini-3.5-flash-lite",
+        "gemini-flash-lite-latest",
+        os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.6-flash",
+        "gemini-2.0-flash-lite",
+    ]
+)
 
 _LIVE_SYSTEM = """You are listening to a speaker via system audio.
 Transcribe the speaker faithfully in the language they use; never translate their words.
@@ -130,36 +141,62 @@ _MODE_INSTRUCTIONS = {
 # Coach input is truncated before prompting: with thinking_budget=0 the cost is
 # dominated by TTFT/prefill (input length), so a shorter prompt is the main lever
 # for lowering latency (see tech plan Path A).
-_MAX_CONTEXT_CHARS = 2500
-_COACH_HISTORY_TURNS = 6
+_MAX_CONTEXT_CHARS = 1800
+_COACH_HISTORY_TURNS = 4
 
 # El usuario habla en voz alta con sus propias palabras: un texto correcto pero
 # enciclopédico no le sirve. Estas reglas van en TODOS los modos.
 _PLAIN_LANGUAGE_RULES = (
-    "REGISTRO: escribí como habla una persona, no como un manual. Frases cortas y directas. "
+    "REGISTRO: escribí como habla un estudiante frente a su profesor, no como un manual ni como "
+    "un coach. Frases cortas, directas y naturales. Respondé en primera persona cuando corresponda. "
     "Conservá el término técnico solo cuando ese término es lo que se pregunta o no tiene "
     "equivalente común; todo lo demás explicalo con palabras de todos los días. "
     "Nada de 'cabe destacar', 'en el ámbito de', enumeraciones ni definiciones de diccionario."
 )
 
+# A es el ejemplo, no el resumen. Reformular R con otras palabras hacía que las
+# dos cajas dijeran lo mismo, que es exactamente lo que el usuario no quiere.
+_EXAMPLE_RULES = (
+    "A NO vuelve a explicar ni reformula lo que ya dice R: eso sería repetir. "
+    "A son DOS ejemplos y nada más, arrancando directo con 'Por ejemplo,' y después 'Otro caso:'. "
+    "El primero, el caso típico. El segundo, un caso límite o una excepción que se preste a "
+    "confusión. Matemático: resueltos con números hasta el resultado. Conceptual: situaciones "
+    "puntuales, no genéricas. Sin definiciones, sin introducción y sin cierre. "
+    "Máximo 25 palabras por ejemplo y 60 en total."
+)
+
 _DEFAULT_RESPONSE_RULES = (
     "R: una sola oración, máximo 25 palabras, lista para decir ya. "
-    "A: la misma idea explayada en 2 o 3 oraciones, máximo 60 palabras, con el detalle o el "
-    "ejemplo que R deja afuera. Sin introducciones, consejos ni información lateral."
+    "A: NO reformula R. Es un solo ejemplo concreto, arrancando con 'Por ejemplo,', "
+    "máximo 40 palabras. Sin introducciones, consejos ni información lateral."
+)
+# Este modo existe para que el usuario formule con sus palabras, así que no
+# hereda las reglas por defecto: un ejemplo resuelto le entregaría la respuesta.
+_PRACTICE_RESPONSE_RULES = (
+    "R: SOLO un arranque de frase, máximo 6 palabras, terminado en puntos suspensivos. "
+    "A: el esqueleto de la respuesta en 3 pasos numerados, diciendo QUÉ mencionar en cada uno, "
+    "nunca el contenido ya redactado. Ningún ejemplo resuelto: la respuesta la arma el usuario."
 )
 _RESOLVER_RESPONSE_RULES = (
-    "R: la respuesta directa en 1 o 2 oraciones, máximo 40 palabras, lista para decir en voz alta. "
-    "A: la misma respuesta desarrollada, hasta 4 oraciones y 110 palabras, con el porqué, el "
-    "ejemplo o el detalle que R no alcanza a cubrir. "
-    "Sin introducciones, alternativas ni frases como 'podrías decir'."
+    "R: respuesta directa en 1 a 3 oraciones, entre 20 y 55 palabras, lista para decir como estudiante. "
+    "La primera oración da la conclusión concreta; la siguiente aporta el criterio técnico decisivo. "
+    "Cada oración agrega información distinta. No anuncies que vas a responder, no reformules la pregunta, "
+    "no uses elogios ni afirmaciones vagas. Sin introducción, cierre ni relleno. "
+    "Si comparan conceptos, nombrá la variable que realmente cambia. "
+    "A: agregá entre 20 y 60 palabras con detalles que no repitan R. Si ayudan, incluí uno o dos "
+    "ejemplos marcados con 'Por ejemplo,' y 'Otro caso:' para mostrarlos como viñetas. "
+    "No escribas el rótulo 'Si el profesor pide más' ni anticipes temas que no preguntó."
 )
 _EXAM_RESPONSE_RULES = (
-    "R: la respuesta directa en una oración, máximo 30 palabras, como la diría un estudiante "
-    "preparado al que le preguntan de golpe. "
-    "A: la misma respuesta desarrollada en 2 a 4 oraciones, entre 40 y 90 palabras, agregando la "
-    "justificación o el ejemplo que R omite, por si el examinador repregunta. "
-    "No uses muletillas, felicitaciones, preguntas de seguimiento, consejos ni expresiones como "
-    "'podrías decir'. No atribuyas decisiones al trabajo práctico si el contexto no las confirma."
+    "R: respuesta directa en 1 a 3 oraciones, entre 20 y 55 palabras, como estudiante frente al profesor. "
+    "La primera oración da la conclusión concreta; la siguiente aporta el criterio técnico decisivo. "
+    "Cada oración agrega información distinta. No anuncies que vas a responder, no reformules la pregunta, "
+    "no uses elogios ni afirmaciones vagas. Sin introducción, cierre ni relleno. "
+    "Si comparan conceptos, nombrá la variable que realmente cambia. "
+    "A: agregá entre 20 y 60 palabras con detalles o un ejemplo concreto para una posible repregunta, "
+    "sin repetir R. Si hay varios ejemplos, marcá 'Por ejemplo,' y 'Otro caso:' para crear viñetas. "
+    "No escribas el rótulo 'Si el profesor pide más'. No hables como coach ni des consejos al alumno, "
+    "no inventes una nueva pregunta y no atribuyas decisiones al trabajo práctico sin contexto."
 )
 
 
@@ -212,17 +249,28 @@ Conversación reciente, separada por rol:
 
 IDIOMA DE LAS RESPUESTAS: escribí las líneas R y A {answer_lang}.
 Las líneas P e I van siempre en español.
+No mezcles idiomas ni uses palabras de otro idioma parecido: se escribe "ecuación",
+nunca "equação"; "función", nunca "função". Si dudás, usá la palabra más común del idioma pedido.
+
+Todo lo que escribas se dice EN VOZ ALTA y se lee tal cual: nada de LaTeX, markdown ni
+símbolos sueltos. Prohibido usar $, asteriscos, guiones bajos, comillas invertidas y barras
+invertidas. Las variables y fórmulas van en palabras: "el máximo común divisor de a y b tiene
+que dividir a c", nunca su versión simbólica entre signos de dólar.
+
+Esto NO significa evitar la matemática: si la pregunta pide una cuenta, resolvela y dá el
+resultado. Solo escribilo como se pronuncia. Las fracciones son "tres cuartos" o "tres sobre
+cuatro"; las potencias, "x al cuadrado"; las raíces, "raíz de dos"; los subíndices, "a sub uno".
 
 Respondé EXACTAMENTE en estas cuatro líneas, sin markdown, sin JSON y sin texto extra:
 R: la respuesta corta, lista para decir en voz alta ya mismo
-A: la misma respuesta explayada, con el contexto que R deja afuera
+A: información adicional y ejemplos para continuar si piden más
 P: glosa clara en español de lo que dijo o pidió el interlocutor
 I: 2 o 3 ideas relevantes separadas por punto y coma
 
 La línea R va PRIMERA y es la más importante: se muestra en pantalla apenas llega,
 antes de que termines de escribir las otras. Nunca la dejes para el final.
-A responde lo mismo que R pero con más información: agrega el porqué, un ejemplo o una
-consecuencia. NUNCA repitas R textual ni cambies de tema en A.
+A no repite ni reformula R con otras palabras: agrega profundidad útil sobre el mismo tema.
+Su contenido y largo los fijan las reglas de salida de más abajo. Tampoco cambies de tema en A.
 
 {plain_language_rules}
 
@@ -232,7 +280,13 @@ En modos de examen o resolución, respondé SOLO la pregunta o consigna concreta
 Ignorá felicitaciones, muletillas, respuestas del alumno y comentarios sin una consigna.
 Si no hay una pregunta clara o el texto es ininteligible, devolvé únicamente "R:" sin contenido.
 Nunca completes por imaginación una palabra cortada ni definas un término dudoso.
-Usá el historial para mantener el hilo y no repetir respuestas. Priorizá frases fáciles de pronunciar.
+Usá el historial para mantener el hilo. Si el INTERLOCUTOR hace una pregunta repetida,
+respondela de nuevo: puede estar reforzándola porque la respuesta anterior fue insuficiente.
+En ese caso agregá más profundidad, corregí el enfoque o explicalo desde otro ángulo.
+La pregunta actual tiene prioridad absoluta. Usá el historial solo para resolver pronombres o
+referencias explícitas, nunca reemplazar su tema por un tema anterior. Si la pregunta actual
+nombra "diagrama de actividad", la respuesta debe tratar ese concepto aunque el historial hable de otro.
+Priorizá frases fáciles de pronunciar.
 """
 
 
@@ -249,8 +303,182 @@ class InterviewAssist:
     partial: bool = False
 
 
+# Minimum spoken depth for a long-form answer, in words. Raised from 70/100:
+# the models kept returning two-line answers that technically passed the old
+# floor, which is exactly the "too short" complaint.
+_MIN_ANSWER_WORDS = 20
+_MIN_EXPANSION_WORDS = 20
+
+# Total time a NVIDIA-backed turn may spend, first attempt plus repair. Past
+# this the user is better served by a short answer now than a long one later.
+_NVIDIA_TURN_BUDGET_SECONDS = 55.0
+# Below this there is no room left for a full second generation.
+_NVIDIA_REPAIR_MIN_SECONDS = 22.0
+
+_LONG_FORM_MODES = frozenset({"resolver", "examen_oral"})
+
+
+def _has_required_answers(assist: InterviewAssist, mode: str) -> bool:
+    """Require useful spoken depth, not merely non-empty answer cards."""
+    answers = [text for text in assist.respuestas if (text or "").strip()]
+    if mode not in _LONG_FORM_MODES:
+        return bool(answers)
+    if len(answers) < 2:
+        return False
+    return (
+        len(answers[0].split()) >= _MIN_ANSWER_WORDS
+        and len(answers[1].split()) >= _MIN_EXPANSION_WORDS
+    )
+
+
+def _nvidia_token_budget(mode: str) -> int:
+    # Concise oral answers need room for R/A/P/I without inviting essay-length output.
+    return 700 if mode in _LONG_FORM_MODES else 270
+
+
+def _generate_nvidia_assist(prompt: str, mode: str, provider=None) -> InterviewAssist | None:
+    """Generate once, then repair output that is present but too shallow.
+
+    The repair is opportunistic: it runs only if the shared turn budget still
+    allows a full second generation, and a failing repair never discards the
+    answer we already have — losing a short answer to a repair timeout is
+    strictly worse than showing the short answer.
+
+    `provider` is any module exposing ``generate(prompt, max_tokens=...,
+    budget_seconds=...)`` — NVIDIA and Groq speak the same OpenAI-compatible
+    contract, so the repair logic is shared instead of duplicated.
+    """
+    provider = provider or nvidia_provider
+    deadline = time.monotonic() + _NVIDIA_TURN_BUDGET_SECONDS
+    max_tokens = _nvidia_token_budget(mode)
+    assist = parse_assist(
+        provider.generate(
+            prompt,
+            max_tokens=max_tokens,
+            budget_seconds=_NVIDIA_TURN_BUDGET_SECONDS,
+        )
+    )
+    if assist is None or _has_required_answers(assist, mode):
+        return assist
+
+    remaining = deadline - time.monotonic()
+    if remaining < _NVIDIA_REPAIR_MIN_SECONDS:
+        logger.info(
+            "Sin presupuesto para reintentar la ampliación NVIDIA (%.0f s restantes)",
+            remaining,
+        )
+        return assist
+
+    previous = "\n".join(
+        f"{'R' if index == 0 else 'A'}: {text}"
+        for index, text in enumerate(assist.respuestas[:2])
+    )
+    repair_prompt = (
+        prompt
+        + "\n\nLa salida anterior fue demasiado breve y no cumple los mínimos.\n"
+        + previous
+        + f"\nReescribí las cuatro líneas completas. R debe tener al menos "
+        f"{_MIN_ANSWER_WORDS} palabras; A debe tener al menos {_MIN_EXPANSION_WORDS} "
+        "palabras, aportar información nueva y mantener el tono de estudiante."
+    )
+    try:
+        repaired = parse_assist(
+            provider.generate(
+                repair_prompt,
+                max_tokens=max_tokens,
+                budget_seconds=remaining,
+            )
+        )
+    except Exception as exc:
+        logger.warning("Reintento de ampliación falló, se usa la original: %s", exc)
+        return assist
+    if repaired is None:
+        return assist
+    if _has_required_answers(repaired, mode):
+        return repaired
+    original_words = sum(len(text.split()) for text in assist.respuestas)
+    repaired_words = sum(len(text.split()) for text in repaired.respuestas)
+    return repaired if repaired_words > original_words else assist
+
+
 class InterviewLiveError(Exception):
     """Live session cannot start or all keys/models failed."""
+
+
+class CoachUnavailable(Exception):
+    """No provider could answer this turn. Carries a user-facing reason.
+
+    A turn that dies with `assist=none` and nothing on screen is the worst
+    outcome: the user keeps waiting for an answer that will never arrive. This
+    exception makes the reason reach the status bar.
+    """
+
+
+def _provider_reason(name: str, exc: BaseException) -> str:
+    """Translate a provider failure into something the user can act on."""
+    kind = nvidia_provider.classify_error(exc)
+    if kind == nvidia_provider.SATURATION:
+        return f"{name} saturado ahora mismo; repetí la pregunta en unos segundos"
+    if kind == nvidia_provider.RATE_LIMIT:
+        return f"{name} sin cuota; esperá o sumá otra clave en .env"
+    if kind == nvidia_provider.AUTH:
+        return f"Clave {name} rechazada; revisá el .env"
+    if kind == nvidia_provider.NETWORK:
+        return f"Sin respuesta de {name} (red o timeout); reintentá la pregunta"
+    return f"{name} no pudo responder este turno"
+
+
+def _fallback_providers() -> list[tuple[str, object]]:
+    """Configured non-Gemini providers, fastest first.
+
+    Groq leads because it fails for reasons unrelated to NVIDIA's: NVIDIA's
+    shared endpoint returns 503 when its worker pool saturates, and that is
+    precisely when a second, independent provider earns its place.
+    """
+    from infrastructure.services import groq_provider
+
+    chain: list[tuple[str, object]] = []
+    if groq_provider.is_configured():
+        chain.append(("Groq", groq_provider))
+    if nvidia_provider.is_configured():
+        chain.append(("NVIDIA", nvidia_provider))
+    return chain
+
+
+def has_fallback_provider() -> bool:
+    return bool(_fallback_providers())
+
+
+def _fallback_assist(prompt: str, mode: str, origen: str) -> InterviewAssist | None:
+    """Walk the fallback chain, journaling failures instead of swallowing them."""
+    from core.errors import record
+
+    chain = _fallback_providers()
+    if not chain:
+        raise CoachUnavailable("No hay proveedor de respaldo configurado (Groq/NVIDIA)")
+
+    reason = ""
+    last_exc: BaseException | None = None
+    for name, provider in chain:
+        try:
+            assist = _generate_nvidia_assist(prompt, mode, provider)
+        except Exception as exc:
+            last_exc = exc
+            reason = _provider_reason(name, exc)
+            record(
+                f"coach.{name.lower()}.{origen}",
+                exc,
+                user_msg=reason,
+                modo=mode,
+                clase=nvidia_provider.classify_error(exc),
+            )
+            continue
+        if assist is not None:
+            assist.provider = name
+            return assist
+    if last_exc is not None:
+        raise CoachUnavailable(reason) from last_exc
+    return None
 
 
 def float32_to_pcm16(audio: np.ndarray) -> bytes:
@@ -274,41 +502,267 @@ def merge_transcript_delta(current: str, chunk: str) -> str:
     return current + raw if current else raw.lstrip()
 
 
+# Un examinador pide tanto con pregunta ("¿qué es...?") como con consigna
+# ("Defina bucle y vértice aislado."). Sin la segunda forma el turno se
+# descartaba en silencio y el coach nunca respondía.
+_ORAL_COMMAND_STEMS = (
+    "explic", "describ", "defin", "mencion", "justific", "compar",
+    "analiz", "desarroll", "enumer", "nombr", "indic", "señal", "senal",
+    "diferenci", "distingu", "relacion", "ejemplific", "caracteriz",
+    "clasific", "argument", "fundament", "resolv", "calcul", "demostr",
+    "plante", "detall", "ampli", "profundiz", "cont", r"cu[eé]nt", "habl",
+    "decim", "dec", r"d[ií]g", "resuelv", "pens", "piens",
+)
+# Terminación de imperativo/subjuntivo (voseo, tuteo y usted) más el pronombre
+# pegado que usa el habla real: "definime", "contame", "explicanos".
+_ORAL_COMMAND_RE = (
+    r"(?:" + "|".join(_ORAL_COMMAND_STEMS) + r")"
+    r"(?:[aáeéií]|(?:ar|er|ir))(?:me|nos|lo|la|los|las|le|les)?"
+)
+
 _QUESTION_START = re.compile(
     r"^\s*¿?\s*(?:"
-    r"qu[eé]|por\s+qu[eé]|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|d[oó]nde|"
+    r"qu[eé]|por\s+qu[eé]|para\s+qu[eé]|c[oó]mo|cu[aá]l(?:es)?|cu[aá]ndo|d[oó]nde|"
     r"qui[eé]n(?:es)?|cu[aá]nt[oa]s?|"
-    r"explic(?:á|a|e)|describ(?:í|a|e)|defin(?:í|a|e)|"
-    r"mencion(?:á|a|e)|justific(?:á|a|e)|compar(?:á|a|e)|"
-    r"analiz(?:á|a|e)|desarroll(?:á|a|e)"
+    + _ORAL_COMMAND_RE +
     r")\b",
     re.IGNORECASE,
 )
+
+# Las confirmaciones de borde heredan el signo de pregunta, pero no convierten
+# la afirmación vecina en una pregunta. Se quitan antes de buscar una consigna.
+_CONFIRMATION_TAG = (
+    r"(?:no|verdad|cierto|s[ií]|ok|viste|entend[eé]s|se\s+entiende|"
+    r"me\s+explico|correcto|vale)"
+)
+_LEADING_CONFIRMATION_TAG = re.compile(
+    r"^\s*¿\s*" + _CONFIRMATION_TAG + r"\s*\?\s*", re.IGNORECASE
+)
+_TRAILING_CONFIRMATION_TAG = re.compile(
+    r"\s*,?\s*¿\s*" + _CONFIRMATION_TAG + r"\s*\?\s*$", re.IGNORECASE
+)
+_LEADING_DISCOURSE = re.compile(
+    r"^\s*(?:bueno(?:\s+a\s+ver)?|bien|y\s+bueno|eh|este|a\s+ver|"
+    r"entonces|ahora|est[aá]\s+bien|mir[aá])\s*[,.:;!?-]*\s*",
+    re.IGNORECASE,
+)
+_ORAL_COMMAND_START = re.compile(
+    r"^\s*(?:" + _ORAL_COMMAND_RE + r")\b", re.IGNORECASE
+)
+_INDIRECT_COMMAND_START = re.compile(
+    r"^\s*(?:necesito|quiero|quisiera|te\s+pido)(?:\s+que)?\s+"
+    r"(?:me\s+)?(?:explic|describ|defin|mencion|justific|compar|analiz|desarroll|"
+    r"enumer|nombr|indic|diferenci|relacion|ejemplific|resolv|calcul|demostr)\w*\b",
+    re.IGNORECASE,
+)
+_POLITE_REQUEST = re.compile(
+    r"^\s*(?:(?:a\s+ver\s+si\s+)?(?:me\s+)?(?:pod[eé]s|puede|podr[ií]as?)\s+"
+    r"(?:explic|dec|cont|describ|compar)\w*|(?:quiero|quisiera)\s+saber\b|"
+    r"necesito\s+(?:una\s+)?(?:comparaci[oó]n|explicaci[oó]n|definici[oó]n)\b)",
+    re.IGNORECASE,
+)
+_EMBEDDED_COMMAND = re.compile(
+    r"(?:^|:\s+|a\s+ver\s+si\s+)(?:" + _ORAL_COMMAND_RE + r")\b",
+    re.IGNORECASE,
+)
+_EMBEDDED_QUESTION = re.compile(
+    r"\b(?:para\s+qu[eé]\s+sirv(?:e|en)|qu[eé]\s+(?:diferencia\s+hay|"
+    r"representa|muestra|modela|significa)|c[oó]mo\s+funciona|"
+    r"por\s+qu[eé]\s+importa|cu[aá]l(?:es)?\s+ser[ií]a(?:n)?)\b",
+    re.IGNORECASE,
+)
+_EXPLANATORY_LEAD = re.compile(
+    r"^\s*(?:el\s+profesor|la\s+profesora|ya\s+sabemos|despu[eé]s\s+veremos|"
+    r"luego\s+veremos|estuvimos|estuve|hemos|se\s+explic[oó])\b",
+    re.IGNORECASE,
+)
+_SHORT_CONTEXTUAL_QUESTION = re.compile(
+    r"^\s*¿\s*(?:(?:y\s+)?(?:qué|por\s+qué|para\s+qué|cómo|cuál(?:es)?|"
+    r"cuándo|dónde|quién(?:es)?|cuánt[oa]s?)\b|y\s+.+?)\s*\?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _strip_leading_discourse(text: str) -> str:
+    """Expose the examiner's verb after a short run of conversational filler."""
+    clean = text
+    # El límite evita borrar contenido real si el reconocedor repite muletillas.
+    for _ in range(4):
+        stripped = _LEADING_DISCOURSE.sub("", clean, count=1)
+        if stripped == clean:
+            break
+        clean = stripped
+    return clean
+
+
+def _has_incompatible_script(text: str) -> bool:
+    """Reject obvious non-Latin STT hallucinations in Spanish oral modes."""
+    return bool(re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", text or ""))
 
 
 def extract_question_candidate(text: str) -> str:
     """Return only the latest actual question/academic instruction in STT text."""
     clean = re.sub(r"\s+", " ", (text or "")).strip()
+    # Short follow-ups depend on conversation context ("¿Y la G?", "¿Por qué?").
+    # They are real examiner prompts even though they are below the general
+    # length floor used to reject acknowledgements and STT fragments.
+    if _SHORT_CONTEXTUAL_QUESTION.match(clean) and not _has_incompatible_script(clean):
+        return clean
     if len(clean) < 12:
         return ""
 
-    # Prefer an explicitly punctuated question and discard the preceding answer
-    # or classroom chatter captured from the same system-audio stream.
-    marked = re.findall(r"(¿[^?]{8,}\?)", clean)
-    if marked:
-        return marked[-1].strip()
+    # A follow-up beginning with "¿Y...?" often completes the immediately
+    # preceding question in the same spoken turn. Returning only the tail loses
+    # the subject (real case: activity diagram -> only "¿Y qué modela?").
+    closed_questions = list(re.finditer(r"¿[^?]{2,}\?", clean))
+    if len(closed_questions) >= 2:
+        previous_match, latest_match = closed_questions[-2:]
+        previous, latest = previous_match.group(0), latest_match.group(0)
+        gap = clean[previous_match.end():latest_match.start()]
+        if (
+            not gap.strip()
+            and not _has_incompatible_script(previous + latest)
+        ):
+            return f"{previous.strip()} {latest.strip()}"
+
+    # Un "¿no?" inicial o final sólo pide asentimiento. El texto restante debe
+    # aportar por sí mismo una pregunta o consigna para gastar una llamada.
+    had_leading_confirmation = False
+    while True:
+        without_leading_tag = _LEADING_CONFIRMATION_TAG.sub("", clean, count=1)
+        if without_leading_tag == clean:
+            break
+        had_leading_confirmation = True
+        clean = without_leading_tag.strip()
+    clean = _TRAILING_CONFIRMATION_TAG.sub("", clean, count=1).strip()
+    if len(clean) < 12:
+        return ""
+
+    # The opening "¿" is the strongest signal there is, so anchor on the LAST
+    # one and take everything from there. Requiring a closing "?" threw away
+    # real questions: the STT drops final punctuation constantly, and an
+    # examiner who prefaces the question ("En el simulador del trabajo, ¿cuál
+    # es la diferencia") leaves the marker mid-sentence, where the sentence-level
+    # scan below can never see it.
+    last_open = clean.rfind("¿")
+    if last_open >= 0:
+        tail = clean[last_open:]
+        closed = re.match(r"¿[^?]{8,}\?", tail)
+        if closed:
+            return closed.group(0).strip()
+        if len(tail) >= 12:
+            return tail[:600].strip()
 
     sentences = [
         part.strip(" -–—")
-        for part in re.split(r"(?<=[.!?])\s+|\n+", clean)
+        for part in re.split(r"(?<=[.!?。！？])\s+|\n+", clean)
         if part.strip()
     ]
     for sentence in reversed(sentences):
-        if len(sentence) >= 12 and (
-            sentence.endswith("?") or _QUESTION_START.match(sentence)
-        ):
-            return sentence[-600:]
+        candidate = _strip_leading_discourse(sentence)
+        if _has_incompatible_script(candidate):
+            continue
+        is_explanatory = bool(_EXPLANATORY_LEAD.match(candidate))
+        qualifies = (
+            candidate.endswith("?")
+            or bool(_QUESTION_START.match(candidate))
+            or bool(_INDIRECT_COMMAND_START.match(candidate))
+            or bool(_POLITE_REQUEST.match(candidate))
+            or bool(_EMBEDDED_COMMAND.search(candidate))
+            or (not is_explanatory and bool(_EMBEDDED_QUESTION.search(candidate)))
+        )
+        if had_leading_confirmation and not candidate.endswith("?"):
+            # Después de una coletilla inicial, "que..." suele continuar una
+            # afirmación truncada; sólo una consigna verbal sigue siendo señal.
+            qualifies = bool(_ORAL_COMMAND_START.match(candidate))
+        if len(candidate) >= 12 and qualifies:
+            return candidate[-600:]
     return ""
+
+
+@dataclass(frozen=True)
+class QuestionInterpretation:
+    """Conservative reconstruction of a question damaged by streaming STT."""
+
+    question: str = ""
+    normalized: str = ""
+    confidence: float = 0.0
+    reasons: tuple[str, ...] = ()
+
+
+def _canonical_question(text: str) -> str:
+    clean = re.sub(r"\s+", " ", text).strip().rstrip(".!?").strip()
+    clean = clean.lstrip("¿").strip()
+    return f"¿{clean}?" if clean else ""
+
+
+def interpret_question_candidate(text: str) -> QuestionInterpretation:
+    """Recover high-confidence Spanish questions without inventing their intent."""
+    raw = re.sub(r"\s+", " ", (text or "")).strip()
+    if not raw or _has_incompatible_script(raw):
+        return QuestionInterpretation(normalized=raw)
+
+    normalized = raw
+    reasons: list[str] = []
+
+    repaired = re.sub(r"\bd[ií]a\s+rama\b", "diagrama", normalized, flags=re.I)
+    repaired = re.sub(r"\bd[ií]a\s+grama\b", "diagrama", repaired, flags=re.I)
+    if repaired != normalized:
+        normalized = repaired
+        reasons.append("diagrama")
+
+    repaired = re.sub(r"\bcasos?\s+de\s+usoy\b", "casos de uso y", normalized, flags=re.I)
+    if repaired != normalized:
+        normalized = repaired
+        reasons.append("uso_y")
+
+    if re.search(r"\b(?:nodos?|join)\b", normalized, re.I):
+        repaired = re.sub(r"\bfor\b(?=\s+o\s+join\b)", "fork", normalized, flags=re.I)
+        if repaired != normalized:
+            normalized = repaired
+            reasons.append("fork_join")
+
+    academic_cue = re.search(
+        r"\b(?:diagramas?|nodos?|asociaci[oó]n|multiplicidad|modelos?|clases?|grafos?)\b",
+        normalized,
+        re.I,
+    )
+    if academic_cue:
+        repaired = re.sub(
+            r"\beh\s+(?=(?:representa|muestra|modela|sirve)\b)",
+            "qué ",
+            normalized,
+            flags=re.I,
+        )
+        if repaired != normalized:
+            normalized = repaired
+            reasons.append("interrogativo")
+
+    candidate = extract_question_candidate(normalized)
+    if not candidate:
+        return QuestionInterpretation(normalized=normalized, reasons=tuple(reasons))
+
+    confidence = 0.9 if reasons else 1.0
+    return QuestionInterpretation(
+        question=_canonical_question(candidate),
+        normalized=normalized,
+        confidence=confidence,
+        reasons=tuple(reasons) or ("directa",),
+    )
+
+
+_DANGLING_QUESTION_END = re.compile(
+    r"\b(?:y|o|de|del|la|el|los|las|que|qué|entre|para|por|con|sin|un|una)\s*$",
+    re.I,
+)
+
+
+def looks_actionable_question(text: str) -> bool:
+    """True for a clear unpunctuated prompt that is not cut mid-phrase."""
+    clean = (text or "").strip()
+    if len(clean.split()) < 6 or _DANGLING_QUESTION_END.search(clean):
+        return False
+    return bool(interpret_question_candidate(clean).question)
 
 
 def looks_complete_question(text: str) -> bool:
@@ -364,17 +818,94 @@ def parse_assist_text(text: str) -> InterviewAssist | None:
     respuestas_raw = data.get("respuestas") or []
     if not isinstance(respuestas_raw, list):
         respuestas_raw = [respuestas_raw]
-    respuestas = [str(r).strip() for r in respuestas_raw if str(r).strip()][:2]
+    respuestas = [c for r in respuestas_raw if (c := _clean_spoken(str(r)))][:2]
     ideas_raw = data.get("ideas_clave") or []
     if not isinstance(ideas_raw, list):
         ideas_raw = [ideas_raw]
-    ideas = [str(v).strip() for v in ideas_raw if str(v).strip()][:3]
+    ideas = [c for v in ideas_raw if (c := _clean_spoken(str(v)))][:3]
     if not pregunta and not respuestas:
         return None
     return InterviewAssist(pregunta, respuestas, ideas)
 
 
 _ASSIST_LINE = re.compile(r"^\s*([RAPI])\s*[:：]\s*(.*)$")
+
+# Las respuestas se dicen en voz alta y el TTS las lee literal: "$a$" se escucha
+# "dólar a dólar", y en pantalla tampoco se entiende. El prompt ya prohíbe LaTeX
+# y markdown, pero los modelos lite recaen en cuanto la pregunta es matemática,
+# así que la limpieza es la red de seguridad.
+_LATEX_WRAPPER = re.compile(
+    r"\\(?:text|textbf|textit|mathrm|mathit|mathbf|operatorname)\s*\{([^{}]*)\}"
+)
+# Una fracción no se borra: se dice. Perder "\frac{3}{4}" dejaría la respuesta
+# incompleta, así que se traduce a la forma hablada en lugar de eliminarla.
+_LATEX_FRACTION = re.compile(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}")
+_LATEX_SQRT = re.compile(r"\\sqrt\s*\{([^{}]*)\}")
+_LATEX_OPERATORS = {
+    r"\cdot": " por ",
+    r"\times": " por ",
+    r"\div": " dividido ",
+    r"\leq": " menor o igual que ",
+    r"\le": " menor o igual que ",
+    r"\geq": " mayor o igual que ",
+    r"\ge": " mayor o igual que ",
+    r"\neq": " distinto de ",
+    r"\equiv": " congruente con ",
+    r"\pm": " más o menos ",
+    r"\mid": " divide a ",
+    r"\in": " pertenece a ",
+    r"\infty": " infinito ",
+}
+# Más largos primero: sin esto "\le" se comería el prefijo de "\leq".
+_LATEX_OPERATOR_RE = re.compile(
+    "|".join(re.escape(k) for k in sorted(_LATEX_OPERATORS, key=len, reverse=True))
+)
+_MATH_DELIMS = re.compile(r"\$\$?|\\[()\[\]]|\\\\")
+# Comandos sin traducción: se conserva el nombre, que suele ser la palabra que
+# hace falta ("\gcd" -> "gcd"). Los puramente tipográficos sí se descartan.
+_LATEX_LEFTOVER = re.compile(r"\\([a-zA-Z]+)")
+_LATEX_TYPOGRAPHIC = frozenset(
+    {"left", "right", "displaystyle", "textstyle", "quad", "qquad", "limits"}
+)
+_BRACES = re.compile(r"[{}]")
+_MD_MARKS = re.compile(r"\*\*|__|`+")
+
+
+# El modelo debe emitir A en UNA línea (el formato R:/A:/P:/I: se parsea línea a
+# línea, y un salto lo rompería), pero en pantalla eso queda como un bloque
+# corrido ilegible. Las viñetas las pone la app al mostrar, no el modelo.
+_EXAMPLE_MARKERS = re.compile(
+    r"\s*\b(Por ejemplo,|Otro caso:|Otro ejemplo:|Segundo caso:)\s*",
+    re.IGNORECASE,
+)
+
+
+def _format_examples(value: str) -> str:
+    """Split the expansion into bullets so the examples are scannable."""
+    if not value:
+        return value
+    text = _EXAMPLE_MARKERS.sub(lambda m: "\n• " + m.group(1) + " ", value)
+    return text.strip()
+
+
+def _clean_spoken(value: str) -> str:
+    """Turn LaTeX/markdown markup into something sayable out loud.
+
+    Notation is translated, not deleted: an answer about fractions that loses
+    its fractions is worse than one that keeps them. Nested braces are out of
+    scope — the prompt is the primary defence and this is the safety net.
+    """
+    text = _LATEX_WRAPPER.sub(r"\1", value or "")
+    text = _LATEX_FRACTION.sub(r"\1 sobre \2", text)
+    text = _LATEX_SQRT.sub(r"raíz de \1", text)
+    text = _LATEX_OPERATOR_RE.sub(lambda m: _LATEX_OPERATORS[m.group(0)], text)
+    text = _MATH_DELIMS.sub("", text)
+    text = _LATEX_LEFTOVER.sub(
+        lambda m: "" if m.group(1) in _LATEX_TYPOGRAPHIC else m.group(1), text
+    )
+    text = _BRACES.sub("", text)
+    text = _MD_MARKS.sub("", text)
+    return re.sub(r"\s{2,}", " ", text).strip()
 
 
 def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | None:
@@ -398,7 +929,7 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
         match = _ASSIST_LINE.match(line)
         if not match:
             continue
-        tag, value = match.group(1), match.group(2).strip()
+        tag, value = match.group(1), _clean_spoken(match.group(2))
         if tag == "R":
             respuesta = value
         elif tag == "A":
@@ -412,7 +943,7 @@ def parse_assist_lines(text: str, partial: bool = False) -> InterviewAssist | No
         return None
     respuestas = [respuesta] if respuesta else []
     if respuesta and ampliada:
-        respuestas.append(ampliada)
+        respuestas.append(_format_examples(ampliada))
     return InterviewAssist(
         pregunta,
         respuestas,
@@ -437,11 +968,16 @@ def is_configured() -> bool:
 def _session_status(mode: str, provider: str = "Gemini") -> str:
     """Reader-facing status with module and active/fallback provider."""
     title = "Resolver activo" if mode == "resolver" else "Entrevista activa"
-    if provider == "NVIDIA":
-        return f"{title} · NVIDIA · {nvidia_provider.pool.count()} claves"
+    if provider != "Gemini":
+        for name, module in _fallback_providers():
+            if name == provider:
+                return f"{title} · {name} · {module.pool.count()} claves"
+        return f"{title} · {provider}"
     gemini = gemini_keys.pool.current_label().replace("API", "Gemini", 1)
-    nvidia_count = nvidia_provider.pool.count()
-    fallback = f" · NVIDIA disponible ({nvidia_count})" if nvidia_count else ""
+    ready = ", ".join(
+        f"{name} ({module.pool.count()})" for name, module in _fallback_providers()
+    )
+    fallback = f" · respaldo: {ready}" if ready else ""
     return f"{title} · {gemini}{fallback}"
 
 
@@ -453,6 +989,12 @@ _client_cache: dict[str, object] = {}
 # buys latency. Measured: `gemini-flash-lite-latest` 400s consistently and the
 # logs carry 93 of those, each one delaying a live answer.
 _broken_models: set[str] = set()
+
+
+def _rejects_thinking_budget(exc: BaseException) -> bool:
+    """True when a 400 looks like the model refusing thinking_budget."""
+    detail = str(exc).lower()
+    return "400" in detail or "invalid_argument" in detail
 
 
 def _is_permanent_model_error(exc: BaseException) -> bool:
@@ -474,25 +1016,29 @@ def _get_client(genai, api_key: str):
     return client
 
 
-def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE):
+# Models that rejected thinking_budget=0 with a 400. Measured: the Gemini 3.x
+# lite/flash models refuse the field outright, and because a 400 also reads as a
+# permanent model error they were being blacklisted for the whole session — a
+# healthy model disabled by one bad parameter. This set lets the retry drop the
+# field instead of dropping the model.
+_no_thinking_models: set[str] = set()
+
+
+def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE, thinking: bool = True):
     """Low-latency generation config. thinking_budget=0 skips the multi-second
-    default 'thinking' phase on 2.5+ models; 2.0 models reject the field."""
+    default 'thinking' phase; 2.0 models and the 3.x family reject the field."""
     from google.genai import types
 
     # Plain text, not JSON: the line format is what makes partial output
     # renderable mid-stream, and it spends no tokens on syntax.
-    # Two answers per turn (short + expanded) need more output room. This does
-    # not move TTFT — the short line still paints first — only the moment the
-    # expansion lands.
+    # Two answers per turn (short + expanded, and the expansion closes with a
+    # worked example) need more output room. This does not move TTFT — the short
+    # line still paints first — only the moment the expansion lands.
     kwargs = dict(
         temperature=0.2 if mode in ORAL_ASSIST_MODES else 0.4,
-        max_output_tokens=(
-            440 if mode == "resolver"
-            else 300 if mode == "examen_oral"
-            else 240
-        ),
+        max_output_tokens=700 if mode in _LONG_FORM_MODES else 240,
     )
-    if "2.0" not in model:
+    if thinking and "2.0" not in model and model not in _no_thinking_models:
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     return types.GenerateContentConfig(**kwargs)
 
@@ -583,6 +1129,8 @@ def coach_assist(
             if mode == "resolver"
             else _EXAM_RESPONSE_RULES
             if mode == "examen_oral"
+            else _PRACTICE_RESPONSE_RULES
+            if mode == "prueba_oral"
             else _DEFAULT_RESPONSE_RULES
         ),
     )
@@ -602,9 +1150,14 @@ def coach_assist(
         if m and m not in models and m not in _broken_models:
             models.append(m)
     if not models:
-        # Everything got blacklisted: retry them all rather than go silent.
-        _broken_models.clear()
-        models = [m for m in dict.fromkeys(COACH_MODELS) if m]
+        # Permanent 400/404 failures must stay disabled for this process.
+        # Retrying every dead model before each NVIDIA request creates the
+        # appearance that the app froze.
+        if has_fallback_provider():
+            return _fallback_assist(prompt, mode, "modelos_agotados")
+        raise CoachUnavailable(
+            "Todos los modelos Gemini fallaron y no hay respaldo configurado"
+        )
 
     keys: list[str] = []
     if api_key and api_key in gemini_keys.pool.available():
@@ -612,38 +1165,57 @@ def coach_assist(
     for k in gemini_keys.pool.available():
         if k not in keys:
             keys.append(k)
-    if not keys and nvidia_provider.is_configured():
-        try:
-            assist = parse_assist(
-                nvidia_provider.generate(
-                    prompt,
-                    max_tokens=(
-                        480 if mode == "resolver"
-                        else 320 if mode == "examen_oral"
-                        else 270
-                    ),
-                )
-            )
-            if assist is not None:
-                assist.provider = "NVIDIA"
-            return assist
-        except Exception as exc:
-            logger.error("NVIDIA coach failed: %s", exc)
-            return None
+    if not keys and has_fallback_provider():
+        return _fallback_assist(prompt, mode, "sin_claves_gemini")
     if not keys:
-        return None
+        raise CoachUnavailable(
+            "Sin claves Gemini disponibles y sin respaldo configurado"
+        )
 
     last_exc = None
+    incomplete_assist: InterviewAssist | None = None
     for key in keys:
         client = _get_client(genai, key)
         for model in models:
+            if model in _broken_models:
+                continue
             try:
-                text = _stream_coach(
-                    client, model, prompt, _coach_config(model, mode), on_partial
-                )
+                try:
+                    text = _stream_coach(
+                        client, model, prompt, _coach_config(model, mode), on_partial
+                    )
+                except Exception as exc:
+                    # A 400 usually means the config, not the model. Retry once
+                    # without thinking_budget before writing the model off: the
+                    # 3.x family rejects that field and was being blacklisted
+                    # for the whole session over a parameter we can just drop.
+                    if not (
+                        _rejects_thinking_budget(exc)
+                        and model not in _no_thinking_models
+                    ):
+                        raise
+                    _no_thinking_models.add(model)
+                    logger.info(
+                        "Coach model %s no acepta thinking_budget; reintentando sin él",
+                        model,
+                    )
+                    text = _stream_coach(
+                        client,
+                        model,
+                        prompt,
+                        _coach_config(model, mode, thinking=False),
+                        on_partial,
+                    )
                 assist = parse_assist(text)
-                if assist is not None:
+                if assist is not None and _has_required_answers(assist, mode):
                     return assist
+                if assist is not None:
+                    incomplete_assist = assist
+                    logger.warning(
+                        "Coach model %s omitted required resolver expansion; trying fallback",
+                        model,
+                    )
+                    continue
                 logger.warning(
                     "Coach model %s returned no valid assistance; trying fallback",
                     model,
@@ -667,24 +1239,24 @@ def coach_assist(
     if last_exc and gemini_keys.pool.is_quota_error(last_exc):
         logger.warning("Gemini coach sin cuota; usando respaldo NVIDIA")
         try:
-            assist = parse_assist(
-                nvidia_provider.generate(
-                    prompt,
-                    max_tokens=(
-                        480 if mode == "resolver"
-                        else 320 if mode == "examen_oral"
-                        else 270
-                    ),
-                )
-            )
+            assist = _fallback_assist(prompt, mode, "respaldo_cuota")
             if assist is not None:
-                assist.provider = "NVIDIA"
                 return assist
-        except Exception as nvidia_exc:
-            logger.error("NVIDIA coach fallback failed: %s", nvidia_exc)
+        except CoachUnavailable:
+            # A partial Gemini answer beats showing nothing at all.
+            if incomplete_assist is not None:
+                return incomplete_assist
+            raise
+        if incomplete_assist is not None:
+            return incomplete_assist
         raise last_exc
+    if incomplete_assist is not None:
+        return incomplete_assist
     if last_exc:
-        logger.error("Coach assist failed: %s", last_exc)
+        from core.errors import record
+
+        record("coach.gemini", last_exc, modo=mode)
+        raise CoachUnavailable(f"Gemini no pudo responder: {last_exc}") from last_exc
     return None
 
 
@@ -711,6 +1283,7 @@ class InterviewLiveSession:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
         self._utterance_buf = ""
+        self._orphan_fragments: list[tuple[str, float]] = []
         self._last_transcript_ts = 0.0
         # Bounds of the current interlocutor turn, so the wait they actually
         # perceive (silence timer + coach) can be measured, not estimated.
@@ -787,14 +1360,20 @@ class InterviewLiveSession:
         loop.call_soon_threadsafe(_put)
 
     def _thread_main(self) -> None:
+        from core.errors import install_asyncio, record
+
         loop = asyncio.new_event_loop()
         self._loop = loop
         asyncio.set_event_loop(loop)
+        # Tasks nobody awaits (send/recv/watchdog) used to die into a stderr the
+        # windowed build discards, so the session looked stuck with a clean log.
+        install_asyncio(loop)
         try:
             loop.run_until_complete(self._run())
         except Exception as exc:
-            logger.exception("Interview Live thread crashed: %s", exc)
-            self._on_status(f"Error Live: {exc}")
+            self._on_status(
+                record("live.sesion", exc, modo=self._mode, user_msg=f"Error Live: {exc}")
+            )
         finally:
             try:
                 loop.close()
@@ -814,6 +1393,10 @@ class InterviewLiveSession:
 
         gemini_keys.pool.reload()
         nvidia_provider.pool.reload()
+        # Reload every fallback so a key added to .env mid-session is picked up
+        # without restarting the app.
+        for _name, _module in _fallback_providers():
+            _module.pool.reload()
         keys = list(gemini_keys.pool.available())
         if not keys:
             raise InterviewLiveError("No hay claves Gemini disponibles.")
@@ -902,18 +1485,24 @@ class InterviewLiveSession:
     # Sigue siendo el techo, pero ahora solo para texto ambiguo: una pregunta ya
     # cerrada no necesita esperar a confirmar un silencio que ya es evidente.
     _FLUSH_IDLE_SECONDS = 4.0
-    _FLUSH_FAST_SECONDS = 1.0
+    _FLUSH_ACTIONABLE_SECONDS = 1.2
+    _FLUSH_FAST_SECONDS = 0.65
+    _ORPHAN_TTL_SECONDS = 7.0
+    _ORPHAN_MAX_PARTS = 2
+    _ORPHAN_MAX_CHARS = 240
 
     def _idle_threshold(self) -> float:
         if looks_complete_question(self._utterance_buf):
             return self._FLUSH_FAST_SECONDS
+        if looks_actionable_question(self._utterance_buf):
+            return self._FLUSH_ACTIONABLE_SECONDS
         return self._FLUSH_IDLE_SECONDS
 
     async def _flush_watchdog(self) -> None:
         while not self._stop.is_set():
             # Polled faster than before: a 300 ms tick would add up to a third
             # of the new 1 s threshold as pure rounding error.
-            await asyncio.sleep(0.15)
+            await asyncio.sleep(0.10)
             if not self._utterance_buf:
                 continue
             loop = asyncio.get_event_loop()
@@ -971,15 +1560,20 @@ class InterviewLiveSession:
         buf = self._utterance_buf.strip()
         fast = looks_complete_question(buf)
         self._utterance_buf = ""
+        # Cerrar el turno en pantalla. Los deltas se concatenan sin espacio
+        # (correcto dentro de una frase), así que sin esta marca el turno
+        # siguiente arranca pegado al anterior: "...MQTT real.Por supuesto".
+        if buf:
+            self._on_transcript("\n")
         now = asyncio.get_event_loop().time()
         speech_start, speech_end = self._utterance_start_ts, self._last_transcript_ts
-        if not (buf and self._api_key):
+        if not buf:
             return
         if self._mode in ORAL_ASSIST_MODES:
-            question = extract_question_candidate(buf)
-            if not question:
+            interpretation = self._interpret_or_hold(buf, now)
+            if not interpretation:
                 logger.info(
-                    "Coach ignored non-question oral turn: %s", buf[:120]
+                    "Coach retained incomplete/non-question oral turn: %s", buf[:120]
                 )
                 latency_log.log_stage(
                     "live_interview",
@@ -989,7 +1583,29 @@ class InterviewLiveSession:
                     chars=len(buf),
                 )
                 return
-            buf = question
+            if interpretation.normalized != buf:
+                logger.info(
+                    "STT question interpreted confidence=%.2f reasons=%s raw=%s interpreted=%s",
+                    interpretation.confidence,
+                    ",".join(interpretation.reasons),
+                    buf[:160],
+                    interpretation.question[:160],
+                )
+                self._on_assist(
+                    InterviewAssist(
+                        pregunta_es=f"Pregunta interpretada: {interpretation.question}",
+                        respuestas=[],
+                        partial=True,
+                    )
+                )
+            buf = interpretation.question
+        if not self._api_key:
+            return
+        # El turno DESCARTADO se loguea arriba, pero el ACEPTADO no se registraba
+        # en ningún lado: cuando el coach contestaba cualquier cosa era imposible
+        # saber con qué texto se había disparado. Sin esto no se puede afinar el
+        # corte de turno con evidencia.
+        logger.info("Coach turn accepted (%d chars): %s", len(buf), buf[:200])
         # Streaming STT deltas arrive while they talk, so this is how long they
         # spoke — not a delay. The delay is flush_wait.
         if speech_start:
@@ -1018,6 +1634,34 @@ class InterviewLiveSession:
             self._pending_utterance = buf
         else:
             self._coach_task = asyncio.create_task(self._run_coach(buf))
+
+    def _interpret_or_hold(
+        self, fragment: str, now: float | None = None
+    ) -> QuestionInterpretation | None:
+        """Join at most two recent STT fragments and require high confidence."""
+        current_time = self._loop_time() if now is None else now
+        self._orphan_fragments = [
+            item
+            for item in self._orphan_fragments
+            if current_time - item[1] <= self._ORPHAN_TTL_SECONDS
+        ]
+        pieces = [item[0] for item in self._orphan_fragments] + [fragment.strip()]
+        combined = " ".join(part for part in pieces if part).strip()
+        interpretation = interpret_question_candidate(combined)
+        if interpretation.question and interpretation.confidence >= 0.85:
+            self._orphan_fragments.clear()
+            return interpretation
+
+        if fragment.strip():
+            self._orphan_fragments.append((fragment.strip(), current_time))
+            self._orphan_fragments = self._orphan_fragments[-self._ORPHAN_MAX_PARTS :]
+            while (
+                self._orphan_fragments
+                and sum(len(item[0]) for item in self._orphan_fragments)
+                > self._ORPHAN_MAX_CHARS
+            ):
+                self._orphan_fragments.pop(0)
+        return None
 
     async def _run_coach(self, utterance: str) -> None:
         async with self._coach_lock:
@@ -1095,6 +1739,24 @@ class InterviewLiveSession:
                 self._on_status(
                     "No se pudo generar una respuesta válida; intentá repetir la pregunta"
                 )
+        except CoachUnavailable as exc:
+            # Already journaled with its traceback where it was raised; here it
+            # only has to reach the screen so the user stops waiting.
+            elapsed_ms = (time.perf_counter() - start) * 1000.0
+            latency_log.log_stage(
+                "live_interview",
+                "coach",
+                elapsed_ms,
+                mode=self._mode,
+                assist="unavailable",
+            )
+            logger.warning(
+                "Coach sin proveedor tras %.0f ms (mode=%s): %s",
+                elapsed_ms,
+                self._mode,
+                exc,
+            )
+            self._on_status(str(exc))
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             logger.info("Coach turn failed after %.0f ms (mode=%s)", elapsed_ms, self._mode)
@@ -1109,5 +1771,13 @@ class InterviewLiveSession:
                 else:
                     self._on_status("Cuota agotada en todas las keys (coach)")
             else:
-                logger.exception("Coach call failed: %s", exc)
-                self._on_status(f"Error coach: {exc}")
+                from core.errors import record
+
+                self._on_status(
+                    record(
+                        "coach.turno",
+                        exc,
+                        modo=self._mode,
+                        user_msg=f"Error coach: {exc}",
+                    )
+                )

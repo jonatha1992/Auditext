@@ -22,8 +22,10 @@ from infrastructure.services import gemini_keys, latency_log
 # Anything larger goes through the Files API instead.
 INLINE_LIMIT_BYTES = 18 * 1024 * 1024
 
+# gemini-2.5-flash fue retirado (404 con cualquier key). 3.6-flash es el
+# reemplazo actual con la misma capacidad de audio.
 GEMINI_TRANSCRIBE_MODEL = (
-    os.getenv("GEMINI_TRANSCRIBE_MODEL", "").strip() or "gemini-2.5-flash"
+    os.getenv("GEMINI_TRANSCRIBE_MODEL", "").strip() or "gemini-3.6-flash"
 )
 GEMINI_TRANSCRIBE_TIMEOUT_MS = int(
     os.getenv("GEMINI_TRANSCRIBE_TIMEOUT_MS", "180000")
