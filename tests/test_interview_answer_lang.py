@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import unittest
 from unittest import mock
 
@@ -38,7 +39,10 @@ def _prompt_for(lang: str | None, *, mode: str = "entrevista", utterance: str = 
 
     kwargs = {} if lang is None else {"answer_lang": lang}
     with mock.patch.object(interview_live, "_get_client", return_value=client):
-        coach_assist("temario", utterance, api_key="k", mode=mode, **kwargs)
+        # Every model fails here by design, so the coach now reports that no
+        # provider answered instead of returning None. Only the prompt matters.
+        with contextlib.suppress(interview_live.CoachUnavailable):
+            coach_assist("temario", utterance, api_key="k", mode=mode, **kwargs)
     return recorder.prompt
 
 
@@ -88,21 +92,32 @@ class AnswerLangTests(unittest.TestCase):
         prompt = _prompt_for("en", mode="resolver", utterance="¿Qué es la fotosíntesis?")
         self.assertIn("Contestá exactamente lo preguntado", prompt)
         self.assertIn("COMPLETA, directa, correcta", prompt)
-        # Dos respuestas por turno: corta para contestar ya, ejemplos por si repreguntan.
-        self.assertIn("R: la respuesta directa en 1 o 2 oraciones", prompt)
-        self.assertIn("máximo 40 palabras", prompt)
-        # La caja derecha no reformula: son ejemplos, y cortos.
-        self.assertIn("NO vuelve a explicar ni reformula", prompt)
-        self.assertIn("DOS ejemplos y nada más", prompt)
-        self.assertIn("un caso límite", prompt)
-        self.assertIn("Máximo 25 palabras por ejemplo y 60 en total", prompt)
-        # Nada del prompt puede volver a pedirle que reformule R.
-        self.assertNotIn("la misma respuesta desarrollada", prompt)
-        self.assertNotIn("la misma respuesta explayada", prompt)
-        self.assertIn("Sin introducciones", prompt)
+        self.assertIn("R: respuesta directa en 1 a 3 oraciones", prompt)
+        self.assertIn("entre 20 y 55 palabras", prompt)
+        self.assertIn("como estudiante", prompt)
+        self.assertIn("criterio técnico decisivo", prompt)
+        self.assertIn("No anuncies que vas a responder", prompt)
+        self.assertIn("La pregunta actual tiene prioridad absoluta", prompt)
+        self.assertIn("nunca reemplazar su tema", prompt)
+        self.assertIn("usá conocimiento general", prompt)
+        # La caja derecha permite seguir hablando: amplía y ejemplifica.
+        self.assertIn("información adicional", prompt)
+        self.assertIn("viñetas", prompt)
+        self.assertIn("entre 20 y 60 palabras", prompt)
+        self.assertIn("Sin introducción", prompt)
         self.assertIn(ANSWER_LANGS["es"], prompt)
         self.assertIn("No inventes términos", prompt)
         self.assertIn("debe repetirse", prompt)
+
+    def test_repeated_question_is_answered_again_with_more_depth(self):
+        prompt = _prompt_for(
+            "es",
+            mode="resolver",
+            utterance="¿Qué diferencia hay entre M M 1 y M G 1?",
+        )
+        self.assertIn("pregunta repetida", prompt)
+        self.assertIn("respondela de nuevo", prompt)
+        self.assertIn("más profundidad", prompt)
 
     def test_prompt_bans_notation_without_banning_maths(self):
         # Prohibir LaTeX no puede leerse como "no resuelvas la cuenta".
@@ -111,6 +126,14 @@ class AnswerLangTests(unittest.TestCase):
         self.assertIn("NO significa evitar la matemática", prompt)
         self.assertIn("resolvela y dá el", prompt)
         self.assertIn("tres cuartos", prompt)
+
+    def test_oral_exam_also_provides_more_information_and_examples(self):
+        prompt = _prompt_for(
+            "es", mode="examen_oral", utterance="Explicá el primer rol de Scrum"
+        )
+        self.assertNotIn("Si el profesor pide más:", prompt)
+        self.assertIn("detalles o un ejemplo concreto", prompt)
+        self.assertIn("sin repetir R", prompt)
 
     def test_practice_mode_never_gets_worked_examples(self):
         # Su regla central es que el usuario formule solo: un ejemplo resuelto

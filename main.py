@@ -42,6 +42,13 @@ def resource_path(relative_path):
 
 def main():
     try:
+        # La bitacora se instala antes que nada: a partir de aca cualquier fallo
+        # no capturado (hilo, callback de Tk, tarea asyncio) queda registrado en
+        # logs/bitacora.jsonl en vez de perderse en un stderr inexistente.
+        from core.errors import install as install_error_journal
+
+        install_error_journal()
+
         # Inicializar e inyectar dependencias (SOLID / Inyección de dependencias)
         from infrastructure.repositories.sqlite_repository import SQLiteTranscriptionRepository
         from infrastructure.services.onnx_transcriber import OfflineTranscriptionService
@@ -70,6 +77,7 @@ def main():
         logger.info("[DIAG] Creando ventana CTk...")
         ventana = ctk.CTk()
         logger.info("[DIAG] Ventana CTk creada")
+        install_error_journal(ventana)
         ventana.title("AudioText")
         # Optional window icon. Bundled only in the PyInstaller build, so a
         # missing file when running from source must not crash the app.
@@ -112,9 +120,14 @@ def main():
     except Exception as e:
         # Last-resort net: feature modules handle their own errors now, so this
         # only fires on a hard startup failure. Log the full traceback.
-        logger.exception("Fallo critico en el arranque: %s", e)
+        try:
+            from core.errors import record
+
+            record("arranque", e, severity="critical")
+        except Exception:
+            logger.exception("Fallo critico en el arranque: %s", e)
         messagebox.showerror(
-            "Error", f"Se produjo un error al iniciar. Revisa logs/error_log.txt:\n{e}"
+            "Error", f"Se produjo un error al iniciar. Revisa logs/bitacora.jsonl:\n{e}"
         )
 
 

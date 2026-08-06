@@ -41,9 +41,12 @@ python main.py
 Para usar resumen o modo entrevista, creá `.env` en la raíz:
 
 ```
-GEMINI_API_KEY=<tu-api-key>
-GEMINI_MODEL=gemini-2.5-flash
+GEMINI_API_KEY1=<tu-api-key>
+GEMINI_MODEL=gemini-flash-latest
 ```
+
+`gemini-2.5-flash` ya no sirve: responde 404 "no longer available" con cualquier
+key. El pool lo filtra vía `RETIRED_MODELS`.
 
 ## 📁 Estructura
 

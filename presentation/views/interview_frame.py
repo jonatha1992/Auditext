@@ -408,6 +408,7 @@ class InterviewFrame(ctk.CTkFrame):
         self._build_closing()
         self.show_preparation()
         self.refresh_devices()
+        self.after(3000, self._auto_refresh_audio_sources)
         self.after(100, self._drain_queues)
 
     def _build_header(self) -> None:
@@ -673,7 +674,19 @@ class InterviewFrame(ctk.CTkFrame):
             fg_color=PANEL_DARK, border_color=BORDER, button_color=BORDER,
             dropdown_fg_color=PANEL, dropdown_hover_color=ACCENT,
         )
-        self.source_combo.grid(row=1, column=0, sticky="ew", padx=(0, 8), pady=(4, 0))
+        self.source_combo.grid(row=1, column=0, sticky="ew", padx=(0, 48), pady=(4, 0))
+        self.refresh_sources_button = ctk.CTkButton(
+            sources,
+            text="↻",
+            width=36,
+            height=28,
+            fg_color=PANEL_DARK,
+            hover_color="#20212D",
+            command=self._refresh_audio_sources,
+        )
+        self.refresh_sources_button.grid(
+            row=1, column=0, sticky="e", padx=(0, 8), pady=(4, 0)
+        )
         self.mic_var = tk.StringVar()
         self.mic_combo = ctk.CTkComboBox(
             sources, variable=self.mic_var, state="readonly",
@@ -767,20 +780,31 @@ class InterviewFrame(ctk.CTkFrame):
         replies = ctk.CTkFrame(self.active, fg_color="transparent")
         replies.pack(fill=tk.X, padx=24, pady=6)
         replies.grid_columnconfigure(0, weight=1)
-        replies.grid_columnconfigure(1, weight=1)
+        self._answer_loading = False
+        self._spinner_index = 0
+        self.answer_loading_label = ctk.CTkLabel(
+            replies,
+            text="◌  Generando respuesta nueva…",
+            font=("Segoe UI Semibold", 11),
+            text_color="#F6E05E",
+        )
+        self.answer_loading_label.grid(row=0, column=0, sticky="w", pady=(0, 6))
+        self.answer_loading_label.grid_remove()
         self.reply_boxes = []
+        self.reply_cards = []
         # Izquierda: la frase corta para contestar ya. Derecha: la misma respuesta
         # explayada, para cuando repreguntan o hace falta más contexto. Por eso la
         # derecha es más alta: llevan cantidades de texto distintas.
         reply_titles = (
             # Lo que se mira mientras hablás es esto, no las transcripciones de
             # abajo: se les da la altura que aquellas dejan libre.
-            ("⚡  RESPUESTA CORTA", ACCENT, 150 if resolver else 110),
-            ("📖  SI TE PIDEN MÁS", "#F6E05E", 210 if resolver else 170),
+            ("⚡  RESPUESTA", ACCENT, 155 if resolver else 95),
+            ("📖  DETALLES Y EJEMPLOS", "#F6E05E", 190 if resolver else 120),
         )
         for i, (title, title_color, box_height) in enumerate(reply_titles):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
-            card.grid(row=0, column=i, sticky="nsew", padx=(0, 6) if i == 0 else (6, 0))
+            card.grid(row=i + 1, column=0, sticky="ew", pady=(0, 8))
+            self.reply_cards.append(card)
             head = ctk.CTkFrame(card, fg_color="transparent")
             head.pack(fill=tk.X, padx=12, pady=(10, 2))
             ctk.CTkLabel(head, text=title, font=("Segoe UI Semibold", 9), text_color=title_color).pack(side=tk.LEFT)
@@ -816,8 +840,15 @@ class InterviewFrame(ctk.CTkFrame):
             title_color="#F6E05E",
         )
 
-        transcripts = ctk.CTkFrame(self.active, fg_color="transparent")
-        transcripts.pack(fill=tk.BOTH, expand=True, padx=24, pady=(6, 18))
+        transcripts = self.transcripts_frame = ctk.CTkFrame(
+            self.active, fg_color="transparent"
+        )
+        transcripts.pack(
+            fill=tk.X,
+            padx=24,
+            pady=(6, 10),
+            before=self.question_label.master,
+        )
         transcripts.grid_columnconfigure(0, weight=1)
         transcripts.grid_columnconfigure(1, weight=1)
         transcripts.grid_rowconfigure(1, weight=1)
@@ -841,6 +872,10 @@ class InterviewFrame(ctk.CTkFrame):
         self.candidate_box = self._transcript_box(transcripts)
         self.candidate_box.grid(row=1, column=1, sticky="nsew", padx=(6, 0), pady=(4, 0))
         self.candidate_box._textbox.bind("<Button-3>", self._speak_word_at)
+        if resolver:
+            self.interviewer_box.grid_configure(columnspan=2, padx=0)
+            self.candidate_transcript_label.grid_remove()
+            self.candidate_box.grid_remove()
 
     def _build_closing(self) -> None:
         resolver = self._fixed_mode == "resolver"
@@ -1080,17 +1115,7 @@ class InterviewFrame(ctk.CTkFrame):
         show_info(self, "Resolver preguntas" if resolver else "Entrevista", msg)
 
     def refresh_devices(self) -> None:
-        self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
-        try:
-            from infrastructure.audio import process_loopback
-
-            for name, pid in process_loopback.list_audio_apps():
-                self._source_map[f"💻  App: {name} (PID {pid})"] = ("app", pid)
-        except Exception:
-            pass
-        self.source_combo.configure(values=list(self._source_map))
-        if self.source_var.get() not in self._source_map:
-            self.source_var.set(WHOLE_SYSTEM_LABEL)
+        self._refresh_audio_sources()
         self._microphone_map = {}
         try:
             for mic in sc.all_microphones():
@@ -1104,6 +1129,29 @@ class InterviewFrame(ctk.CTkFrame):
         self.mic_combo.configure(values=labels)
         if self.mic_var.get() not in self._microphone_map:
             self.mic_var.set(labels[0])
+
+    def _refresh_audio_sources(self) -> None:
+        """Reload active Windows audio sessions without losing selection."""
+        selected = self.source_var.get()
+        self._source_map = {WHOLE_SYSTEM_LABEL: ("loopback", None)}
+        try:
+            from infrastructure.audio import process_loopback
+
+            for name, pid in process_loopback.list_audio_apps():
+                self._source_map[f"💻  App: {name} (PID {pid})"] = ("app", pid)
+        except Exception:
+            pass
+        self.source_combo.configure(values=list(self._source_map))
+        if selected in self._source_map:
+            self.source_var.set(selected)
+        else:
+            self.source_var.set(WHOLE_SYSTEM_LABEL)
+
+    def _auto_refresh_audio_sources(self) -> None:
+        """Discover apps opened after this screen, while session is not running."""
+        if self.prep.winfo_ismapped():
+            self._refresh_audio_sources()
+        self.after(3000, self._auto_refresh_audio_sources)
 
     def _set_notebook_status(
         self, text: str, color: str = MUTED
@@ -1756,6 +1804,7 @@ class InterviewFrame(ctk.CTkFrame):
         # partial would make them flash placeholder text, so a partial only ever
         # fills in what it actually carries.
         partial = getattr(assist, "partial", False)
+        self._set_answer_loading(False)
 
         if assist.pregunta_es or not partial:
             self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
@@ -1770,6 +1819,28 @@ class InterviewFrame(ctk.CTkFrame):
         ideas = assist.ideas_clave or []
         if ideas or not partial:
             self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
+
+    def _set_answer_loading(self, loading: bool) -> None:
+        """Show that a new answer is replacing the previous one."""
+        self._answer_loading = loading
+        if loading:
+            self._spinner_index = 0
+            self.answer_loading_label.configure(text="◌  Generando respuesta nueva…")
+            self.answer_loading_label.grid()
+            for box in self.reply_boxes:
+                box._reply_text = ""
+                self._set_box_text(box, "Esperando respuesta…")
+        else:
+            self.answer_loading_label.grid_remove()
+
+    def _advance_answer_spinner(self) -> None:
+        if not self._answer_loading:
+            return
+        frames = ("◌", "◔", "◑", "◕")
+        self._spinner_index = (self._spinner_index + 1) % len(frames)
+        self.answer_loading_label.configure(
+            text=f"{frames[self._spinner_index]}  Generando respuesta nueva…"
+        )
 
     def _set_box_text(self, box, text: str) -> None:
         """Escribe en una caja de solo-lectura (habilita, reemplaza, deshabilita)."""
@@ -1845,6 +1916,8 @@ class InterviewFrame(ctk.CTkFrame):
     def _drain_queues(self) -> None:
         while not self.status_queue.empty():
             status = self.status_queue.get_nowait()
+            if status.startswith("Resolviendo pregunta"):
+                self._set_answer_loading(True)
             if not self._session_paused:
                 self._set_status(status)
             if status.startswith("Error de micrófono") and not self._mic_error_shown:
@@ -1854,4 +1927,5 @@ class InterviewFrame(ctk.CTkFrame):
         self._append_batch(self.candidate_box, "candidate", self.candidate_queue)
         while not self.assist_queue.empty():
             self._apply_assist(self.assist_queue.get_nowait())
+        self._advance_answer_spinner()
         self.after(100, self._drain_queues)

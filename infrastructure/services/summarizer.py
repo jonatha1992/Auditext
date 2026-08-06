@@ -19,17 +19,21 @@ load_dotenv()
 
 # Back-compat for any code that still reads this module-level name.
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash").strip()
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.6-flash").strip()
 GEMINI_SUMMARY_TIMEOUT_MS = int(
     os.getenv("GEMINI_SUMMARY_TIMEOUT_MS", "12000")
 )
 
 # Fallback chain tried in order when the primary model hits a quota/rate-limit error.
-# gemini-2.0-flash free tier has limit=0 in many regions — fallbacks cover that.
+# El orden importa: `gemini-2.0-flash-lite` iba primero y tiene limit=0 en free
+# tier, así que cada vez que el primario se agotaba el primer reintento fallaba
+# garantizado — un request de latencia regalado antes de llegar a un modelo que
+# sí responde. Los dos primeros están verificados vivos (2026-08-06); el 2.0
+# queda último como long shot para cuentas con cuota paga.
 _FALLBACK_MODELS = [
-    "gemini-2.0-flash-lite",
-    "gemini-2.5-flash",
+    "gemini-3.5-flash-lite",
     "gemini-flash-lite-latest",
+    "gemini-2.0-flash-lite",
 ]
 
 _PROMPT_HEADER = (
@@ -201,7 +205,9 @@ def summarize(text: str, progress_cb=None) -> str:
         raise SummaryError(
             "Falta google-genai y NVIDIA no pudo generar el resumen."
         ) from exc
-    models_to_try = [GEMINI_MODEL] + [m for m in _FALLBACK_MODELS if m != GEMINI_MODEL]
+    # usable_models filtra los retirados: un GEMINI_MODEL viejo en el .env
+    # hacia que cada resumen empezara con un 404 garantizado.
+    models_to_try = gemini_keys.usable_models([GEMINI_MODEL, *_FALLBACK_MODELS])
     last_exc = None
 
     # Outer: keys. Inner: models. Quota on a key → next key; quota on model → next model.
