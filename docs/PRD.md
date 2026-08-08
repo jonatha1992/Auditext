@@ -40,7 +40,7 @@ Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombr
 - **Respuesta antes que explicación:** mostrar primero una respuesta utilizable.
 - **Corto y al pie:** una respuesta principal, sin introducciones ni información lateral.
 - **Contexto estable:** conservar el rol seleccionado y no convertir un examen en entrevista o práctica de inglés.
-- **No inventar:** si la pregunta está incompleta, corrupta o fuera del material, solicitar repetición.
+- **Interpretar sin inventar:** reconstruir errores y elipsis de alta confianza; si faltan conceptos esenciales o el texto queda fuera del material, esperar otro fragmento o solicitar repetición.
 - **Baja latencia:** evitar reintentos de proveedores ya agotados.
 - **Control del usuario:** el usuario decide cuándo grabar, guardar, copiar o reproducir.
 
@@ -112,9 +112,12 @@ Modos permitidos:
 
 - Conservar los espacios originales de la transcripción incremental.
 - Unir fragmentos cortados dentro de una palabra.
-- Agrupar la intervención hasta detectar al menos 2,5 segundos de silencio.
+- Usar cierre adaptativo: 0,65 segundos para preguntas terminadas, 1,2 segundos para consignas claras sin puntuación y hasta 4 segundos para texto ambiguo.
+- Conservar como máximo dos fragmentos durante 7 segundos para reconstruir una intervención partida.
 - No cerrar la pregunta durante una pausa natural o por eventos parciales del modelo.
-- Mostrar la pregunta como una oración continua.
+- Reconocer preguntas, imperativos académicos y consignas elípticas como `diferenciame`, `comparación entre` o `X versus Y`.
+- Corregir únicamente errores de transcripción respaldados por contexto suficiente y conservar siempre el texto original.
+- Mostrar inmediatamente la pregunta detectada o interpretada como una oración continua.
 
 #### Respuesta de IA
 
@@ -127,6 +130,15 @@ Modos permitidos:
 - No traducir automáticamente al inglés en modos académicos.
 - No definir términos desconocidos ausentes del material.
 - Si la transcripción parece corrupta o fuera de contexto, indicar que debe repetirse.
+- Reemplazar visualmente la respuesta anterior cuando comienza una pregunta nueva y mostrar un indicador de generación.
+- Si una pregunta aceptada produce una respuesta vacía, reintentar una sola vez sin duplicar solicitudes activas.
+
+#### Pausa y reanudación
+
+- Pausar ambas fuentes de audio sin cerrar la sesión.
+- Bloquear el envío de audio mientras la sesión está pausada.
+- Descartar la intervención incompleta al pausar para evitar mezclarla con la siguiente.
+- Reanudar con un nuevo límite de turno y conservar respuestas ya generadas.
 
 #### Respuesta del usuario
 
@@ -219,6 +231,10 @@ Los estados no deben depender únicamente del color.
 - [x] NotebookLM permite seleccionar una materia y sincronizar contexto.
 - [x] Las transcripciones incrementales no insertan saltos entre sílabas.
 - [x] Las pausas breves no crean múltiples preguntas.
+- [x] Las consignas académicas imperativas y elípticas producen una pregunta interpretada.
+- [x] La pregunta nueva se muestra antes de que llegue la respuesta y reemplaza el contenido anterior con un indicador de carga.
+- [x] Una respuesta vacía se reintenta una sola vez.
+- [x] Pausar y reanudar no mezcla fragmentos de preguntas diferentes.
 - [x] Las respuestas son breves, directas y limitadas por palabras.
 - [x] Gemini rota entre tres claves.
 - [x] NVIDIA rota entre dos claves y actúa como respaldo.
@@ -253,6 +269,8 @@ Las métricas no deben almacenar el contenido de audio, preguntas, respuestas, C
 Audio de llamada
       ↓
 Gemini Live transcribe y agrupa la pregunta
+      ↓
+Detector semántico reconstruye intención y muestra la pregunta
       ↓
 Contexto local / materia NotebookLM
       ↓

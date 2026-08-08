@@ -51,6 +51,12 @@ console_handler.setFormatter(formatter)
 # Añadir los manejadores al logger
 logger.addHandler(file_handler)
 logger.addHandler(console_handler)
+# Estos mismos handlers se cuelgan del root mas abajo para capturar a las
+# librerias. Sin cortar la propagacion, cada linea de la app se escribia DOS
+# veces: una por handler propio y otra por el mismo handler via root. Ademas de
+# duplicar el I/O durante una sesion Live, hacia que latency_report contara cada
+# etapa dos veces.
+logger.propagate = False
 
 # Archivo aparte solo con fallas. error_log.txt mezcla el INFO de cada turno con
 # los errores reales, asi que encontrar la falla ahi es imposible; este queda

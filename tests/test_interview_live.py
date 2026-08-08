@@ -92,6 +92,107 @@ class TestInterviewHelpers(unittest.TestCase):
         )
         self.assertIn("fork o join", result.question.lower())
 
+    def test_expands_abbreviated_difference_prompt(self):
+        result = interpret_question_candidate(
+            "Ahora, diferencia entre nodo de decisión y nodo fork."
+        )
+        self.assertEqual(
+            result.question,
+            "¿Cuál es la diferencia entre nodo de decisión y nodo fork?",
+        )
+
+    def test_understands_common_elliptical_academic_prompts(self):
+        cases = {
+            "Ahora, función del nodo fork.": "¿Cuál es la función del nodo fork?",
+            "Elementos de un diagrama de clases.": "¿Cuáles son los elementos de un diagrama de clases?",
+            "Ventajas del modelo M M 1.": "¿Cuáles son las ventajas del modelo M M 1?",
+            "Un ejemplo de nodo de decisión.": "¿Podés dar un ejemplo de nodo de decisión?",
+            "Relación entre caso de uso y secuencia.": "¿Qué relación hay entre caso de uso y secuencia?",
+        }
+        for spoken, expected in cases.items():
+            with self.subTest(spoken=spoken):
+                self.assertEqual(
+                    interpret_question_candidate(spoken).question,
+                    expected,
+                )
+
+    def test_does_not_rewrite_explanatory_sentences_as_elliptical_prompts(self):
+        statements = (
+            "La función del nodo fork permite abrir caminos paralelos.",
+            "Las ventajas del modelo quedaron explicadas antes.",
+            "La relación entre los diagramas fue analizada en clase.",
+        )
+        for statement in statements:
+            with self.subTest(statement=statement):
+                self.assertEqual(
+                    interpret_question_candidate(statement).question,
+                    "",
+                )
+
+    def test_reconstructs_context_prompt_and_constraint_across_sentences(self):
+        result = interpret_question_candidate(
+            "En un cas del uso de comprar pasaje. actores y relaciones incluirías. "
+            "considerando restricciones como menores que deben tener un adulto responsable."
+        )
+        self.assertEqual(
+            result.question,
+            "¿En un caso de uso de comprar pasaje, qué actores y relaciones incluirías, "
+            "considerando restricciones como menores que deben tener un adulto responsable?",
+        )
+
+    def test_classifies_imperative_comparison_variants(self):
+        prompts = (
+            "Diferenciame el nodo de decisión del nodo fork.",
+            "Diferenciá el nodo de decisión del nodo fork.",
+            "Diferencie el nodo de decisión del nodo fork.",
+            "Comparame el nodo de decisión con el nodo fork.",
+        )
+        for prompt in prompts:
+            with self.subTest(prompt=prompt):
+                result = interpret_question_candidate(prompt)
+                self.assertTrue(result.question)
+                self.assertEqual(result.intent, "compare")
+                self.assertGreaterEqual(result.confidence, 0.85)
+
+    def test_reconstructs_nominal_comparison_and_versus_prompts(self):
+        cases = {
+            "Comparación entre nodo de decisión y nodo fork.":
+                "¿Cómo se comparan nodo de decisión y nodo fork?",
+            "Nodo de decisión versus nodo fork.":
+                "¿Cuál es la diferencia entre nodo de decisión y nodo fork?",
+            "Comparación nodo de decisión y nodo fork.":
+                "¿Cómo se comparan nodo de decisión y nodo fork?",
+        }
+        for prompt, expected in cases.items():
+            with self.subTest(prompt=prompt):
+                result = interpret_question_candidate(prompt)
+                self.assertEqual(result.question, expected)
+                self.assertEqual(result.intent, "compare")
+                self.assertGreaterEqual(result.confidence, 0.82)
+
+    def test_rejects_comparison_words_inside_non_request_chatter(self):
+        chatter = (
+            "La comparación entre ambos nodos quedó clara.",
+            "Usamos nodo de decisión versus nodo fork ayer.",
+            "Estuvimos diferenciando los dos conceptos en clase.",
+        )
+        for text in chatter:
+            with self.subTest(text=text):
+                self.assertEqual(interpret_question_candidate(text).question, "")
+
+    def test_repairs_comparison_question_missing_verb(self):
+        cases = {
+            "¿qué diferencia fundamental entre clase y objeto?":
+                "¿qué diferencia fundamental hay entre clase y objeto?",
+            "Qué diferencia entre clase y objeto":
+                "¿Qué diferencia hay entre clase y objeto?",
+        }
+        for spoken, expected in cases.items():
+            with self.subTest(spoken=spoken):
+                result = interpret_question_candidate(spoken)
+                self.assertEqual(result.question, expected)
+                self.assertEqual(result.intent, "compare")
+
     def test_oral_modes_accept_concise_content_for_both_answer_cards(self):
         short_only = InterviewAssist("Pregunta", ["Respuesta principal"])
         concise = InterviewAssist(

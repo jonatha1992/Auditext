@@ -62,6 +62,8 @@ __all__ = [
     "is_configured",
     "pool",
     "request_timeout_for",
+    "reset_socket_block",
+    "socket_is_blocked",
 ]
 
 
@@ -151,6 +153,43 @@ _DEFAULT_SYSTEM = (
 _USER_AGENT = os.getenv("GROQ_USER_AGENT", "").strip() or "AudioText/1.0 (desktop)"
 
 
+# WinError 10013 es el firewall/antivirus de Windows negando el socket saliente.
+# No es cuota ni saturacion: ninguna clave lo arregla y ningun reintento lo cura,
+# asi que reintentarlo en cada turno solo agrega latencia al coach y llena la
+# bitacora (64 entradas identicas en el ultimo mes). Se apaga el proveedor para
+# todo el proceso y se avisa una vez cual es el arreglo real.
+_BLOCKED_SOCKET_MARKERS = ("10013", "winerror 10013")
+_socket_blocked = False
+
+
+def _is_socket_blocked_error(exc: BaseException) -> bool:
+    detail = str(exc).casefold()
+    return any(marker in detail for marker in _BLOCKED_SOCKET_MARKERS)
+
+
+def socket_is_blocked() -> bool:
+    return _socket_blocked
+
+
+def reset_socket_block() -> None:
+    """Test seam: forget the process-wide block."""
+    global _socket_blocked
+    _socket_blocked = False
+
+
+def _mark_socket_blocked(exc: BaseException) -> None:
+    global _socket_blocked
+    if _socket_blocked:
+        return
+    _socket_blocked = True
+    logger.warning(
+        "Groq deshabilitado en este proceso: el sistema bloquea el socket saliente "
+        "(%s). Hay que permitir la app en el firewall/antivirus; cambiar la clave "
+        "no cambia nada.",
+        exc,
+    )
+
+
 def _request(
     key: str,
     prompt: str,
@@ -221,6 +260,10 @@ def generate(
     Same contract as ``nvidia_provider.generate``: bounded per request and
     bounded overall, so a saturated provider costs a known wait, never a freeze.
     """
+    if _socket_blocked:
+        raise GroqError(
+            "Groq deshabilitado: el firewall/antivirus bloquea el socket saliente"
+        )
     if not pool.is_configured():
         raise GroqError("No hay claves Groq configuradas")
 
@@ -273,6 +316,12 @@ def generate(
                 return text
             except Exception as exc:
                 last_exc = exc
+                if _is_socket_blocked_error(exc):
+                    _mark_socket_blocked(exc)
+                    raise GroqError(
+                        "Groq bloqueado por el firewall/antivirus del sistema "
+                        f"({exc}); deshabilitado hasta reiniciar la app"
+                    ) from exc
                 kind = classify_error(exc)
                 if kind != SATURATION:
                     saturated_only = False
@@ -307,4 +356,7 @@ def generate(
 
 
 def is_configured() -> bool:
-    return pool.is_configured()
+    # Un proveedor cuyo socket bloquea el SO no esta "configurado" para nadie que
+    # arme la cadena de respaldo: dejarlo adentro solo cuesta un intento muerto
+    # por turno antes de llegar a NVIDIA.
+    return pool.is_configured() and not _socket_blocked

@@ -276,6 +276,7 @@ Su contenido y largo los fijan las reglas de salida de más abajo. Tampoco cambi
 
 Reglas específicas de salida:
 {response_rules}
+{intent_rule}
 En modos de examen o resolución, respondé SOLO la pregunta o consigna concreta.
 Ignorá felicitaciones, muletillas, respuestas del alumno y comentarios sin una consigna.
 Si no hay una pregunta clara o el texto es ininteligible, devolvé únicamente "R:" sin contenido.
@@ -288,6 +289,47 @@ referencias explícitas, nunca reemplazar su tema por un tema anterior. Si la pr
 nombra "diagrama de actividad", la respuesta debe tratar ese concepto aunque el historial hable de otro.
 Priorizá frases fáciles de pronunciar.
 """
+
+# `_infer_question_intent` ya clasifica la OPERACIÓN que pidió el examinador.
+# Sin esto la clasificación moría en el dataclass: el coach contestaba con una
+# definición cuando le habían pedido comparar, que es la queja más frecuente en
+# un oral. Cada regla fija la FORMA de la línea R, no su tema.
+_INTENT_RULES = {
+    "compare": (
+        "La consigna pide CONTRASTAR. R tiene que oponer los dos elementos en la misma "
+        "frase (uno hace esto, el otro hace aquello), no definir cada uno por separado. "
+        "El criterio de comparación va explícito."
+    ),
+    "define": (
+        "La consigna pide DEFINIR. R arranca con la definición cerrada del término, "
+        "sin rodeos ni contexto previo. Los ejemplos van en A."
+    ),
+    "explain": (
+        "La consigna pide EXPLICAR cómo o para qué funciona algo. R describe el "
+        "mecanismo o el propósito, no solo el nombre del concepto."
+    ),
+    "enumerate": (
+        "La consigna pide ENUMERAR. R es la lista de elementos dicha de corrido, no una "
+        "definición del conjunto. Si el examinador pidió una cantidad, dá esa cantidad."
+    ),
+    "justify": (
+        "La consigna pide JUSTIFICAR. R da el motivo, no la descripción. Empezá por la "
+        "razón y recién después el detalle."
+    ),
+    "exemplify": (
+        "La consigna pide un EJEMPLO. R es el ejemplo concreto, no la teoría que lo "
+        "sostiene. La teoría va en A."
+    ),
+    "solve": (
+        "La consigna pide RESOLVER. R trae el resultado, dicho como se pronuncia. El "
+        "procedimiento paso a paso va en A."
+    ),
+}
+
+
+def intent_rule(intent: str) -> str:
+    """Shape rule for a classified question intent ('' when there is none)."""
+    return _INTENT_RULES.get(intent or "", "")
 
 
 @dataclass
@@ -688,12 +730,39 @@ class QuestionInterpretation:
     normalized: str = ""
     confidence: float = 0.0
     reasons: tuple[str, ...] = ()
+    intent: str = ""
 
 
 def _canonical_question(text: str) -> str:
     clean = re.sub(r"\s+", " ", text).strip().rstrip(".!?").strip()
     clean = clean.lstrip("¿").strip()
+    clean = re.sub(
+        r"^(qué\s+diferencia(?:\s+(?!hay\b|existe\b|entre\b)[\wáéíóúñ-]+)?)\s+entre\b",
+        r"\1 hay entre",
+        clean,
+        flags=re.I,
+    )
+    if re.match(r"^diferencia\s+entre\b", clean, re.I):
+        clean = f"Cuál es la {clean}"
     return f"¿{clean}?" if clean else ""
+
+
+def _infer_question_intent(text: str) -> str:
+    """Classify the examiner's requested operation, independent of phrasing."""
+    clean = (text or "").casefold()
+    intents = (
+        ("compare", r"\b(?:diferenci|distingu|compar|diferencia|versus)"),
+        ("define", r"\b(?:defin|qu[eé]\s+es|significa)"),
+        ("explain", r"\b(?:explic|describ|funci[oó]n|c[oó]mo|para\s+qu[eé])"),
+        ("enumerate", r"\b(?:enumer|nombr|mencion|elementos|tipos)"),
+        ("justify", r"\b(?:justific|por\s+qu[eé]|fundament)"),
+        ("exemplify", r"\b(?:ejemplific|ejemplo)"),
+        ("solve", r"\b(?:resolv|calcul|demostr|plante)"),
+    )
+    for intent, pattern in intents:
+        if re.search(pattern, clean):
+            return intent
+    return "question"
 
 
 def interpret_question_candidate(text: str) -> QuestionInterpretation:
@@ -715,6 +784,11 @@ def interpret_question_candidate(text: str) -> QuestionInterpretation:
     if repaired != normalized:
         normalized = repaired
         reasons.append("uso_y")
+
+    repaired = re.sub(r"\bcas\s+del\s+uso\b", "caso de uso", normalized, flags=re.I)
+    if repaired != normalized:
+        normalized = repaired
+        reasons.append("caso_de_uso")
 
     if re.search(r"\b(?:nodos?|join)\b", normalized, re.I):
         repaired = re.sub(r"\bfor\b(?=\s+o\s+join\b)", "fork", normalized, flags=re.I)
@@ -738,6 +812,57 @@ def interpret_question_candidate(text: str) -> QuestionInterpretation:
             normalized = repaired
             reasons.append("interrogativo")
 
+    multipart = re.match(
+        r"^(en\s+un\s+caso\s+de\s+uso\s+de\s+[^.?!]+)\.\s*"
+        r"([^.?!]{3,100}?\s+incluir[ií]as)\.\s*"
+        r"(considerando\s+[^.?!]+)[.?!]?$",
+        normalized,
+        re.I,
+    )
+    if multipart:
+        context, request, constraint = multipart.groups()
+        normalized = f"¿{context}, qué {request}, {constraint}?"
+        reasons.append("contexto_consigna_restriccion")
+
+    elliptical = _strip_leading_discourse(normalized).strip().rstrip(".!?").strip()
+    if len(elliptical) <= 120 and not re.search(
+        r"\b(?:permite|representa|muestra|modela|qued[oó]|quedaron|fue|fueron|"
+        r"vimos|analizamos|explicamos|estuvimos|usamos|sirve|son|es)\b",
+        elliptical,
+        re.I,
+    ):
+        expansions = (
+            (r"^(?:la\s+)?comparaci[oó]n(?:\s+entre)?\s+(.+?)\s+y\s+(.+)$", "¿Cómo se comparan {0} y {1}?"),
+            (r"^(.+?)\s+versus\s+(.+)$", "¿Cuál es la diferencia entre {0} y {1}?"),
+            (r"^(?:la\s+)?funci[oó]n\s+(de(?:l|\s+la)?\s+.+)$", "¿Cuál es la función {0}?"),
+            (r"^(?:los\s+)?elementos\s+(de(?:l|\s+la)?\s+.+)$", "¿Cuáles son los elementos {0}?"),
+            (r"^(?:las\s+)?(ventajas|desventajas)\s+(de(?:l|\s+la)?\s+.+)$", "¿Cuáles son las {0} {1}?"),
+            (r"^(?:un\s+)?ejemplo\s+(de(?:l|\s+la)?\s+.+)$", "¿Podés dar un ejemplo {0}?"),
+            (r"^(?:la\s+)?relaci[oó]n\s+(entre\s+.+)$", "¿Qué relación hay {0}?"),
+        )
+        for pattern, template in expansions:
+            match = re.match(pattern, elliptical, re.I)
+            if match:
+                normalized = template.format(*match.groups())
+                for prefix in (
+                    "¿Cómo se comparan ",
+                    "¿Cuál es la diferencia entre ",
+                ):
+                    if normalized.startswith(prefix) and len(normalized) > len(prefix):
+                        normalized = (
+                            prefix
+                            + normalized[len(prefix)].lower()
+                            + normalized[len(prefix) + 1 :]
+                        )
+                        break
+                normalized = re.sub(
+                    r"(?<=las\s)(?:Ventajas|Desventajas)",
+                    lambda value: value.group(0).lower(),
+                    normalized,
+                )
+                reasons.append("consigna_eliptica")
+                break
+
     candidate = extract_question_candidate(normalized)
     if not candidate:
         return QuestionInterpretation(normalized=normalized, reasons=tuple(reasons))
@@ -748,6 +873,7 @@ def interpret_question_candidate(text: str) -> QuestionInterpretation:
         normalized=normalized,
         confidence=confidence,
         reasons=tuple(reasons) or ("directa",),
+        intent=_infer_question_intent(candidate),
     )
 
 
@@ -1102,6 +1228,7 @@ def coach_assist(
     mode: str = DEFAULT_ASSIST_MODE,
     answer_lang: str = DEFAULT_ANSWER_LANG,
     on_partial: Callable[[InterviewAssist], None] | None = None,
+    intent: str = "",
 ) -> InterviewAssist | None:
     """Streaming coach call. Tries keys + model fallbacks.
 
@@ -1133,6 +1260,7 @@ def coach_assist(
             if mode == "prueba_oral"
             else _DEFAULT_RESPONSE_RULES
         ),
+        intent_rule=intent_rule(intent),
     )
     if mode in ORAL_ASSIST_MODES and _looks_like_unsupported_definition(
         context, utterance
@@ -1282,6 +1410,7 @@ class InterviewLiveSession:
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._stop = threading.Event()
+        self._paused = threading.Event()
         self._utterance_buf = ""
         self._orphan_fragments: list[tuple[str, float]] = []
         self._last_transcript_ts = 0.0
@@ -1294,8 +1423,15 @@ class InterviewLiveSession:
         self._coach_lock = asyncio.Lock()
         self._coach_task: asyncio.Task | None = None
         self._pending_utterance: str | None = None
+        self._pending_intent: str = ""
         self._history: list[str] = []
         self._history_lock = threading.Lock()
+        # Gemini Live ends a session on its own duration limit. It warns first
+        # with a `go_away` message and hands out resumption handles along the
+        # way; keeping both is what lets the next connect continue the same
+        # conversation instead of starting cold on a worse model.
+        self._resume_handle: str | None = None
+        self._reconnect_requested = False
 
     def add_candidate_turn(self, text: str) -> None:
         """Add microphone speech to context without mixing speaker roles."""
@@ -1315,6 +1451,7 @@ class InterviewLiveSession:
                 "Configurala en .env (podés sumar KEY2 / KEY3)."
             )
         self._stop.clear()
+        self._paused.clear()
         self._thread = threading.Thread(target=self._thread_main, daemon=True)
         self._thread.start()
 
@@ -1333,11 +1470,35 @@ class InterviewLiveSession:
             self._thread.join(timeout=8)
             self._thread = None
 
+    def pause(self) -> None:
+        """Pause audio intake and discard any half-spoken stale question."""
+        self._paused.set()
+        loop = self._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(self._clear_partial_utterance)
+        else:
+            self._clear_partial_utterance()
+
+    def resume(self) -> None:
+        """Resume with a clean turn boundary."""
+        self._paused.clear()
+        loop = self._loop
+        if loop and loop.is_running():
+            loop.call_soon_threadsafe(self._reset_resume_clock)
+
+    def _clear_partial_utterance(self) -> None:
+        self._utterance_buf = ""
+        self._orphan_fragments.clear()
+        self._utterance_start_ts = 0.0
+
+    def _reset_resume_clock(self) -> None:
+        self._last_transcript_ts = self._loop_time()
+
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
 
     def send_audio(self, pcm: bytes) -> None:
-        if not pcm or self._stop.is_set():
+        if not pcm or self._stop.is_set() or self._paused.is_set():
             return
         loop = self._loop
         q = self._audio_q
@@ -1375,12 +1536,24 @@ class InterviewLiveSession:
                 record("live.sesion", exc, modo=self._mode, user_msg=f"Error Live: {exc}")
             )
         finally:
+            # Whatever survived the last session (a coach call kept alive across
+            # a reconnect) has to be drained here: closing the loop with a task
+            # still pending is what produced "Task was destroyed but it is
+            # pending!" in the journal.
+            try:
+                task = self._coach_task
+                if task is not None and not task.done():
+                    task.cancel()
+                    loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+            except Exception:
+                pass
             try:
                 loop.close()
             except Exception:
                 pass
             self._loop = None
             self._audio_q = None
+            self._coach_task = None
 
     async def _run(self) -> None:
         try:
@@ -1408,26 +1581,61 @@ class InterviewLiveSession:
             if self._stop.is_set():
                 return
             self._api_key = key
-            for model in models:
+            model_index = 0
+            reconnects = 0
+            # A handle belongs to the session it came from: replaying it on a
+            # different key would only get it rejected.
+            self._resume_handle = None
+            while model_index < len(models):
+                model = models[model_index]
                 if self._stop.is_set():
                     return
                 try:
                     self._on_status(
-                        f"Conectando Live ({gemini_keys.pool.current_label()})..."
+                        f"Reconectando Live ({gemini_keys.pool.current_label()})..."
+                        if reconnects
+                        else f"Conectando Live ({gemini_keys.pool.current_label()})..."
                     )
                     client = genai.Client(api_key=key)
-                    config = types.LiveConnectConfig(
-                        response_modalities=[types.Modality.AUDIO],
-                        system_instruction=_LIVE_SYSTEM,
-                        input_audio_transcription=types.AudioTranscriptionConfig(),
-                        output_audio_transcription=types.AudioTranscriptionConfig(),
-                    )
+                    config = self._live_config(types)
+                    self._reconnect_requested = False
+                    session_started = time.monotonic()
                     async with client.aio.live.connect(model=model, config=config) as session:
                         self._on_status(_session_status(self._mode))
-                        logger.info("Interview Live connected model=%s", model)
+                        logger.info(
+                            "Interview Live connected model=%s reconnect=%d resumed=%s",
+                            model,
+                            reconnects,
+                            bool(self._resume_handle),
+                        )
                         self._audio_q = asyncio.Queue(maxsize=80)
                         self._utterance_buf = ""
                         await self._session_loop(session, types)
+                    session_seconds = time.monotonic() - session_started
+                    # The counter exists to stop a flapping reconnect loop, not
+                    # to put a ceiling on a long exam. A session that actually
+                    # ran clears it, so a two-hour oral rolls over as many times
+                    # as the server wants without ever changing model.
+                    if session_seconds >= self._HEALTHY_SESSION_SECONDS:
+                        reconnects = 0
+                    # A session that ends because the server said `go_away` is
+                    # not a failure and says nothing about the model: reconnect
+                    # to the SAME one, carrying the resumption handle. Falling
+                    # to the next entry of LIVE_MODELS was what degraded a long
+                    # oral exam onto the slower native-audio models after ~10
+                    # minutes and killed it once the list ran out.
+                    if self._reconnect_requested and not self._stop.is_set():
+                        reconnects += 1
+                        if reconnects <= self._MAX_RECONNECTS:
+                            continue
+                        logger.warning(
+                            "Live reconnect limit reached on %s; trying next model",
+                            model,
+                        )
+                        reconnects = 0
+                        self._resume_handle = None
+                        model_index += 1
+                        continue
                     return
                 except Exception as exc:
                     last_exc = exc
@@ -1438,13 +1646,29 @@ class InterviewLiveSession:
                             f"Cuota agotada ({gemini_keys.pool.current_label()}), rotando..."
                         )
                         break
+                    # 1008 is how the duration limit surfaces when the GoAway
+                    # warning was missed. Retry the same model with the handle
+                    # instead of blaming it.
+                    if "1008" in detail and reconnects < self._MAX_RECONNECTS:
+                        reconnects += 1
+                        logger.warning(
+                            "Live session closed by server (%s); reconnecting to %s",
+                            exc,
+                            model,
+                        )
+                        continue
                     if "not found" in detail or "not supported" in detail or "1007" in detail or "1008" in detail:
                         logger.warning("Live model unavailable %s: %s", model, exc)
+                        reconnects = 0
+                        self._resume_handle = None
+                        model_index += 1
                         continue
                     logger.exception("Live connect failed: %s", exc)
                     if "api key" in detail or "401" in detail or "403" in detail or "permission" in detail:
                         gemini_keys.pool.mark_exhausted(key)
                         break
+                    reconnects = 0
+                    model_index += 1
                     continue
 
         msg = "No se pudo conectar a Gemini Live con las keys/modelos disponibles."
@@ -1452,6 +1676,56 @@ class InterviewLiveSession:
             msg = f"{msg} ({last_exc})"
         self._on_status(msg)
         raise InterviewLiveError(msg) from last_exc
+
+    # Enough to ride out a long oral exam: the server hands out a new session
+    # roughly every 10 minutes, so five reconnects cover about an hour before
+    # the model is treated as the problem.
+    _MAX_RECONNECTS = 5
+    # A session that lasted this long was working: whatever ended it was the
+    # server's schedule, not a broken model.
+    _HEALTHY_SESSION_SECONDS = 60.0
+    # Compression keeps the OTHER limit away — the one that fires when the
+    # context window fills, which arrives sooner than it looks because the
+    # session still generates audio replies nobody plays.
+    _COMPRESSION_TRIGGER_TOKENS = 16000
+    _COMPRESSION_TARGET_TOKENS = 8000
+
+    def _live_config(self, types):
+        """Build the connect config, carrying any resumption handle we hold."""
+        return types.LiveConnectConfig(
+            response_modalities=[types.Modality.AUDIO],
+            system_instruction=_LIVE_SYSTEM,
+            input_audio_transcription=types.AudioTranscriptionConfig(),
+            output_audio_transcription=types.AudioTranscriptionConfig(),
+            session_resumption=types.SessionResumptionConfig(
+                handle=self._resume_handle
+            ),
+            context_window_compression=types.ContextWindowCompressionConfig(
+                trigger_tokens=self._COMPRESSION_TRIGGER_TOKENS,
+                sliding_window=types.SlidingWindow(
+                    target_tokens=self._COMPRESSION_TARGET_TOKENS
+                ),
+            ),
+        )
+
+    def _stop_session_tasks(self) -> None:
+        """End the current session cleanly, without closing the whole run.
+
+        The sentinel already understood by `_send_loop` is the least violent
+        way out: it completes that task, which is what `_session_loop` waits
+        on, so nothing has to be killed mid-await.
+        """
+        q = self._audio_q
+        if q is None:
+            return
+        try:
+            q.put_nowait(None)
+        except asyncio.QueueFull:
+            try:
+                q.get_nowait()
+                q.put_nowait(None)
+            except Exception:
+                pass
 
     async def _session_loop(self, session, types) -> None:
         assert self._audio_q is not None
@@ -1467,14 +1741,27 @@ class InterviewLiveSession:
                 t.cancel()
             for t in done:
                 exc = t.exception() if not t.cancelled() else None
-                if exc and not self._stop.is_set():
+                # A server-side GoAway ends the session on purpose. Raising here
+                # would send the caller down the "this model is broken" path.
+                if exc and not self._stop.is_set() and not self._reconnect_requested:
                     raise exc
         finally:
-            send_task.cancel()
-            recv_task.cancel()
-            watch_task.cancel()
-            if self._coach_task and not self._coach_task.done():
+            tasks = (send_task, recv_task, watch_task)
+            for t in tasks:
+                t.cancel()
+            # The coach runs on a separate HTTP call, not on this websocket. A
+            # session rollover every ~10 minutes must not throw away an answer
+            # the user is in the middle of reading; only a real stop does.
+            if (
+                self._coach_task
+                and not self._coach_task.done()
+                and not self._reconnect_requested
+            ):
                 self._coach_task.cancel()
+            # Cancelling without awaiting is what filled the journal with
+            # "Task was destroyed but it is pending!": the loop closed before
+            # the tasks got a chance to process their own cancellation.
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     # Gemini's turn_complete/generation_complete fire on the MODEL's turn, which
     # may stay silent per _LIVE_SYSTEM and never signal — so the interviewer's
@@ -1503,7 +1790,7 @@ class InterviewLiveSession:
             # Polled faster than before: a 300 ms tick would add up to a third
             # of the new 1 s threshold as pure rounding error.
             await asyncio.sleep(0.10)
-            if not self._utterance_buf:
+            if self._paused.is_set() or not self._utterance_buf:
                 continue
             loop = asyncio.get_event_loop()
             if loop.time() - self._last_transcript_ts >= self._idle_threshold():
@@ -1525,13 +1812,31 @@ class InterviewLiveSession:
                 raise
 
     async def _recv_loop(self, session) -> None:
-        while not self._stop.is_set():
-            async for msg in session.receive():
-                if self._stop.is_set():
-                    return
-                await self._handle_message(msg)
+        # One pass only. The generator ending means the server closed the
+        # socket; looping back would call receive() on a dead session and hide
+        # the close behind an exception with no useful shape.
+        async for msg in session.receive():
+            if self._stop.is_set():
+                return
+            await self._handle_message(msg)
 
     async def _handle_message(self, msg) -> None:
+        # Read these BEFORE the server_content early-return: they arrive on
+        # messages that carry no content at all, which is exactly why the
+        # duration limit went unnoticed until the socket died with 1008.
+        resumption = getattr(msg, "session_resumption_update", None)
+        if resumption is not None and getattr(resumption, "resumable", False):
+            handle = getattr(resumption, "new_handle", None)
+            if handle:
+                self._resume_handle = handle
+
+        if getattr(msg, "go_away", None) is not None:
+            time_left = getattr(msg.go_away, "time_left", None)
+            logger.info("Live GoAway received (time_left=%s); reconnecting", time_left)
+            self._reconnect_requested = True
+            self._stop_session_tasks()
+            return
+
         sc = getattr(msg, "server_content", None)
         if sc is None:
             return
@@ -1569,6 +1874,7 @@ class InterviewLiveSession:
         speech_start, speech_end = self._utterance_start_ts, self._last_transcript_ts
         if not buf:
             return
+        intent = ""
         if self._mode in ORAL_ASSIST_MODES:
             interpretation = self._interpret_or_hold(buf, now)
             if not interpretation:
@@ -1583,6 +1889,11 @@ class InterviewLiveSession:
                     chars=len(buf),
                 )
                 return
+            label = (
+                "Pregunta interpretada"
+                if interpretation.normalized != buf
+                else "Pregunta detectada"
+            )
             if interpretation.normalized != buf:
                 logger.info(
                     "STT question interpreted confidence=%.2f reasons=%s raw=%s interpreted=%s",
@@ -1591,14 +1902,15 @@ class InterviewLiveSession:
                     buf[:160],
                     interpretation.question[:160],
                 )
-                self._on_assist(
-                    InterviewAssist(
-                        pregunta_es=f"Pregunta interpretada: {interpretation.question}",
-                        respuestas=[],
-                        partial=True,
-                    )
+            self._on_assist(
+                InterviewAssist(
+                    pregunta_es=f"{label}: {interpretation.question}",
+                    respuestas=[],
+                    partial=True,
                 )
+            )
             buf = interpretation.question
+            intent = interpretation.intent
         if not self._api_key:
             return
         # El turno DESCARTADO se loguea arriba, pero el ACEPTADO no se registraba
@@ -1632,8 +1944,9 @@ class InterviewLiveSession:
         # running, stash the newest utterance; _run_coach drains it.
         if self._coach_task and not self._coach_task.done():
             self._pending_utterance = buf
+            self._pending_intent = intent
         else:
-            self._coach_task = asyncio.create_task(self._run_coach(buf))
+            self._coach_task = asyncio.create_task(self._run_coach(buf, intent))
 
     def _interpret_or_hold(
         self, fragment: str, now: float | None = None
@@ -1648,7 +1961,7 @@ class InterviewLiveSession:
         pieces = [item[0] for item in self._orphan_fragments] + [fragment.strip()]
         combined = " ".join(part for part in pieces if part).strip()
         interpretation = interpret_question_candidate(combined)
-        if interpretation.question and interpretation.confidence >= 0.85:
+        if interpretation.question and interpretation.confidence >= 0.82:
             self._orphan_fragments.clear()
             return interpretation
 
@@ -1663,15 +1976,22 @@ class InterviewLiveSession:
                 self._orphan_fragments.pop(0)
         return None
 
-    async def _run_coach(self, utterance: str) -> None:
+    async def _run_coach(self, utterance: str, intent: str = "") -> None:
         async with self._coach_lock:
+            attempts = 0
             while True:
                 if self._stop.is_set() or not self._api_key:
                     return
-                await self._coach_once(utterance)
+                attempts += 1
+                delivered = await self._coach_once(utterance, intent)
+                if not delivered and attempts < 2 and self._pending_utterance is None:
+                    self._on_status("Pregunta sin respuesta; reintentando una vez...")
+                    continue
                 if self._pending_utterance is None:
                     return
                 utterance, self._pending_utterance = self._pending_utterance, None
+                intent, self._pending_intent = self._pending_intent, ""
+                attempts = 0
 
     def _emit_assist(self, assist: InterviewAssist) -> None:
         """Push an assist to the UI and time the first one that reaches it.
@@ -1695,7 +2015,7 @@ class InterviewLiveSession:
         loop = self._loop
         return loop.time() if loop is not None else time.perf_counter()
 
-    async def _coach_once(self, utterance: str) -> None:
+    async def _coach_once(self, utterance: str, intent: str = "") -> bool:
         self._on_status(
             "Resolviendo pregunta..."
             if self._mode == "resolver"
@@ -1715,6 +2035,7 @@ class InterviewLiveSession:
                 self._mode,
                 self._answer_lang,
                 self._emit_assist,
+                intent,
             )
             if assist:
                 self._emit_assist(assist)
@@ -1735,10 +2056,12 @@ class InterviewLiveSession:
             )
             if assist:
                 self._on_status(_session_status(self._mode, assist.provider))
+                return True
             else:
                 self._on_status(
                     "No se pudo generar una respuesta válida; intentá repetir la pregunta"
                 )
+                return False
         except CoachUnavailable as exc:
             # Already journaled with its traceback where it was raised; here it
             # only has to reach the screen so the user stops waiting.
@@ -1757,6 +2080,7 @@ class InterviewLiveSession:
                 exc,
             )
             self._on_status(str(exc))
+            return False
         except Exception as exc:
             elapsed_ms = (time.perf_counter() - start) * 1000.0
             logger.info("Coach turn failed after %.0f ms (mode=%s)", elapsed_ms, self._mode)
@@ -1781,3 +2105,4 @@ class InterviewLiveSession:
                         user_msg=f"Error coach: {exc}",
                     )
                 )
+            return False
