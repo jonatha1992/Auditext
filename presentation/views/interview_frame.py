@@ -1916,7 +1916,7 @@ class InterviewFrame(ctk.CTkFrame):
     def _drain_queues(self) -> None:
         while not self.status_queue.empty():
             status = self.status_queue.get_nowait()
-            if status.startswith("Resolviendo pregunta"):
+            if status.startswith(("Resolviendo pregunta", "Generando sugerencias")):
                 self._set_answer_loading(True)
             if not self._session_paused:
                 self._set_status(status)

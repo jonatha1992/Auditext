@@ -285,6 +285,14 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertFalse(self.frame._answer_loading)
         self.assertFalse(bool(self.frame.answer_loading_label.grid_info()))
 
+    def test_oral_generation_status_also_replaces_the_previous_answer(self):
+        self.frame.status_queue.put("Generando sugerencias...")
+
+        self.frame._drain_queues()
+
+        self.assertTrue(self.frame._answer_loading)
+        self.assertEqual(self.frame.reply_boxes[0]._reply_text, "")
+
     def test_interview_module_does_not_offer_resolver_or_oral_modes(self):
         interview = InterviewFrame(self.root)
         try:

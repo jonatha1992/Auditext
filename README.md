@@ -13,6 +13,7 @@ Incluye modo de captura en vivo (loopback), historial local, resumen con Gemini
 - ✅ **Transcripción offline** con Whisper modelo `small` en CPU (int8)
 - ✅ **Captura en vivo** de audio del sistema (loopback WASAPI)
 - ✅ **Módulo Entrevista** con captura separada del entrevistador y tu micrófono, contexto conversacional y coach de fluidez
+- ✅ **Resolver y examen oral** con interpretación de preguntas incompletas, consignas sin signos y errores habituales del reconocimiento de voz
 - ✅ **Resumen opcional** con Gemini (online, bajo demanda)
 - ✅ **Historial local** en SQLite con búsqueda y exportación
 - ✅ **Reproductor** de audio incorporado
@@ -47,6 +48,27 @@ GEMINI_MODEL=gemini-flash-latest
 
 `gemini-2.5-flash` ya no sirve: responde 404 "no longer available" con cualquier
 key. El pool lo filtra vía `RETIRED_MODELS`.
+
+## Asistencia oral
+
+El sistema conserva la transcripción original y reconstruye únicamente preguntas
+con intención académica suficiente. Reconoce preguntas directas, órdenes como
+`diferenciame` o `explicá`, y formas abreviadas como `comparación entre X e Y`.
+
+Flujo visible:
+
+1. La pregunta detectada o interpretada aparece arriba de la respuesta.
+2. La respuesta anterior se limpia y se muestra un indicador de generación.
+3. Si el proveedor devuelve una respuesta vacía, se realiza un solo reintento.
+4. Si la transcripción continúa siendo ambigua, se espera otro fragmento en lugar de inventar contenido.
+
+La espera para cerrar una intervención es adaptativa: aproximadamente 0,65 segundos
+para una pregunta terminada, 1,2 segundos para una consigna clara sin puntuación y
+hasta 4 segundos para texto ambiguo. Se pueden unir hasta dos fragmentos recientes
+durante 7 segundos.
+
+Al pausar se bloquea el ingreso de audio y se descartan fragmentos incompletos. Al
+reanudar comienza un turno limpio; una pregunta anterior no se mezcla con la nueva.
 
 ## 📁 Estructura
 

@@ -298,9 +298,13 @@ class Transcriber:
         """Temporarily discard captured audio without closing the live session."""
         if self.is_running():
             self._paused.set()
+            if self._live_session is not None:
+                self._live_session.pause()
 
     def resume(self) -> None:
         self._paused.clear()
+        if self._live_session is not None:
+            self._live_session.resume()
 
     def is_paused(self) -> bool:
         return self._paused.is_set()

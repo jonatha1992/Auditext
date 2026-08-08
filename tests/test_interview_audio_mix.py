@@ -1,6 +1,23 @@
 import numpy as np
+from unittest import mock
 
 from infrastructure.services.live_transcriber import Transcriber, mix_mono_tracks
+
+
+def test_pause_and_resume_are_forwarded_to_live_question_session():
+    import queue
+
+    worker = Transcriber(queue.Queue(), queue.Queue())
+    live = mock.Mock()
+    worker._live_session = live
+    worker._thread = mock.Mock()
+    worker._thread.is_alive.return_value = True
+
+    worker.pause()
+    worker.resume()
+
+    live.pause.assert_called_once_with()
+    live.resume.assert_called_once_with()
 
 
 def test_mix_mono_tracks_combines_both_sides():

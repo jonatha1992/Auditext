@@ -147,6 +147,27 @@ class TurnSeparatorTests(unittest.TestCase):
 
 
 class IdleThresholdTests(unittest.TestCase):
+    def test_detected_question_is_shown_before_the_answer_arrives(self):
+        import asyncio
+
+        assists: list[InterviewAssist] = []
+
+        async def run():
+            session = InterviewLiveSession(
+                context="",
+                on_transcript=lambda _t: None,
+                on_assist=assists.append,
+                on_status=lambda _s: None,
+                mode="examen_oral",
+            )
+            session._utterance_buf = "¿Qué diferencia fundamental entre clase y objeto?"
+            session._flush_utterance()
+
+        asyncio.run(run())
+        self.assertEqual(len(assists), 1)
+        self.assertIn("clase y objeto", assists[0].pregunta_es)
+        self.assertEqual(assists[0].respuestas, [])
+
     def _session(self) -> InterviewLiveSession:
         return InterviewLiveSession(
             context="",
@@ -208,6 +229,23 @@ class IdleThresholdTests(unittest.TestCase):
             InterviewLiveSession._FLUSH_IDLE_SECONDS,
         )
         self.assertLessEqual(InterviewLiveSession._FLUSH_FAST_SECONDS, 0.7)
+
+
+class DeliveryRecoveryTests(unittest.IsolatedAsyncioTestCase):
+    async def test_retries_once_when_question_was_not_delivered(self):
+        session = InterviewLiveSession(
+            context="",
+            on_transcript=lambda _t: None,
+            on_assist=lambda _a: None,
+            on_status=lambda _s: None,
+            mode="examen_oral",
+        )
+        session._api_key = "test-key"
+        session._coach_once = mock.AsyncMock(return_value=False)
+
+        await session._run_coach("¿Qué diferencia hay entre clase y objeto?")
+
+        self.assertEqual(session._coach_once.await_count, 2)
 
 
 class ParseAssistLinesTests(unittest.TestCase):

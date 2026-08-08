@@ -91,6 +91,83 @@ class GroqProviderTests(unittest.TestCase):
         self.assertLess(elapsed, 5.0)
 
 
+class BlockedSocketTests(unittest.TestCase):
+    """WinError 10013 is the OS refusing the socket, not a provider failure.
+
+    The journal collected 64 identical entries: no key fixes it and no retry
+    cures it, so it must cost one attempt per process, not two per coach turn.
+    """
+
+    _BLOCKED = groq_provider.GroqError(
+        "Groq conexión: <urlopen error [WinError 10013] Intento de acceso a un "
+        "socket no permitido por sus permisos de acceso>"
+    )
+
+    def setUp(self):
+        groq_provider.reset_socket_block()
+        self.addCleanup(groq_provider.reset_socket_block)
+
+    def test_first_block_stops_the_rotation_immediately(self):
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one", "gsk-two"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider.time, "sleep"),
+            mock.patch.object(
+                groq_provider, "_request", side_effect=self._BLOCKED
+            ) as request,
+        ):
+            with self.assertRaises(groq_provider.GroqError):
+                groq_provider.generate("pregunta")
+        # One attempt, not one per key: the second key faces the same firewall.
+        self.assertEqual(request.call_count, 1)
+        self.assertTrue(groq_provider.socket_is_blocked())
+
+    def test_later_calls_do_not_touch_the_network_at_all(self):
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider.time, "sleep"),
+            mock.patch.object(
+                groq_provider, "_request", side_effect=self._BLOCKED
+            ) as request,
+        ):
+            with self.assertRaises(groq_provider.GroqError):
+                groq_provider.generate("pregunta")
+            with self.assertRaises(groq_provider.GroqError):
+                groq_provider.generate("otra pregunta")
+        self.assertEqual(request.call_count, 1)
+
+    def test_blocked_provider_leaves_the_fallback_chain(self):
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider.time, "sleep"),
+            mock.patch.object(groq_provider, "_request", side_effect=self._BLOCKED),
+        ):
+            self.assertTrue(groq_provider.is_configured())
+            with self.assertRaises(groq_provider.GroqError):
+                groq_provider.generate("pregunta")
+            # NVIDIA must be reached directly from now on.
+            self.assertFalse(groq_provider.is_configured())
+
+    def test_ordinary_failures_still_rotate(self):
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one", "gsk-two"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider.time, "sleep"),
+            mock.patch.object(
+                groq_provider,
+                "_request",
+                side_effect=[
+                    groq_provider.GroqError("Groq HTTP 429 rate limit"),
+                    "respuesta",
+                ],
+            ),
+        ):
+            self.assertEqual(groq_provider.generate("pregunta"), "respuesta")
+        self.assertFalse(groq_provider.socket_is_blocked())
+
+
 class FallbackChainTests(unittest.TestCase):
     """Groq leads the chain: it fails for reasons unrelated to NVIDIA's 503s."""
 

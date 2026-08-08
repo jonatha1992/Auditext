@@ -51,15 +51,22 @@ async def try_connect() -> bool:
 
     models = [m for m in interview_live.LIVE_MODELS if m]
     print("models_try=", models)
+    # Build the config the app actually uses. A hand-rolled copy here would keep
+    # passing while the real one is rejected — which is exactly the failure this
+    # script exists to catch, now that the config carries session_resumption and
+    # context_window_compression.
+    probe = interview_live.InterviewLiveSession(
+        context="smoke",
+        on_transcript=lambda _t: None,
+        on_assist=lambda _a: None,
+        on_status=lambda _s: None,
+        mode="examen_oral",
+    )
     last = None
     for model in models:
         try:
             client = genai.Client(api_key=key)
-            config = types.LiveConnectConfig(
-                response_modalities=[types.Modality.AUDIO],
-                system_instruction="Stay silent. Listen only.",
-                input_audio_transcription=types.AudioTranscriptionConfig(),
-            )
+            config = probe._live_config(types)
             async with client.aio.live.connect(model=model, config=config) as session:
                 import numpy as np
 

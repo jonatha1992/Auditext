@@ -90,6 +90,29 @@ el mismo modelo sin el campo antes de descartarlo (`_no_thinking_models`).
 acepta: medido 4.3 s end-to-end contra 6.7 s de `gemini-3.5-flash-lite`, que
 tiene que pensar antes de contestar.
 
+### Sesión Live: el corte a los ~10 minutos (verificado 2026-08-07)
+
+Gemini Live termina la sesión por **límite de duración**, no por error. Avisa
+antes con un mensaje `go_away` y reparte handles en `session_resumption_update`.
+Ignorar los dos costaba esto, medido en `logs/error_log.txt`:
+
+```
+19:47:00  connected model=gemini-3.1-flash-live-preview
+19:56:52  1008 ... "failed to close the connection after receiving a GoAway"
+19:56:53  connected model=gemini-2.5-flash-native-audio-latest   <- degradado
+```
+
+9 min 52 s de vida útil, y el `1008` clasificado como "modelo caído" hacía bajar
+por `LIVE_MODELS` hasta agotarla. Ese es el "empieza bien y después falla".
+
+- `_handle_message` lee `go_away` y `session_resumption_update` **antes** del
+  early-return de `server_content`: llegan en mensajes sin contenido.
+- Un `go_away` cierra la sesión con el centinela `None` del `_audio_q` y
+  `_run` reconecta **al mismo modelo** con el handle. `1008` ya no descarta nada.
+- `_MAX_RECONNECTS` frena un reconnect que rebota, no un examen largo: una sesión
+  que duró más de `_HEALTHY_SESSION_SECONDS` resetea el contador.
+- El handle se borra al cambiar de key o de modelo: pertenece a su sesión.
+
 Reglas que no se rompen:
 
 - **Todo proveedor va acotado dos veces**: timeout de socket por request (escala
