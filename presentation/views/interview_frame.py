@@ -19,7 +19,7 @@ import customtkinter as ctk
 import config
 from config import logger
 from core.domain.entities import TranscriptionRecord
-from infrastructure.services import interview_live, notebooklm_service, tts
+from infrastructure.services import interview_live, interview_simulation, notebooklm_service, tts
 from .app_dialog import ask_input, show_error, show_info, show_warning
 from infrastructure.services.live_transcriber import (
     DEFAULT_DIR,
@@ -56,13 +56,15 @@ MODE_LABELS = {
     "Entrevista laboral": "entrevista",
     "Práctica de idioma": "practica",
     "Conversación general": "general",
+    "Simulacro con IA": "simulacro",
     "Examen oral (respuestas completas)": "examen_oral",
-    "Práctica oral (solo ideas)": "prueba_oral",
+    "Práctica oral con profesor IA": "practica_oral",
     "Resolver preguntas": "resolver",
 }
 
-INTERVIEW_MODES = ("entrevista", "practica", "general")
-RESOLVER_MODES = ("resolver", "examen_oral", "prueba_oral")
+INTERVIEW_MODES = ("entrevista", "practica", "general", "simulacro")
+RESOLVER_MODES = ("resolver", "examen_oral")
+SIMULATION_MODES = frozenset({"simulacro", "practica_oral"})
 
 LANG_SETTING_KEY = "interview_answer_lang"
 LANG_LABELS = {
@@ -97,6 +99,13 @@ MODE_CONTEXT = {
         "show_cv": False,
         "default_lang": "en",
     },
+    "simulacro": {
+        "label": "🎯  PUESTO / CV / CONTEXTO",
+        "color": "#A78BFA",
+        "placeholder": "Describí el puesto, la empresa, tu experiencia y qué querés practicar.",
+        "show_cv": True,
+        "default_lang": "es",
+    },
     "examen_oral": {
         "label": "📚  PROGRAMA / TEMARIO / CRONOGRAMA",
         "color": "#F6AD55",
@@ -106,11 +115,13 @@ MODE_CONTEXT = {
         "file_title": "programa, temario o cronograma",
         "default_lang": "es",
     },
-    "prueba_oral": {
-        "label": "📝  TEMA DE LA PRÁCTICA ORAL",
+    "practica_oral": {
+        "label": "🧑‍🏫  TEMARIO PARA EL PROFESOR IA",
         "color": "#A78BFA",
-        "placeholder": "¿Sobre qué es la práctica oral? (tema, consigna, puntos a cubrir...).",
-        "show_cv": False,
+        "placeholder": "Pegá el temario, apuntes o conceptos que querés practicar oralmente.",
+        "show_cv": True,
+        "file_button": "📂  Cargar material…",
+        "file_title": "material para la práctica oral",
         "default_lang": "es",
     },
     "resolver": {
@@ -126,6 +137,25 @@ MODE_CONTEXT = {
 
 # Cualquiera de estos textos cuenta como "vacío" al iniciar la sesión.
 ALL_PLACEHOLDERS = {CONTEXT_PLACEHOLDER} | {c["placeholder"] for c in MODE_CONTEXT.values()}
+
+
+def _candidate_sample_rates(device: dict, target_rate: int) -> list[int]:
+    """Prefer the hardware rate, then fall back to the STT target rate."""
+    try:
+        default_rate = int(float(device.get("default_samplerate", 0)))
+    except (TypeError, ValueError):
+        default_rate = 0
+    return list(dict.fromkeys(rate for rate in (default_rate, target_rate) if rate > 0))
+
+
+def _resample_mono(audio: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+    mono = np.asarray(audio, dtype=np.float32)
+    if not mono.size or source_rate == target_rate:
+        return mono
+    output_size = max(1, round(len(mono) * target_rate / source_rate))
+    source_points = np.linspace(0.0, 1.0, len(mono), endpoint=False)
+    target_points = np.linspace(0.0, 1.0, output_size, endpoint=False)
+    return np.interp(target_points, source_points, mono).astype(np.float32)
 
 
 class CandidateListener:
@@ -243,9 +273,19 @@ class CandidateListener:
                     "sounddevice fallback for %s",
                     mic.name,
                 )
-                self._capture_with_sounddevice(
-                    mic.name, sample_rate, block, consume
-                )
+                try:
+                    self._capture_with_sounddevice(
+                        mic.name, sample_rate, block, consume
+                    )
+                except RuntimeError as exc:
+                    logger.warning(
+                        "sounddevice could not capture %s; using PyAudio: %s",
+                        mic.name,
+                        exc,
+                    )
+                    self._capture_with_pyaudio(
+                        mic.name, sample_rate, block, consume
+                    )
         except Exception as exc:
             logger.exception("Candidate microphone transcription failed: %s", exc)
             self._on_status(f"Error de micrófono: {exc}")
@@ -315,10 +355,12 @@ class CandidateListener:
         last_exc: Exception | None = None
 
         for device_index, device in candidates:
-            try:
+            for capture_rate in _candidate_sample_rates(device, sample_rate):
+              try:
+                capture_block = max(1, round(capture_rate * block / sample_rate))
                 with sd.InputStream(
-                    samplerate=sample_rate,
-                    blocksize=block,
+                    samplerate=capture_rate,
+                    blocksize=capture_block,
                     device=device_index,
                     channels=1,
                     dtype="float32",
@@ -328,14 +370,16 @@ class CandidateListener:
                         f"{str(device['name'])[:28]}"
                     )
                     logger.info(
-                        "Candidate microphone fallback device=%s index=%s",
+                        "Candidate microphone fallback device=%s index=%s capture_rate=%s target_rate=%s",
                         device["name"],
                         device_index,
+                        capture_rate,
+                        sample_rate,
                     )
                     exact_zero_blocks = 0
                     while not self._stop.is_set():
                         started = time.monotonic()
-                        data, overflowed = stream.read(block)
+                        data, overflowed = stream.read(capture_block)
                         if overflowed:
                             logger.warning(
                                 "Candidate microphone input overflow"
@@ -349,28 +393,100 @@ class CandidateListener:
                                 )
                         else:
                             exact_zero_blocks = 0
-                        consume(mono)
+                        consume(_resample_mono(mono, capture_rate, sample_rate))
                         # Some Windows host/device combinations return an empty
                         # block immediately instead of blocking for its audio
                         # duration. Pace that broken path so it cannot spin at
                         # hundreds of iterations per second and starve the Live
                         # session after the first question.
                         elapsed = time.monotonic() - started
-                        expected = block / float(sample_rate)
+                        expected = capture_block / float(capture_rate)
                         if elapsed < expected:
                             self._stop.wait(expected - elapsed)
                 return
-            except Exception as exc:
+              except Exception as exc:
                 last_exc = exc
                 logger.warning(
-                    "Alternative microphone device %s failed: %s",
+                    "Alternative microphone device %s at %s Hz failed: %s",
                     device.get("name"),
+                    capture_rate,
                     exc,
                 )
         raise RuntimeError(
             "No se pudo abrir el micrófono con el motor alternativo: "
             f"{last_exc or 'sin dispositivos disponibles'}"
         )
+
+    def _capture_with_pyaudio(
+        self,
+        microphone_name: str,
+        sample_rate: int,
+        block: int,
+        consume,
+    ) -> None:
+        """Last-resort Windows capture for endpoints returning zeroed WASAPI audio."""
+        try:
+            import pyaudio
+        except ImportError as exc:
+            raise RuntimeError("Falta PyAudio para capturar este micrófono.") from exc
+
+        engine = pyaudio.PyAudio()
+        stream = None
+        try:
+            devices = []
+            wanted = microphone_name.casefold()
+            wanted_tokens = {
+                token for token in re.findall(r"[a-z0-9]+", wanted)
+                if len(token) >= 4 and token not in {"microfono", "microphone"}
+            }
+            for index in range(engine.get_device_count()):
+                device = engine.get_device_info_by_index(index)
+                if int(device.get("maxInputChannels", 0)) <= 0:
+                    continue
+                name = str(device.get("name", ""))
+                score = len(wanted_tokens & set(re.findall(r"[a-z0-9]+", name.casefold())))
+                devices.append((score, index, device))
+            if not devices:
+                raise RuntimeError("PyAudio no encontró dispositivos de entrada.")
+            devices.sort(key=lambda item: item[0], reverse=True)
+            last_exc = None
+            for _score, device_index, device in devices:
+                for capture_rate in _candidate_sample_rates(
+                    {"default_samplerate": device.get("defaultSampleRate")},
+                    sample_rate,
+                ):
+                    try:
+                        capture_block = max(1, round(capture_rate * block / sample_rate))
+                        stream = engine.open(
+                            format=pyaudio.paInt16,
+                            channels=1,
+                            rate=capture_rate,
+                            input=True,
+                            input_device_index=device_index,
+                            frames_per_buffer=capture_block,
+                        )
+                        self._on_status(
+                            f"Micrófono activo: {str(device.get('name', ''))[:32]}"
+                        )
+                        logger.info(
+                            "Candidate PyAudio device=%s index=%s capture_rate=%s",
+                            device.get("name"), device_index, capture_rate,
+                        )
+                        while not self._stop.is_set():
+                            raw = stream.read(capture_block, exception_on_overflow=False)
+                            mono = np.frombuffer(raw, dtype=np.int16).astype(np.float32) / 32768.0
+                            consume(_resample_mono(mono, capture_rate, sample_rate))
+                        return
+                    except Exception as exc:
+                        last_exc = exc
+                        if stream is not None:
+                            stream.close()
+                            stream = None
+            raise RuntimeError(f"PyAudio no pudo abrir el micrófono: {last_exc}")
+        finally:
+            if stream is not None:
+                stream.close()
+            engine.terminate()
 
 
 class InterviewFrame(ctk.CTkFrame):
@@ -402,6 +518,10 @@ class InterviewFrame(ctk.CTkFrame):
         self._session_ended = False
         self._session_paused = False
         self._mic_error_shown = False
+        self._simulation_session = None
+        self._simulation_answer_parts: list[str] = []
+        self._simulation_busy = False
+        self._simulation_current_question = ""
         self._build_header()
         self._build_preparation()
         self._build_active()
@@ -413,14 +533,16 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _build_header(self) -> None:
         resolver = self._fixed_mode == "resolver"
+        practice = self._fixed_mode == "practica_oral"
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill=tk.X, padx=24, pady=(20, 8))
-        ctk.CTkLabel(
+        self.header_title = ctk.CTkLabel(
             header,
-            text="🧠  Resolver preguntas" if resolver else "🎯  Entrevista",
+            text=("🧠  Resolver preguntas" if resolver else "🧑‍🏫  Práctica oral" if practice else "🎯  Entrevista"),
             font=("Segoe UI Semibold", 22),
             text_color=TEXT,
-        ).pack(side=tk.LEFT)
+        )
+        self.header_title.pack(side=tk.LEFT)
         self.status_label = ctk.CTkLabel(
             header, text="●  Preparación", font=("Segoe UI Semibold", 11),
             text_color=MUTED,
@@ -431,17 +553,15 @@ class InterviewFrame(ctk.CTkFrame):
             text=(
                 "Capturá la pregunta de una llamada o videoconferencia y obtené respuestas basadas en el tema."
                 if resolver
+                else "El profesor IA pregunta; vos respondés por micrófono y recibís una devolución."
+                if practice
                 else "Escuchá al entrevistador, seguí el hilo y respondé con mayor fluidez. El audio se guarda para reproducirlo en Historial."
             ),
             font=("Segoe UI", 12), text_color=MUTED,
         ).pack(anchor=tk.W, padx=24, pady=(0, 10))
 
     def _mode_labels(self) -> list[str]:
-        allowed = (
-            RESOLVER_MODES
-            if self._fixed_mode == "resolver"
-            else INTERVIEW_MODES
-        )
+        allowed = (("practica_oral",) if self._fixed_mode == "practica_oral" else RESOLVER_MODES if self._fixed_mode == "resolver" else INTERVIEW_MODES)
         return [
             label
             for mode in allowed
@@ -451,6 +571,7 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _build_preparation(self) -> None:
         resolver = self._fixed_mode == "resolver"
+        practice = self._fixed_mode == "practica_oral"
         # Scrollable: the prep form outgrew small windows and the start button
         # was getting clipped at the bottom.
         self.prep = ctk.CTkScrollableFrame(
@@ -458,7 +579,7 @@ class InterviewFrame(ctk.CTkFrame):
         )
         ctk.CTkLabel(
             self.prep,
-            text="①  Prepará el tema" if resolver else "①  Prepará la entrevista",
+            text="①  Prepará el tema" if resolver or practice else "①  Prepará la entrevista",
             font=("Segoe UI Semibold", 17), text_color=TEXT,
         ).pack(anchor=tk.W, padx=18, pady=(16, 2))
         ctk.CTkLabel(
@@ -466,6 +587,8 @@ class InterviewFrame(ctk.CTkFrame):
             text=(
                 "Pegá el material, elegí el audio de la llamada y el micrófono con el que vas a responder."
                 if resolver
+                else "Conectá NotebookLM, elegí la materia y el profesor IA preguntará desde ese material."
+                if practice
                 else "Elegí el modo, pegá tu CV y listo. Al terminar, la entrevista queda en Historial con audio para escuchar."
             ),
             font=("Segoe UI", 11), text_color=MUTED,
@@ -526,7 +649,7 @@ class InterviewFrame(ctk.CTkFrame):
             border_width=1, font=("Segoe UI", 11),
         )
         self.clear_context_button.pack(side=tk.RIGHT, padx=(0, 8))
-        self.use_written_context_var = tk.BooleanVar(value=True)
+        self.use_written_context_var = tk.BooleanVar(value=not practice)
         self.use_written_context_check = ctk.CTkCheckBox(
             context_header,
             text="Usar este contexto",
@@ -555,7 +678,7 @@ class InterviewFrame(ctk.CTkFrame):
         # Sincroniza etiqueta/placeholder/botón CV y carga el contexto del modo guardado.
         self._on_mode_change(self.mode_var.get())
 
-        if resolver:
+        if resolver or practice:
             notebook_card = ctk.CTkFrame(
                 self.prep, fg_color=PANEL_DARK, corner_radius=8
             )
@@ -570,7 +693,7 @@ class InterviewFrame(ctk.CTkFrame):
                 font=("Segoe UI Semibold", 9),
                 text_color="#63B3ED",
             ).pack(side=tk.LEFT)
-            self.use_notebook_var = tk.BooleanVar(value=False)
+            self.use_notebook_var = tk.BooleanVar(value=practice)
             self.use_notebook_check = ctk.CTkCheckBox(
                 notebook_header,
                 text="Usar NotebookLM",
@@ -636,7 +759,11 @@ class InterviewFrame(ctk.CTkFrame):
             # automatically when the user chooses a subject.
             self.notebook_status = ctk.CTkLabel(
                 notebook_card,
-                text="Podés seguir usando material local sin conectar NotebookLM.",
+                text=(
+                    "Conectá NotebookLM y elegí la materia para comenzar."
+                    if practice
+                    else "Podés seguir usando material local sin conectar NotebookLM."
+                ),
                 font=("Segoe UI", 10),
                 text_color=MUTED,
             )
@@ -664,7 +791,11 @@ class InterviewFrame(ctk.CTkFrame):
         self.source_label.grid(row=0, column=0, sticky="w", padx=(0, 8))
         self.mic_label = ctk.CTkLabel(
             sources,
-            text="🎤  TU RESPUESTA · MICRÓFONO" if resolver else "🎤  VOS · MICRÓFONO",
+            text=(
+                "🎤  TU RESPUESTA · MICRÓFONO"
+                if resolver or practice
+                else "🎤  VOS · MICRÓFONO"
+            ),
             font=("Segoe UI Semibold", 9), text_color=CANDIDATE,
         )
         self.mic_label.grid(row=0, column=1, sticky="w", padx=(8, 0))
@@ -734,6 +865,7 @@ class InterviewFrame(ctk.CTkFrame):
             font=("Segoe UI Semibold", 12),
         )
         self.start_button.pack(anchor=tk.E, padx=18, pady=(0, 4 if resolver else 18))
+        self._apply_simulation_mode_ui()
         if resolver:
             # Resolving without material is the one failure the user cannot see:
             # the coach answers from general knowledge and nothing says so. The
@@ -749,6 +881,7 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _build_active(self) -> None:
         resolver = self._fixed_mode == "resolver"
+        practice = self._fixed_mode == "practica_oral"
         self.active = ctk.CTkFrame(self, fg_color="transparent")
         top = ctk.CTkFrame(self.active, fg_color="transparent")
         top.pack(fill=tk.X, padx=24, pady=(0, 8))
@@ -760,6 +893,28 @@ class InterviewFrame(ctk.CTkFrame):
             hover_color="#20212D", command=self.toggle_pause,
         )
         self.pause_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.complete_answer_button = ctk.CTkButton(
+            top,
+            text="✓  Terminé mi respuesta",
+            width=170,
+            fg_color=ACCENT,
+            hover_color=ACCENT_HOVER,
+            command=self._submit_simulation_answer,
+        )
+        self.complete_answer_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.complete_answer_button.pack_forget()
+        self.hint_button = ctk.CTkButton(
+            top, text="💡 Dame una pista", width=140, fg_color=PANEL_DARK,
+            hover_color="#20212D", command=self._request_simulation_hint,
+        )
+        self.hint_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.hint_button.pack_forget()
+        self.read_question_button = ctk.CTkButton(
+            top, text="🔊 Leer pregunta", width=140, fg_color=PANEL_DARK,
+            hover_color="#20212D", command=self._speak_simulation_question,
+        )
+        self.read_question_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.read_question_button.pack_forget()
         ctk.CTkButton(
             top, text="⏹  Detener", width=110, fg_color="#B8324A", hover_color="#96283D",
             command=self.finish_session,
@@ -767,8 +922,20 @@ class InterviewFrame(ctk.CTkFrame):
 
         self.question_label = self._section(
             self.active,
-            "🗣  PREGUNTA DETECTADA" if resolver else "🗣  PREGUNTA EN ESPAÑOL",
-            "Esperando una pregunta..." if resolver else "Esperando al entrevistador...",
+            (
+                "🧑‍🏫  PREGUNTA DEL PROFESOR IA"
+                if practice
+                else "🗣  PREGUNTA DETECTADA"
+                if resolver
+                else "🗣  PREGUNTA EN ESPAÑOL"
+            ),
+            (
+                "Preparando la pregunta del profesor..."
+                if practice
+                else "Esperando una pregunta..."
+                if resolver
+                else "Esperando al entrevistador..."
+            ),
             17,
             title_color="#F6AD55",
         )
@@ -795,19 +962,32 @@ class InterviewFrame(ctk.CTkFrame):
         # Izquierda: la frase corta para contestar ya. Derecha: la misma respuesta
         # explayada, para cuando repreguntan o hace falta más contexto. Por eso la
         # derecha es más alta: llevan cantidades de texto distintas.
-        reply_titles = (
+        reply_specs = (
             # Lo que se mira mientras hablás es esto, no las transcripciones de
             # abajo: se les da la altura que aquellas dejan libre.
-            ("⚡  RESPUESTA", ACCENT, 155 if resolver else 95),
-            ("📖  DETALLES Y EJEMPLOS", "#F6E05E", 190 if resolver else 120),
+            (
+                "💬  DEVOLUCIÓN DEL PROFESOR" if practice else "⚡  RESPUESTA",
+                ACCENT,
+                155 if resolver else 95,
+            ),
+            (
+                "🎯  PARA MEJORAR" if practice else "📖  DETALLES Y EJEMPLOS",
+                "#F6E05E",
+                190 if resolver else 120,
+            ),
         )
-        for i, (title, title_color, box_height) in enumerate(reply_titles):
+        self.reply_titles = []
+        for i, (title, title_color, box_height) in enumerate(reply_specs):
             card = ctk.CTkFrame(replies, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
             card.grid(row=i + 1, column=0, sticky="ew", pady=(0, 8))
             self.reply_cards.append(card)
             head = ctk.CTkFrame(card, fg_color="transparent")
             head.pack(fill=tk.X, padx=12, pady=(10, 2))
-            ctk.CTkLabel(head, text=title, font=("Segoe UI Semibold", 9), text_color=title_color).pack(side=tk.LEFT)
+            title_label = ctk.CTkLabel(
+                head, text=title, font=("Segoe UI Semibold", 9), text_color=title_color
+            )
+            title_label.pack(side=tk.LEFT)
+            self.reply_titles.append(title_label)
             ctk.CTkButton(
                 head, text="🔊", width=30, height=24, fg_color=PANEL_DARK,
                 hover_color="#20212D", command=lambda n=i: self._speak_reply(n),
@@ -821,7 +1001,12 @@ class InterviewFrame(ctk.CTkFrame):
                 border_width=0, corner_radius=8, wrap="word", font=("Segoe UI", 16),
             )
             box._reply_text = ""
-            self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
+            self._set_box_text(
+                box,
+                "Aparecerá después de responder. Tu voz se muestra arriba en TU RESPUESTA."
+                if practice
+                else "Aparecerá cuando detectemos una pregunta",
+            )
             box._textbox.bind("<Button-3>", self._speak_word_at)
             # BOTH/expand: las dos tarjetas comparten fila, así que la más baja
             # dejaba un recuadro cortado con aire muerto abajo.
@@ -974,6 +1159,18 @@ class InterviewFrame(ctk.CTkFrame):
     def _combined_transcript(self) -> str:
         interviewer = self.interviewer_box.get("1.0", tk.END).strip()
         candidate = self.candidate_box.get("1.0", tk.END).strip()
+        if self._simulation_session is not None:
+            if not interviewer and not candidate:
+                return ""
+            academic = self._fixed_mode == "resolver"
+            interviewer_role = "PROFESOR IA" if academic else "ENTREVISTADOR IA"
+            candidate_role = "ESTUDIANTE" if academic else "CANDIDATO"
+            report = self._simulation_session.report()
+            report_text = f"\n\nDEVOLUCIÓN\n{report}" if report else ""
+            return (
+                f"{interviewer_role}\n{interviewer}\n\n"
+                f"{candidate_role}\n{candidate}{report_text}\n"
+            )
         if self._fixed_mode == "resolver":
             labels = ("RESPUESTA CORTA", "RESPUESTA AMPLIADA")
             answers = [
@@ -1537,7 +1734,10 @@ class InterviewFrame(ctk.CTkFrame):
         """
         new_mode = MODE_LABELS.get(choice, "entrevista")
         cfg = MODE_CONTEXT.get(new_mode, MODE_CONTEXT["entrevista"])
-        oral_mode = new_mode in interview_live.ORAL_ASSIST_MODES
+        oral_mode = (
+            new_mode in interview_live.ORAL_ASSIST_MODES
+            or new_mode == "practica_oral"
+        )
         prev = getattr(self, "_current_mode", None)
 
         # Guardar lo escrito en el modo anterior antes de cambiar.
@@ -1578,6 +1778,48 @@ class InterviewFrame(ctk.CTkFrame):
 
         self._context_placeholder = cfg["placeholder"]
         self._current_mode = new_mode
+        self._apply_simulation_mode_ui()
+
+    def _apply_simulation_mode_ui(self) -> None:
+        """Hide external-interviewer controls when AI conducts the interview."""
+        if not hasattr(self, "start_button"):
+            return
+        current_mode = getattr(self, "_current_mode", None)
+        simulation = current_mode in SIMULATION_MODES
+        if current_mode == "practica_oral":
+            start_text = "▶  Iniciar práctica oral"
+        elif current_mode == "simulacro":
+            start_text = "▶  Iniciar simulacro"
+        elif self._fixed_mode == "resolver":
+            start_text = "▶  Empezar a resolver"
+        else:
+            start_text = "▶  Iniciar entrevista"
+        self.start_button.configure(
+            text=start_text
+        )
+        if not hasattr(self, "source_combo"):
+            return
+        if simulation:
+            self.source_label.grid_remove()
+            self.source_combo.grid_remove()
+            self.refresh_sources_button.grid_remove()
+        else:
+            self.source_label.grid()
+            self.source_combo.grid()
+            self.refresh_sources_button.grid()
+        if hasattr(self, "candidate_box") and self._fixed_mode in {"resolver", "practica_oral"}:
+            if current_mode == "practica_oral":
+                self.interviewer_box.grid_configure(columnspan=1, padx=(0, 6))
+                self.candidate_transcript_label.grid(
+                    row=0, column=1, sticky="w", padx=(12, 0)
+                )
+                self.candidate_box.grid(
+                    row=1, column=1, sticky="nsew", padx=(6, 0), pady=(4, 0)
+                )
+            else:
+                self.interviewer_box.grid_configure(columnspan=2, padx=0)
+                self.candidate_transcript_label.grid_remove()
+                self.candidate_box.grid_remove()
 
     def _lang_label_for(self, mode: str) -> str:
         """Saved answer language for `mode`, or the mode's default."""
@@ -1641,7 +1883,13 @@ class InterviewFrame(ctk.CTkFrame):
             logger.exception("Failed saving interview context: %s", exc)
 
     def start_session(self) -> None:
-        if not interview_live.is_configured():
+        selected_mode = MODE_LABELS.get(self.mode_var.get(), "entrevista")
+        configured = (
+            interview_simulation.is_configured()
+            if selected_mode in SIMULATION_MODES
+            else interview_live.is_configured()
+        )
+        if not configured:
             show_info(
                 self,
                 "Resolver preguntas" if self._fixed_mode == "resolver" else "Entrevista",
@@ -1681,7 +1929,7 @@ class InterviewFrame(ctk.CTkFrame):
         # The button is already gated on readiness, but a stale widget state must
         # never let the resolver run blind: the coach would answer from general
         # knowledge and nothing in the UI would say the material was missing.
-        if self._fixed_mode == "resolver" and not context:
+        if self._fixed_mode in {"resolver", "practica_oral"} and not context:
             show_warning(
                 self,
                 "Resolver preguntas",
@@ -1693,7 +1941,7 @@ class InterviewFrame(ctk.CTkFrame):
         # Only the user's written context is persistent. NotebookLM material is
         # opt-in for the current app session and never overwrites this field.
         self._save_context(written_context, self._current_mode or "entrevista")
-        assist_mode = MODE_LABELS.get(self.mode_var.get(), "entrevista")
+        assist_mode = selected_mode
         if config.repository is not None:
             try:
                 setting_key = (
@@ -1711,6 +1959,10 @@ class InterviewFrame(ctk.CTkFrame):
         # coach recibe basura. Nunca 'auto': el tab Live fija el idioma (ver
         # Transcriber._locked_language), así que 'auto' cae al inglés histórico.
         stt_lang = answer_lang if answer_lang in ("es", "en") else "en"
+        if assist_mode in SIMULATION_MODES:
+            simulation_type = "academic" if assist_mode == "practica_oral" else "interview"
+            self._start_simulation(context, answer_lang, simulation_type)
+            return
         source_type, source_value = self._source_map.get(
             self.source_var.get(), ("loopback", None)
         )
@@ -1733,7 +1985,174 @@ class InterviewFrame(ctk.CTkFrame):
             language=answer_lang if answer_lang in ("es", "en") else None,
         )
 
+    def _start_simulation(
+        self, context: str, answer_lang: str, simulation_type: str = "interview"
+    ) -> None:
+        self._session_ended = False
+        self._session_paused = False
+        self._simulation_answer_parts = []
+        self._simulation_busy = True
+        self._simulation_session = interview_simulation.InterviewSimulationSession(
+            context=context,
+            answer_lang=answer_lang if answer_lang in ("es", "en") else "es",
+            simulation_type=simulation_type,
+        )
+        self.show_active()
+        self.complete_answer_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.complete_answer_button.configure(state="disabled")
+        if simulation_type == "academic":
+            self.hint_button.pack(side=tk.RIGHT, padx=(0, 8))
+            self.read_question_button.pack(side=tk.RIGHT, padx=(0, 8))
+            self.hint_button.configure(state="disabled")
+            self.read_question_button.configure(state="disabled")
+        self.pause_button.pack_forget()
+        self.question_label.configure(text="Preparando la primera pregunta…")
+        self._set_status(
+            "Preparando profesor IA"
+            if simulation_type == "academic"
+            else "Preparando simulacro",
+            ACCENT,
+        )
+
+        def work():
+            try:
+                turn = self._simulation_session.start()
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): self._simulation_failed(message))
+                return
+            self.after(0, lambda: self._apply_simulation_turn(turn))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_simulation_turn(self, turn) -> None:
+        self._simulation_busy = False
+        if turn.feedback:
+            self.reply_boxes[0]._reply_text = turn.feedback
+            self._set_box_text(self.reply_boxes[0], turn.feedback)
+        if turn.improvements:
+            improvement_text = " • ".join(turn.improvements)
+            self.reply_boxes[1]._reply_text = improvement_text
+            self._set_box_text(self.reply_boxes[1], improvement_text)
+        if turn.strengths:
+            self.ideas_label.configure(text="Fortalezas: " + " • ".join(turn.strengths))
+        if turn.action == "finish":
+            self._finish_simulation()
+            return
+        self._simulation_current_question = turn.question
+        self.question_label.configure(text=turn.question)
+        self.interviewer_box.insert(tk.END, ("\n" if self.interviewer_box.get("1.0", tk.END).strip() else "") + turn.question)
+        self.interviewer_box.see(tk.END)
+        self._simulation_answer_parts = []
+        self.complete_answer_button.configure(state="normal")
+        self.hint_button.configure(state="normal")
+        self.read_question_button.configure(state="normal")
+        answer_lang = getattr(self._simulation_session, "answer_lang", "es")
+        if self.candidate_listener.is_running():
+            self.candidate_listener.resume()
+        else:
+            self.candidate_listener.start(
+                self._microphone_map.get(self.mic_var.get()),
+                language=answer_lang,
+            )
+        self._set_status("Respondé y confirmá cuando termines", SUCCESS)
+
+    def _request_simulation_hint(self) -> None:
+        if self._simulation_busy or self._simulation_session is None:
+            return
+        self._simulation_busy = True
+        self.hint_button.configure(state="disabled")
+        self.candidate_listener.pause()
+        self._set_status("Preparando una pista", ACCENT)
+
+        def work():
+            try:
+                hint = self._simulation_session.hint()
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): self._simulation_failed(message))
+                return
+            self.after(0, lambda: self._apply_simulation_hint(hint))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _apply_simulation_hint(self, hint: str) -> None:
+        self._simulation_busy = False
+        text = f"Pista: {hint}"
+        self.reply_boxes[0]._reply_text = text
+        self._set_box_text(self.reply_boxes[0], text)
+        self.hint_button.configure(state="normal")
+        self.candidate_listener.resume()
+        self._set_status("Pista lista; seguí respondiendo", SUCCESS)
+
+    def _speak_simulation_question(self) -> None:
+        if not self._simulation_current_question or self._simulation_busy:
+            return
+        self.candidate_listener.pause()
+        self.read_question_button.configure(state="disabled")
+        self._set_status("Leyendo la pregunta", ACCENT)
+        language = getattr(self._simulation_session, "answer_lang", "es")
+        tts.speak_async(
+            self._simulation_current_question,
+            language=language,
+            on_done=lambda: self.after(0, self._question_speech_finished),
+        )
+
+    def _question_speech_finished(self) -> None:
+        if self._session_ended:
+            return
+        self.read_question_button.configure(state="normal")
+        self.candidate_listener.resume()
+        self._set_status("Respondé y confirmá cuando termines", SUCCESS)
+
+    def _submit_simulation_answer(self) -> None:
+        if self._simulation_busy or self._simulation_session is None:
+            return
+        answer = " ".join(self._simulation_answer_parts).strip()
+        if not answer:
+            show_info(self, "Simulacro", "Respondé por micrófono antes de continuar.")
+            return
+        self._simulation_busy = True
+        self.complete_answer_button.configure(state="disabled")
+        self.hint_button.configure(state="disabled")
+        self.read_question_button.configure(state="disabled")
+        self.candidate_listener.pause()
+        self._set_status("Evaluando tu respuesta", ACCENT)
+
+        def work():
+            try:
+                turn = self._simulation_session.submit_answer(answer)
+            except Exception as exc:
+                self.after(0, lambda message=str(exc): self._simulation_failed(message))
+                return
+            self.after(0, lambda: self._apply_simulation_turn(turn))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _simulation_failed(self, message: str) -> None:
+        self._simulation_busy = False
+        self.complete_answer_button.configure(state="normal")
+        self.candidate_listener.resume()
+        self._set_status("Error en el simulacro", ERROR)
+        show_error(self, "Simulacro", message)
+
+    def _finish_simulation(self) -> None:
+        self.candidate_listener.stop()
+        self._session_ended = True
+        report = self._simulation_session.report() if self._simulation_session else "Simulacro finalizado."
+        self.reply_boxes[0]._reply_text = report
+        self._set_box_text(self.reply_boxes[0], report)
+        self.complete_answer_button.pack_forget()
+        self.hint_button.pack_forget()
+        self.read_question_button.pack_forget()
+        self.show_closing()
+        self.closing_summary.configure(text=report)
+        self.closing_hint.configure(text="La devolución queda incluida en el texto de la sesión.", text_color=SUCCESS)
+        self._set_status("Simulacro finalizado", SUCCESS)
+
     def finish_session(self) -> None:
+        if self._simulation_session is not None and self._simulation_session.state != "completed":
+            self._simulation_session.finish()
+            self._finish_simulation()
+            return
         self.stop_session()
         self._session_ended = True
         self.show_closing()
@@ -1796,7 +2215,10 @@ class InterviewFrame(ctk.CTkFrame):
         box.see(tk.END)
         if role == "candidate":
             for text in items:
-                self.worker.add_candidate_turn(text)
+                if self._simulation_session is not None and self._simulation_session.state != "completed":
+                    self._simulation_answer_parts.append(text)
+                else:
+                    self.worker.add_candidate_turn(text)
 
     def _apply_assist(self, assist) -> None:
         # While the coach is still streaming, the answer line lands before the
@@ -1894,6 +2316,11 @@ class InterviewFrame(ctk.CTkFrame):
 
     def reset_session(self) -> None:
         self.stop_session()
+        self._simulation_session = None
+        self._simulation_answer_parts = []
+        self._simulation_busy = False
+        self.complete_answer_button.pack_forget()
+        self.pause_button.pack(side=tk.RIGHT, padx=(0, 8))
         for box in (self.interviewer_box, self.candidate_box):
             box.delete("1.0", tk.END)
         self.question_label.configure(
@@ -1905,7 +2332,12 @@ class InterviewFrame(ctk.CTkFrame):
         )
         for box in self.reply_boxes:
             box._reply_text = ""
-            self._set_box_text(box, "Aparecerá cuando detectemos una pregunta")
+            self._set_box_text(
+                box,
+                "Aparecerá después de responder. Tu voz se muestra arriba en TU RESPUESTA."
+                if self._fixed_mode == "practica_oral"
+                else "Aparecerá cuando detectemos una pregunta",
+            )
         self.show_preparation()
 
     def _set_status(self, text: str, color: str | None = None) -> None:

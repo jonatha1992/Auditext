@@ -70,6 +70,22 @@ durante 7 segundos.
 Al pausar se bloquea el ingreso de audio y se descartan fragmentos incompletos. Al
 reanudar comienza un turno limpio; una pregunta anterior no se mezcla con la nueva.
 
+### Modos académicos
+
+| Modo | Quién pregunta | Función del sistema |
+|---|---|---|
+| Práctica oral (módulo independiente) | La IA | Formula una pregunta del temario, muestra tu respuesta transcripta, ofrece una pista y decide si repregunta o cambia de tema. |
+| Examen oral | Un profesor real | Escucha la pregunta externa y muestra una respuesta breve para que la diga el estudiante. |
+
+En la práctica oral, cada respuesta se confirma con **Terminé mi respuesta**. Esto
+evita que una pausa natural se interprete como final. Las preguntas se muestran en
+pantalla; no se reproducen automáticamente por voz para no mezclarlas con el micrófono.
+NotebookLM aparece como fuente principal: conectá la cuenta, elegí una materia y las
+preguntas del profesor IA se generan usando el material sincronizado de esa materia.
+El botón **Leer pregunta** pausa el micrófono mientras habla la voz y lo reanuda al terminar.
+El capturador prueba primero la frecuencia nativa del dispositivo y adapta el audio al
+formato del reconocimiento, lo que mejora la compatibilidad con micrófonos USB.
+
 ## 📁 Estructura
 
 ```

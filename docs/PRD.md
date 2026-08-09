@@ -31,7 +31,7 @@ Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombr
 | Usuario | Necesidad |
 |---|---|
 | Estudiante | Resolver una pregunta de examen usando el programa o material de una materia. |
-| Persona en práctica oral | Recibir una respuesta breve o ideas para contestar en voz alta. |
+| Persona en práctica oral | Ser examinada por un profesor IA, responder oralmente y recibir una devolución. |
 | Candidato laboral | Recibir apoyo contextual durante una entrevista. |
 | Profesional | Transcribir archivos, reuniones y llamadas. |
 
@@ -89,15 +89,27 @@ Requisitos:
 - Conservar un historial corto para sostener el hilo.
 - Permitir copiar la respuesta sin reproducirla automáticamente.
 
+#### Simulacro de entrevista
+
+- Permitir elegir entre asistencia para una entrevista real y un simulacro conducido por IA.
+- Generar una pregunta por turno a partir del puesto, empresa, CV o contexto indicado.
+- Capturar la respuesta oral del candidato y permitir que confirme explícitamente cuándo terminó.
+- Evaluar la respuesta y decidir entre profundizar con una repregunta, avanzar a otro tema o finalizar.
+- Limitar la cantidad de preguntas y la profundidad de repreguntas para asegurar un cierre predecible.
+- Evitar preguntas duplicadas y conservar los temas ya cubiertos durante la sesión.
+- Permitir finalizar el simulacro manualmente en cualquier momento.
+- Mostrar al finalizar una devolución con fortalezas, aspectos para mejorar y una recomendación concreta.
+- La reproducción por voz de las preguntas es opcional y no debe activar automáticamente la escucha del micrófono mientras suena.
+- El primer incremento no detecta automáticamente el final de una respuesta por silencio.
+
 ### 6.4 Resolver
 
-Resolver es un módulo principal separado de Entrevista.
+Resolver es un módulo principal separado de Entrevista y de Práctica oral.
 
 Modos permitidos:
 
 - **Resolver preguntas:** una respuesta completa y directa.
 - **Examen oral:** respuesta breve lista para decir.
-- **Práctica oral:** ideas clave para que el usuario construya su respuesta.
 
 #### Preparación
 
@@ -107,6 +119,29 @@ Modos permitidos:
 - Cargar documentos locales compatibles.
 - Elegir un cuaderno/materia de NotebookLM.
 - Sincronizar una guía compacta del cuaderno antes de iniciar.
+
+### 6.5 Práctica oral con profesor IA
+
+Práctica oral es un destino principal independiente. La IA ocupa el rol de profesor;
+no escucha audio del sistema ni espera una pregunta externa.
+
+- Mostrar NotebookLM como fuente principal y activada por defecto.
+- Permitir conectar la cuenta, actualizar la lista y elegir una materia desde la misma vista.
+- Generar las preguntas únicamente con la materia sincronizada, salvo que el usuario active también el contexto escrito.
+
+- No capturar audio del sistema: la pregunta se origina dentro de la aplicación.
+- Formular una pregunta académica por turno usando únicamente el material preparado.
+- Capturar la respuesta del estudiante desde el micrófono.
+- Mostrar la transcripción de la respuesta mientras el estudiante habla.
+- Ofrecer **Dame una pista** sin revelar la solución ni avanzar el turno.
+- Ofrecer **Leer pregunta** y pausar el micrófono durante la reproducción.
+- Confirmar el final mediante **Terminé mi respuesta**, sin inferirlo por una pausa breve.
+- Evaluar corrección conceptual, fortalezas y omisiones.
+- Elegir entre repreguntar, avanzar a otro tema o finalizar.
+- Reanudar el micrófono después de cada devolución para evitar una sesión aparentemente bloqueada.
+- Rechazar preguntas duplicadas y pedir al modelo una pregunta diferente.
+- Negociar la frecuencia nativa del micrófono y remuestrear para el motor de reconocimiento.
+- Mostrar al cierre fortalezas, aspectos para mejorar y una recomendación concreta.
 
 #### Pregunta
 
@@ -228,6 +263,9 @@ Los estados no deben depender únicamente del color.
 - [x] Resolver es un destino independiente.
 - [x] Entrevista no ofrece modos académicos.
 - [x] Resolver no convierte preguntas académicas en práctica de inglés.
+- [x] Práctica oral actúa como profesor IA y no como asistente de respuestas.
+- [x] Examen oral conserva al profesor real como origen de las preguntas.
+- [x] El micrófono se reanuda después de cada pregunta del profesor IA.
 - [x] NotebookLM permite seleccionar una materia y sincronizar contexto.
 - [x] Las transcripciones incrementales no insertan saltos entre sílabas.
 - [x] Las pausas breves no crean múltiples preguntas.
@@ -243,6 +281,15 @@ Los estados no deben depender únicamente del color.
 - [x] La sesión guardada incluye **TU RESPUESTA** cuando el micrófono logra transcribirla.
 - [x] El micrófono alternativo cambia de endpoint ante audio exactamente vacío.
 - [x] Las claves permanecen ocultas.
+
+### Simulacro de entrevista
+
+- [x] El usuario puede iniciar un simulacro sin capturar audio del sistema.
+- [x] La IA formula una pregunta inicial acorde al contexto configurado.
+- [x] Cada respuesta confirmada produce evaluación y una repregunta, un cambio de tema o el cierre.
+- [x] El simulacro termina al alcanzar el límite configurado o cuando el usuario lo finaliza.
+- [x] El cierre muestra fortalezas, aspectos para mejorar y una recomendación concreta.
+- [x] El modo de entrevista real conserva su comportamiento actual.
 
 ### Validación manual pendiente
 

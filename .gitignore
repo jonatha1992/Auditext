@@ -67,6 +67,7 @@ build/
 
 # Testing
 .pytest_cache/
+.pytest-temp-*/
 .coverage
 htmlcov/
 .tox/

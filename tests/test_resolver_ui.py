@@ -11,6 +11,7 @@ import customtkinter as ctk
 import config
 from infrastructure.services import notebooklm_service
 from presentation.views.interview_frame import InterviewFrame
+from presentation.views.practice_frame import PracticeFrame
 
 
 class ResolverFrameTests(unittest.TestCase):
@@ -37,7 +38,6 @@ class ResolverFrameTests(unittest.TestCase):
             [
                 "Resolver preguntas",
                 "Examen oral (respuestas completas)",
-                "Práctica oral (solo ideas)",
             ],
         )
         self.assertEqual(self.frame.lang_var.get(), "Español")
@@ -73,6 +73,104 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertTrue(self.frame.use_written_context_var.get())
         self.assertFalse(self.frame.use_notebook_var.get())
         self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+
+    def test_academic_practice_is_a_separate_professor_module(self):
+        practice = PracticeFrame(self.root)
+        try:
+            practice.pack(fill="both", expand=True)
+            self.root.update_idletasks()
+            self.assertEqual(practice._current_mode, "practica_oral")
+            self.assertEqual(
+                list(practice.mode_combo.cget("values")),
+                ["Práctica oral con profesor IA"],
+            )
+            self.assertIn("Práctica oral", practice.header_title.cget("text"))
+            self.assertFalse(bool(practice.source_combo.grid_info()))
+            self.assertTrue(bool(practice.candidate_box.grid_info()))
+            self.assertTrue(hasattr(practice, "hint_button"))
+            self.assertTrue(hasattr(practice, "read_question_button"))
+            self.assertTrue(hasattr(practice, "notebook_login_button"))
+            self.assertTrue(practice.use_notebook_var.get())
+            self.assertFalse(practice.use_written_context_var.get())
+            self.assertEqual(practice.notebook_login_button.cget("state"), "normal")
+            self.assertIn("DEVOLUCIÓN", practice.reply_titles[0].cget("text"))
+            self.assertIn(
+                "después de responder",
+                practice.reply_boxes[0].get("1.0", "end").lower(),
+            )
+        finally:
+            practice.destroy()
+
+    def test_practice_questions_use_the_synced_notebook_material(self):
+        practice = PracticeFrame(self.root)
+        try:
+            practice._active_notebook_id = "uml"
+            practice._active_notebook_title = "UML"
+            practice._active_notebook_context = "[NotebookLM · UML]\nClases y objetos"
+            practice.use_notebook_var.set(True)
+            practice.use_written_context_var.set(False)
+            previous_repository = config.repository
+            config.repository = None
+            try:
+                with (
+                    mock.patch(
+                        "presentation.views.interview_frame.interview_simulation.is_configured",
+                        return_value=True,
+                    ),
+                    mock.patch.object(practice, "_start_simulation") as start,
+                ):
+                    practice.start_session()
+            finally:
+                config.repository = previous_repository
+
+            self.assertIn("Clases y objetos", start.call_args.args[0])
+            self.assertEqual(start.call_args.args[2], "academic")
+        finally:
+            practice.destroy()
+
+    def test_next_simulation_question_resumes_the_existing_microphone_listener(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        turn = mock.Mock(
+            action="follow_up",
+            question="¿Por qué una clase no es una instancia?",
+            feedback="Bien encaminado.",
+            improvements=(),
+            strengths=(),
+        )
+
+        self.frame._apply_simulation_turn(turn)
+
+        self.frame.candidate_listener.resume.assert_called_once_with()
+
+    def test_academic_practice_export_keeps_questions_answers_and_feedback(self):
+        self.frame._simulation_session = mock.Mock()
+        self.frame._simulation_session.report.return_value = "Fortalezas: definición clara."
+        self.frame.interviewer_box.insert("1.0", "¿Qué es una clase?")
+        self.frame.candidate_box.insert("1.0", "Es una plantilla para crear objetos.")
+
+        combined = self.frame._combined_transcript()
+
+        self.assertIn("PROFESOR IA\n¿Qué es una clase?", combined)
+        self.assertIn("ESTUDIANTE\nEs una plantilla", combined)
+        self.assertIn("DEVOLUCIÓN\nFortalezas", combined)
+
+    def test_interview_offers_ai_simulation_with_explicit_answer_boundary(self):
+        interview = InterviewFrame(self.root)
+        try:
+            self.assertIn(
+                "Simulacro con IA",
+                list(interview.mode_combo.cget("values")),
+            )
+            interview.mode_var.set("Simulacro con IA")
+            interview._on_mode_change("Simulacro con IA")
+
+            self.assertEqual(interview._current_mode, "simulacro")
+            self.assertEqual(interview.start_button.cget("text"), "▶  Iniciar simulacro")
+            self.assertTrue(hasattr(interview, "complete_answer_button"))
+        finally:
+            interview.destroy()
 
     def test_context_sources_can_be_enabled_together(self):
         self.frame._select_notebook_context()
@@ -302,6 +400,7 @@ class ResolverFrameTests(unittest.TestCase):
                     "Entrevista laboral",
                     "Práctica de idioma",
                     "Conversación general",
+                    "Simulacro con IA",
                 ],
             )
         finally:
