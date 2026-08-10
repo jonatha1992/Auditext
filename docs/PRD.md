@@ -13,6 +13,10 @@ La navegación principal contiene seis experiencias:
 5. **Historial:** consulta, reproducción y exportación.
 6. **Ajustes:** configuración local e integraciones.
 
+**Probar micrófono** es una herramienta de diagnóstico previa a los modos orales:
+enumera dispositivos físicos, graba una muestra temporal, permite escucharla,
+muestra la transcripción local y guarda el micrófono aprobado como preferencia.
+
 ## 2. Problema
 
 Durante una llamada o examen oral, el usuario necesita escuchar una pregunta, comprenderla y formular una respuesta mientras la conversación continúa. Una herramienta útil debe:
@@ -31,7 +35,7 @@ Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombr
 | Usuario | Necesidad |
 |---|---|
 | Estudiante | Resolver una pregunta de examen usando el programa o material de una materia. |
-| Persona en práctica oral | Recibir una respuesta breve o ideas para contestar en voz alta. |
+| Persona en práctica oral | Ser examinada por un profesor IA, responder oralmente y recibir una devolución. |
 | Candidato laboral | Recibir apoyo contextual durante una entrevista. |
 | Profesional | Transcribir archivos, reuniones y llamadas. |
 
@@ -70,6 +74,14 @@ Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombr
 - Generar un resumen opcional.
 - No mostrar controles de Entrevista o Resolver.
 
+#### Diagnóstico de micrófono
+
+- Probar cada micrófono físico sin iniciar una sesión.
+- Mostrar si existe señal y qué endpoint de Windows la entregó.
+- Reproducir la muestra capturada y mostrar su transcripción.
+- No guardar la prueba en Historial.
+- Permitir aprobar un micrófono para reutilizarlo en Resolver y Práctica oral.
+
 ### 6.3 Entrevista
 
 Modos permitidos:
@@ -89,15 +101,27 @@ Requisitos:
 - Conservar un historial corto para sostener el hilo.
 - Permitir copiar la respuesta sin reproducirla automáticamente.
 
+#### Simulacro de entrevista
+
+- Permitir elegir entre asistencia para una entrevista real y un simulacro conducido por IA.
+- Generar una pregunta por turno a partir del puesto, empresa, CV o contexto indicado.
+- Capturar la respuesta oral del candidato y permitir que confirme explícitamente cuándo terminó.
+- Evaluar la respuesta y decidir entre profundizar con una repregunta, avanzar a otro tema o finalizar.
+- Limitar la cantidad de preguntas y la profundidad de repreguntas para asegurar un cierre predecible.
+- Evitar preguntas duplicadas y conservar los temas ya cubiertos durante la sesión.
+- Permitir finalizar el simulacro manualmente en cualquier momento.
+- Mostrar al finalizar una devolución con fortalezas, aspectos para mejorar y una recomendación concreta.
+- La reproducción por voz de las preguntas es opcional y no debe activar automáticamente la escucha del micrófono mientras suena.
+- El primer incremento no detecta automáticamente el final de una respuesta por silencio.
+
 ### 6.4 Resolver
 
-Resolver es un módulo principal separado de Entrevista.
+Resolver es un módulo principal separado de Entrevista y de Práctica oral.
 
 Modos permitidos:
 
 - **Resolver preguntas:** una respuesta completa y directa.
 - **Examen oral:** respuesta breve lista para decir.
-- **Práctica oral:** ideas clave para que el usuario construya su respuesta.
 
 #### Preparación
 
@@ -107,6 +131,36 @@ Modos permitidos:
 - Cargar documentos locales compatibles.
 - Elegir un cuaderno/materia de NotebookLM.
 - Sincronizar una guía compacta del cuaderno antes de iniciar.
+
+### 6.5 Práctica oral con profesor IA
+
+Práctica oral es un destino principal independiente. La IA ocupa el rol de profesor;
+no escucha audio del sistema ni espera una pregunta externa.
+
+- Mostrar NotebookLM como fuente principal y activada por defecto.
+- Permitir conectar la cuenta, actualizar la lista y elegir una materia desde la misma vista.
+- Generar las preguntas únicamente con la materia sincronizada, salvo que el usuario active también el contexto escrito.
+
+- No capturar audio del sistema: la pregunta se origina dentro de la aplicación.
+- Formular una pregunta académica por turno usando únicamente el material preparado.
+- Mantener el micrófono fuera de la respuesta hasta que el estudiante pulse **Voy con mi respuesta**.
+- Al comenzar, descartar texto y audio pendientes del turno anterior; capturar exclusivamente hasta **Terminé mi respuesta**.
+- Mostrar la transcripción de la respuesta mientras el estudiante habla.
+- Ofrecer **Dame una pista** sin revelar la solución ni avanzar el turno.
+- Ofrecer **No lo sé · explicame** para recibir una explicación conceptual, una respuesta de ejemplo y una repregunta más simple que compruebe comprensión.
+- Leer automáticamente cada pregunta, mantener el micrófono pausado durante la reproducción y ofrecer **Leer pregunta** para repetirla.
+- Si pasan 10 segundos sin iniciar la respuesta, preguntar mediante modal si el estudiante quiere responder o necesita explicación. La opción de responder debe abrir explícitamente la captura.
+- Confirmar el final mediante **Terminé mi respuesta**, sin inferirlo por una pausa breve.
+- Evaluar corrección conceptual, fortalezas y omisiones.
+- Ante una respuesta incorrecta, explicar el error y mostrar cómo podría responderse correctamente; no limitarse a calificarla.
+- Leer en voz alta la devolución y el ejemplo antes de ofrecer continuar.
+- No mostrar ni leer la pregunta siguiente hasta que el estudiante confirme **Siguiente pregunta**.
+- Aplicar divulgación progresiva: durante la devolución ocultar transcripciones auxiliares y priorizar explicación, ejemplo y acción siguiente.
+- Elegir entre repreguntar, avanzar a otro tema o finalizar.
+- Después de cada devolución, esperar el inicio explícito de la respuesta siguiente.
+- Rechazar preguntas duplicadas y pedir al modelo una pregunta diferente.
+- Negociar la frecuencia nativa del micrófono y remuestrear para el motor de reconocimiento.
+- Mostrar al cierre fortalezas, aspectos para mejorar y una recomendación concreta.
 
 #### Pregunta
 
@@ -228,6 +282,9 @@ Los estados no deben depender únicamente del color.
 - [x] Resolver es un destino independiente.
 - [x] Entrevista no ofrece modos académicos.
 - [x] Resolver no convierte preguntas académicas en práctica de inglés.
+- [x] Práctica oral actúa como profesor IA y no como asistente de respuestas.
+- [x] Examen oral conserva al profesor real como origen de las preguntas.
+- [x] El micrófono se reanuda después de cada pregunta del profesor IA.
 - [x] NotebookLM permite seleccionar una materia y sincronizar contexto.
 - [x] Las transcripciones incrementales no insertan saltos entre sílabas.
 - [x] Las pausas breves no crean múltiples preguntas.
@@ -243,6 +300,15 @@ Los estados no deben depender únicamente del color.
 - [x] La sesión guardada incluye **TU RESPUESTA** cuando el micrófono logra transcribirla.
 - [x] El micrófono alternativo cambia de endpoint ante audio exactamente vacío.
 - [x] Las claves permanecen ocultas.
+
+### Simulacro de entrevista
+
+- [x] El usuario puede iniciar un simulacro sin capturar audio del sistema.
+- [x] La IA formula una pregunta inicial acorde al contexto configurado.
+- [x] Cada respuesta confirmada produce evaluación y una repregunta, un cambio de tema o el cierre.
+- [x] El simulacro termina al alcanzar el límite configurado o cuando el usuario lo finaliza.
+- [x] El cierre muestra fortalezas, aspectos para mejorar y una recomendación concreta.
+- [x] El modo de entrevista real conserva su comportamiento actual.
 
 ### Validación manual pendiente
 

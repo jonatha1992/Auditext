@@ -11,6 +11,7 @@ import customtkinter as ctk
 import config
 from infrastructure.services import notebooklm_service
 from presentation.views.interview_frame import InterviewFrame
+from presentation.views.practice_frame import PracticeFrame
 
 
 class ResolverFrameTests(unittest.TestCase):
@@ -30,6 +31,28 @@ class ResolverFrameTests(unittest.TestCase):
         if hasattr(self, "root"):
             self.root.destroy()
 
+    def test_notebook_refresh_ignores_ui_shutdown_from_worker(self):
+        frame = mock.Mock()
+        frame.after.side_effect = RuntimeError("main thread is not in main loop")
+
+        def run_immediately(*, target, daemon):
+            self.assertTrue(daemon)
+            target()
+            return mock.Mock()
+
+        with (
+            mock.patch.object(
+                notebooklm_service,
+                "list_notebooks",
+                side_effect=notebooklm_service.NotebookLMError("offline"),
+            ),
+            mock.patch(
+                "presentation.views.interview_frame.threading.Thread",
+                side_effect=run_immediately,
+            ),
+        ):
+            InterviewFrame._refresh_notebooks(frame)
+
     def test_resolver_interface_is_spanish_and_question_focused(self):
         self.assertEqual(self.frame.mode_var.get(), "Resolver preguntas")
         self.assertEqual(
@@ -37,7 +60,6 @@ class ResolverFrameTests(unittest.TestCase):
             [
                 "Resolver preguntas",
                 "Examen oral (respuestas completas)",
-                "Práctica oral (solo ideas)",
             ],
         )
         self.assertEqual(self.frame.lang_var.get(), "Español")
@@ -73,6 +95,330 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertTrue(self.frame.use_written_context_var.get())
         self.assertFalse(self.frame.use_notebook_var.get())
         self.assertEqual(self.frame.notebook_combo.cget("state"), "disabled")
+
+    def test_academic_practice_is_a_separate_professor_module(self):
+        practice = PracticeFrame(self.root)
+        try:
+            practice.pack(fill="both", expand=True)
+            self.root.update_idletasks()
+            self.assertEqual(practice._current_mode, "practica_oral")
+            self.assertEqual(
+                list(practice.mode_combo.cget("values")),
+                ["Práctica oral con profesor IA"],
+            )
+            self.assertIn("Práctica oral", practice.header_title.cget("text"))
+            self.assertFalse(bool(practice.source_combo.grid_info()))
+            self.assertTrue(bool(practice.candidate_box.grid_info()))
+            self.assertTrue(hasattr(practice, "hint_button"))
+            self.assertTrue(hasattr(practice, "dont_know_button"))
+            self.assertIn("No lo sé", practice.dont_know_button.cget("text"))
+            self.assertTrue(hasattr(practice, "start_answer_button"))
+            self.assertIn(
+                "Voy con mi respuesta",
+                practice.start_answer_button.cget("text"),
+            )
+            self.assertTrue(hasattr(practice, "read_question_button"))
+            self.assertTrue(hasattr(practice, "stop_button"))
+            self.assertTrue(hasattr(practice, "mastered_button"))
+            for button in (
+                practice.read_question_button,
+                practice.dont_know_button,
+                practice.hint_button,
+                practice.start_answer_button,
+                practice.stop_button,
+            ):
+                self.assertEqual(int(button.cget("height")), 38)
+                self.assertEqual(int(button.cget("corner_radius")), 9)
+            self.assertEqual(
+                practice.start_answer_button.cget("text_color"), "#07130D"
+            )
+            self.assertEqual(
+                practice.dont_know_button.cget("text_color"), "#1A1002"
+            )
+            self.assertEqual(
+                practice.read_question_button.cget("border_color"), "#363846"
+            )
+            self.assertEqual(
+                practice.hint_button.cget("text_color_disabled"), "#777C8F"
+            )
+            self.assertGreaterEqual(int(practice.candidate_box.cget("height")), 140)
+            self.assertEqual(practice.support_frame.pack_info()["side"], "bottom")
+            self.assertGreaterEqual(int(practice.reply_boxes[0].cget("height")), 120)
+            self.assertGreaterEqual(int(practice.reply_boxes[1].cget("height")), 155)
+            self.assertTrue(hasattr(practice, "notebook_login_button"))
+            self.assertTrue(practice.use_notebook_var.get())
+            self.assertFalse(practice.use_written_context_var.get())
+            self.assertEqual(practice.notebook_login_button.cget("state"), "normal")
+            self.assertIn("DEVOLUCIÓN", practice.reply_titles[0].cget("text"))
+            self.assertIn(
+                "después de responder",
+                practice.reply_boxes[0].get("1.0", "end").lower(),
+            )
+        finally:
+            practice.destroy()
+
+    def test_practice_questions_use_the_synced_notebook_material(self):
+        practice = PracticeFrame(self.root)
+        try:
+            practice._active_notebook_id = "uml"
+            practice._active_notebook_title = "UML"
+            practice._active_notebook_context = "[NotebookLM · UML]\nClases y objetos"
+            practice.use_notebook_var.set(True)
+            practice.use_written_context_var.set(False)
+            previous_repository = config.repository
+            config.repository = None
+            try:
+                with (
+                    mock.patch(
+                        "presentation.views.interview_frame.interview_simulation.is_configured",
+                        return_value=True,
+                    ),
+                    mock.patch.object(practice, "_start_simulation") as start,
+                ):
+                    practice.start_session()
+            finally:
+                config.repository = previous_repository
+
+            self.assertIn("Clases y objetos", start.call_args.args[0])
+            self.assertEqual(start.call_args.args[2], "academic")
+        finally:
+            practice.destroy()
+
+    def test_next_simulation_question_resumes_the_existing_microphone_listener(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        turn = mock.Mock(
+            action="follow_up",
+            question="¿Por qué una clase no es una instancia?",
+            feedback="Bien encaminado.",
+            improvements=(),
+            strengths=(),
+        )
+
+        self.frame._apply_simulation_turn(turn)
+
+        self.frame.candidate_listener.resume.assert_called_once_with()
+
+    def test_academic_professor_reads_every_question_before_listening(self):
+        self.frame._simulation_session = mock.Mock(
+            answer_lang="es", state="waiting_answer", simulation_type="academic"
+        )
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.pause = mock.Mock()
+        self.frame.candidate_listener.resume = mock.Mock()
+        original_after = self.frame.after
+        self.frame.after = mock.Mock(side_effect=lambda _delay, callback: callback())
+        turn = mock.Mock(
+            action="next_topic",
+            question="¿Qué significa equifinalidad?",
+            feedback="",
+            improvements=(),
+            strengths=(),
+            example_answer="",
+        )
+
+        with mock.patch(
+            "presentation.views.interview_frame.tts.speak_async"
+        ) as speak:
+            self.frame._apply_simulation_turn(turn)
+
+        speak.assert_called_once()
+        self.assertEqual(
+            speak.call_args.args[0], "¿Qué significa equifinalidad?"
+        )
+        self.frame.candidate_listener.resume.assert_not_called()
+
+        speak.call_args.kwargs["on_done"]()
+        self.frame.candidate_listener.resume.assert_not_called()
+        self.assertEqual(self.frame.start_answer_button.cget("state"), "normal")
+        self.assertEqual(self.frame.complete_answer_button.cget("state"), "disabled")
+        self.frame.after = original_after
+
+    def test_simulation_feedback_shows_an_improved_answer_example(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        turn = mock.Mock(
+            action="follow_up",
+            question="¿Qué diferencia existe entre ambos sistemas?",
+            feedback="La idea principal está encaminada.",
+            improvements=("Explicar qué estados comparten.",),
+            strengths=("Identificaste la finalidad.",),
+            example_answer=(
+                "Un sistema equifinal puede llegar al mismo resultado desde "
+                "condiciones iniciales diferentes."
+            ),
+        )
+
+        self.frame._apply_simulation_turn(turn)
+
+        improvement = self.frame.reply_boxes[1].get("1.0", "end")
+        self.assertIn("Para mejorar", improvement)
+        self.assertIn("Ejemplo de respuesta mejorada", improvement)
+        self.assertIn("condiciones iniciales diferentes", improvement)
+
+    def test_confirming_simulation_answer_clears_student_text_for_next_turn(self):
+        self.frame._simulation_session = mock.Mock(state="waiting_answer")
+        self.frame._simulation_answer_parts = ["Mi respuesta actual."]
+        self.frame.candidate_box.insert("1.0", "Mi respuesta actual.")
+        self.frame.candidate_listener.pause = mock.Mock()
+
+        self.frame._simulation_busy = True
+        with mock.patch(
+            "presentation.views.interview_frame.threading.Thread"
+        ):
+            self.frame._submit_drained_simulation_answer()
+
+        self.assertEqual(
+            self.frame.candidate_box.get("1.0", "end").strip(), ""
+        )
+
+    def test_dont_know_submits_a_teaching_request(self):
+        self.frame._simulation_session = mock.Mock(state="waiting_answer")
+        self.frame._simulation_busy = False
+
+        with mock.patch.object(
+            self.frame, "_submit_simulation_answer"
+        ) as submit:
+            self.frame._submit_dont_know()
+
+        self.assertEqual(
+            self.frame._simulation_answer_parts,
+            ["No lo sé. Explicame el concepto y mostrame un ejemplo."],
+        )
+        submit.assert_called_once_with()
+
+    def test_academic_question_waits_for_explicit_answer_start(self):
+        self.frame._simulation_session = mock.Mock(
+            answer_lang="es", simulation_type="academic"
+        )
+        self.frame._session_ended = False
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        original_after = self.frame.after
+        self.frame.after = mock.Mock(return_value="knowledge-timer")
+
+        self.frame._question_speech_finished()
+
+        self.frame.candidate_listener.resume.assert_not_called()
+        self.assertEqual(self.frame.start_answer_button.cget("state"), "normal")
+        self.assertEqual(self.frame.complete_answer_button.cget("state"), "disabled")
+        self.frame.after.assert_called_once_with(
+            10_000, self.frame._show_knowledge_check
+        )
+        self.assertEqual(self.frame._knowledge_check_after_id, "knowledge-timer")
+        self.frame.after = original_after
+
+    def test_start_answer_clears_previous_text_and_opens_microphone_boundary(self):
+        self.frame._simulation_session = mock.Mock(
+            answer_lang="es", simulation_type="academic"
+        )
+        self.frame._simulation_answer_parts = ["Texto anterior"]
+        self.frame.candidate_box.insert("1.0", "Texto anterior")
+        self.frame.candidate_queue.put("Audio anterior")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+
+        self.frame._start_simulation_answer()
+
+        self.assertTrue(self.frame._simulation_answering)
+        self.assertEqual(self.frame._simulation_answer_parts, [])
+        self.assertEqual(self.frame.candidate_box.get("1.0", "end").strip(), "")
+        self.assertTrue(self.frame.candidate_queue.empty())
+        self.frame.candidate_listener.resume.assert_called_once_with()
+        self.assertEqual(self.frame.start_answer_button.cget("state"), "disabled")
+        self.assertEqual(self.frame.complete_answer_button.cget("state"), "normal")
+
+    def test_academic_transcription_is_ignored_before_answer_start(self):
+        self.frame._simulation_session = mock.Mock(
+            state="waiting_answer", simulation_type="academic"
+        )
+        self.frame._simulation_answering = False
+        self.frame.candidate_queue.put("Ruido antes de empezar")
+
+        self.frame._append_batch(
+            self.frame.candidate_box, "candidate", self.frame.candidate_queue
+        )
+
+        self.assertEqual(self.frame._simulation_answer_parts, [])
+        self.assertEqual(self.frame.candidate_box.get("1.0", "end").strip(), "")
+
+    def test_academic_feedback_waits_for_user_before_showing_next_question(self):
+        self.frame._simulation_session = mock.Mock(
+            answer_lang="es", state="waiting_answer", simulation_type="academic"
+        )
+        self.frame.question_label.configure(text="Pregunta actual")
+        turn = mock.Mock(
+            action="follow_up",
+            question="Pregunta siguiente",
+            feedback="Primero revisemos el concepto.",
+            improvements=("Diferenciar entrada y salida.",),
+            strengths=(),
+            example_answer="Una respuesta correcta de ejemplo.",
+        )
+
+        with mock.patch.object(
+            self.frame, "_speak_learning_feedback"
+        ) as speak_feedback:
+            self.frame._apply_simulation_turn(turn)
+
+        self.assertEqual(self.frame.question_label.cget("text"), "Pregunta actual")
+        self.assertIs(self.frame._pending_simulation_turn, turn)
+        speak_feedback.assert_called_once_with(turn)
+
+    def test_learning_feedback_is_read_before_next_question_modal(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es")
+        turn = mock.Mock(
+            feedback="La diferencia central está en el estado inicial.",
+            improvements=("Nombrar el resultado final.",),
+            example_answer="Distintos estados iniciales pueden llegar al mismo final.",
+        )
+        original_after = self.frame.after
+        self.frame.after = mock.Mock(side_effect=lambda _delay, callback: callback())
+        self.frame._show_next_question_dialog = mock.Mock()
+
+        with mock.patch(
+            "presentation.views.interview_frame.tts.speak_async"
+        ) as speak:
+            self.frame._speak_learning_feedback(turn)
+
+        spoken = speak.call_args.args[0]
+        self.assertIn("La diferencia central", spoken)
+        self.assertIn("Ejemplo de respuesta mejorada", spoken)
+        self.frame._show_next_question_dialog.assert_not_called()
+
+        speak.call_args.kwargs["on_done"]()
+        self.frame._show_next_question_dialog.assert_called_once_with()
+        self.frame.after = original_after
+
+    def test_academic_practice_export_keeps_questions_answers_and_feedback(self):
+        self.frame._simulation_session = mock.Mock()
+        self.frame._simulation_session.report.return_value = "Fortalezas: definición clara."
+        self.frame.interviewer_box.insert("1.0", "¿Qué es una clase?")
+        self.frame.candidate_box.insert("1.0", "Es una plantilla para crear objetos.")
+
+        combined = self.frame._combined_transcript()
+
+        self.assertIn("PROFESOR IA\n¿Qué es una clase?", combined)
+        self.assertIn("ESTUDIANTE\nEs una plantilla", combined)
+        self.assertIn("DEVOLUCIÓN\nFortalezas", combined)
+
+    def test_interview_offers_ai_simulation_with_explicit_answer_boundary(self):
+        interview = InterviewFrame(self.root)
+        try:
+            self.assertIn(
+                "Simulacro con IA",
+                list(interview.mode_combo.cget("values")),
+            )
+            interview.mode_var.set("Simulacro con IA")
+            interview._on_mode_change("Simulacro con IA")
+
+            self.assertEqual(interview._current_mode, "simulacro")
+            self.assertEqual(interview.start_button.cget("text"), "▶  Iniciar simulacro")
+            self.assertTrue(hasattr(interview, "complete_answer_button"))
+        finally:
+            interview.destroy()
 
     def test_context_sources_can_be_enabled_together(self):
         self.frame._select_notebook_context()
@@ -302,6 +648,7 @@ class ResolverFrameTests(unittest.TestCase):
                     "Entrevista laboral",
                     "Práctica de idioma",
                     "Conversación general",
+                    "Simulacro con IA",
                 ],
             )
         finally:

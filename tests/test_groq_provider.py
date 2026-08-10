@@ -13,6 +13,10 @@ _SATURATION_503 = 'Groq HTTP 503: {"error":{"message":"over capacity"}}'
 
 
 class GroqProviderTests(unittest.TestCase):
+    def setUp(self):
+        groq_provider.reset_socket_block()
+        self.addCleanup(groq_provider.reset_socket_block)
+
     def test_collects_keys_with_the_canonical_collector(self):
         # clear=True: el colector lee hasta la key 20, y una GROQ_API_KEY real
         # en el .env del desarrollador haria fallar el conteo.

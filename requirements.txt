@@ -27,7 +27,8 @@ python-docx
 # CV upload in the interview tab (PDF text extraction).
 pypdf
 
-# Pronunciation playback in the interview tab (offline SAPI5 TTS on Windows).
+# Natural neural speech, with offline SAPI5 fallback on Windows.
+edge-tts>=7.2.8
 pyttsx3
 
 # Optional knowledge source for Resolver (community client; requires `nlm login`).

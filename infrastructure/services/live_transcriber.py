@@ -606,8 +606,100 @@ class Transcriber:
                         self._push(np.concatenate(accumulated))
                         accumulated = []
         except Exception as exc:
-            logger.exception("Microphone capture failed: %s", exc)
-            self._status_queue.put(f"Error micrófono: {exc}")
+            logger.warning(
+                "Soundcard microphone capture failed; using sounddevice: %s", exc
+            )
+            try:
+                self._capture_mic_sounddevice(
+                    getattr(mic, "name", self._source_val), block
+                )
+            except Exception as fallback_exc:
+                logger.exception(
+                    "Alternative microphone capture failed: %s", fallback_exc
+                )
+                self._status_queue.put(f"Error micrófono: {fallback_exc}")
+
+    def _capture_mic_sounddevice(self, microphone_name, block):
+        """Capture when SoundCard rejects a Windows microphone format."""
+        import sounddevice as sd
+
+        devices = [
+            (index, device)
+            for index, device in enumerate(sd.query_devices())
+            if int(device.get("max_input_channels", 0)) > 0
+        ]
+        wanted = str(microphone_name or "").casefold()
+        tokens = [
+            token
+            for token in wanted.replace("(", " ").replace(")", " ").split()
+            if len(token) >= 4 and "micr" not in token
+        ]
+        matches = [
+            item
+            for item in devices
+            if wanted == str(item[1].get("name", "")).casefold()
+            or any(
+                token in str(item[1].get("name", "")).casefold()
+                for token in tokens
+            )
+        ]
+        candidates = matches or devices
+        default_input = getattr(sd.default, "device", (-1, -1))[0]
+        candidates.sort(key=lambda item: item[0] != default_input)
+        last_exc = None
+
+        for device_index, device in candidates:
+            rates = list(dict.fromkeys(
+                rate for rate in (
+                    int(float(device.get("default_samplerate", 0) or 0)),
+                    SAMPLE_RATE,
+                ) if rate > 0
+            ))
+            for capture_rate in rates:
+                try:
+                    frames = max(1, round(block * capture_rate / SAMPLE_RATE))
+                    with sd.InputStream(
+                        samplerate=capture_rate,
+                        blocksize=frames,
+                        device=device_index,
+                        channels=1,
+                        dtype="float32",
+                    ) as stream:
+                        self._status_queue.put(
+                            "Escuchando: Micrófono alternativo "
+                            f"({str(device['name'])[:18]}...)"
+                        )
+                        logger.info(
+                            "Live microphone fallback device=%s index=%s rate=%s",
+                            device["name"], device_index, capture_rate,
+                        )
+                        while not self._stop.is_set():
+                            data, overflowed = stream.read(frames)
+                            if overflowed:
+                                logger.warning("Live microphone input overflow")
+                            mono = data[:, 0].astype(np.float32)
+                            if capture_rate != SAMPLE_RATE and mono.size:
+                                output_size = max(
+                                    1, round(len(mono) * SAMPLE_RATE / capture_rate)
+                                )
+                                mono = np.interp(
+                                    np.linspace(0.0, 1.0, output_size, endpoint=False),
+                                    np.linspace(0.0, 1.0, len(mono), endpoint=False),
+                                    mono,
+                                ).astype(np.float32)
+                            self._update_equalizer(mono)
+                            self._push(mono)
+                    return
+                except Exception as candidate_exc:
+                    last_exc = candidate_exc
+                    logger.warning(
+                        "Live microphone fallback %s at %s Hz failed: %s",
+                        device.get("name"), capture_rate, candidate_exc,
+                    )
+        raise RuntimeError(
+            "No se pudo abrir el micrófono con el motor alternativo: "
+            f"{last_exc or 'sin dispositivos disponibles'}"
+        )
 
     def _capture_process(self, block):
         from infrastructure.audio import process_loopback
