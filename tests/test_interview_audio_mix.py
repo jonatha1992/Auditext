@@ -65,3 +65,31 @@ def test_push_candidate_audio_ignored_when_not_interview_mode():
     worker.push_candidate_audio(np.ones(8, dtype=np.float32))
     taken = worker._take_mic_for_mix(8)
     assert np.allclose(taken, np.zeros(8))
+
+
+def test_live_microphone_uses_alternative_engine_when_soundcard_rejects_format():
+    import queue
+
+    worker = Transcriber(queue.Queue(), queue.Queue())
+    worker._source_type = "mic"
+    worker._source_val = "Micrófono (PD200X Podcast Microphone)"
+    worker._capture_mic_sounddevice = mock.Mock()
+    broken_mic = mock.Mock()
+    broken_mic.name = worker._source_val
+    broken_mic.recorder.side_effect = AssertionError("unsupported WASAPI format")
+
+    with (
+        mock.patch(
+            "infrastructure.services.live_transcriber.sc.default_microphone",
+            return_value=broken_mic,
+        ),
+        mock.patch(
+            "infrastructure.services.live_transcriber.sc.all_microphones",
+            return_value=[broken_mic],
+        ),
+    ):
+        worker._capture_mic(8000)
+
+    worker._capture_mic_sounddevice.assert_called_once_with(
+        worker._source_val, 8000
+    )

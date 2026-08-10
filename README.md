@@ -77,12 +77,20 @@ reanudar comienza un turno limpio; una pregunta anterior no se mezcla con la nue
 | Práctica oral (módulo independiente) | La IA | Formula una pregunta del temario, muestra tu respuesta transcripta, ofrece una pista y decide si repregunta o cambia de tema. |
 | Examen oral | Un profesor real | Escucha la pregunta externa y muestra una respuesta breve para que la diga el estudiante. |
 
-En la práctica oral, cada respuesta se confirma con **Terminé mi respuesta**. Esto
-evita que una pausa natural se interprete como final. Las preguntas se muestran en
-pantalla; no se reproducen automáticamente por voz para no mezclarlas con el micrófono.
+En la práctica oral, cada respuesta queda delimitada por **Voy con mi respuesta** y
+**Terminé mi respuesta**. El micrófono sólo transcribe entre esas dos acciones: al
+comenzar limpia cualquier resto del turno anterior y una pausa natural no se interpreta
+como final. Las preguntas se muestran y se leen automáticamente con el micrófono pausado.
+Si el estudiante no conoce el concepto, **No lo sé · explicame** solicita una
+explicación, una respuesta de ejemplo y una repregunta más simple para comprobar que
+lo entendió. Las respuestas incorrectas reciben la misma devolución educativa.
+Si pasan 10 segundos sin respuesta, un modal pregunta si quiere seguir pensando o
+recibir la explicación. La devolución y el ejemplo se leen en voz alta; la pregunta
+siguiente permanece bloqueada hasta pulsar **Siguiente pregunta**.
 NotebookLM aparece como fuente principal: conectá la cuenta, elegí una materia y las
 preguntas del profesor IA se generan usando el material sincronizado de esa materia.
-El botón **Leer pregunta** pausa el micrófono mientras habla la voz y lo reanuda al terminar.
+El botón **Leer pregunta** permite repetirla; pausa el micrófono mientras habla la voz y
+lo reanuda al terminar.
 El capturador prueba primero la frecuencia nativa del dispositivo y adapta el audio al
 formato del reconocimiento, lo que mejora la compatibilidad con micrófonos USB.
 

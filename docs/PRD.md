@@ -13,6 +13,10 @@ La navegación principal contiene seis experiencias:
 5. **Historial:** consulta, reproducción y exportación.
 6. **Ajustes:** configuración local e integraciones.
 
+**Probar micrófono** es una herramienta de diagnóstico previa a los modos orales:
+enumera dispositivos físicos, graba una muestra temporal, permite escucharla,
+muestra la transcripción local y guarda el micrófono aprobado como preferencia.
+
 ## 2. Problema
 
 Durante una llamada o examen oral, el usuario necesita escuchar una pregunta, comprenderla y formular una respuesta mientras la conversación continúa. Una herramienta útil debe:
@@ -69,6 +73,14 @@ Entrevista laboral y Resolver son objetivos diferentes. No deben compartir nombr
 - Mostrar y guardar la transcripción.
 - Generar un resumen opcional.
 - No mostrar controles de Entrevista o Resolver.
+
+#### Diagnóstico de micrófono
+
+- Probar cada micrófono físico sin iniciar una sesión.
+- Mostrar si existe señal y qué endpoint de Windows la entregó.
+- Reproducir la muestra capturada y mostrar su transcripción.
+- No guardar la prueba en Historial.
+- Permitir aprobar un micrófono para reutilizarlo en Resolver y Práctica oral.
 
 ### 6.3 Entrevista
 
@@ -131,14 +143,21 @@ no escucha audio del sistema ni espera una pregunta externa.
 
 - No capturar audio del sistema: la pregunta se origina dentro de la aplicación.
 - Formular una pregunta académica por turno usando únicamente el material preparado.
-- Capturar la respuesta del estudiante desde el micrófono.
+- Mantener el micrófono fuera de la respuesta hasta que el estudiante pulse **Voy con mi respuesta**.
+- Al comenzar, descartar texto y audio pendientes del turno anterior; capturar exclusivamente hasta **Terminé mi respuesta**.
 - Mostrar la transcripción de la respuesta mientras el estudiante habla.
 - Ofrecer **Dame una pista** sin revelar la solución ni avanzar el turno.
-- Ofrecer **Leer pregunta** y pausar el micrófono durante la reproducción.
+- Ofrecer **No lo sé · explicame** para recibir una explicación conceptual, una respuesta de ejemplo y una repregunta más simple que compruebe comprensión.
+- Leer automáticamente cada pregunta, mantener el micrófono pausado durante la reproducción y ofrecer **Leer pregunta** para repetirla.
+- Si pasan 10 segundos sin iniciar la respuesta, preguntar mediante modal si el estudiante quiere responder o necesita explicación. La opción de responder debe abrir explícitamente la captura.
 - Confirmar el final mediante **Terminé mi respuesta**, sin inferirlo por una pausa breve.
 - Evaluar corrección conceptual, fortalezas y omisiones.
+- Ante una respuesta incorrecta, explicar el error y mostrar cómo podría responderse correctamente; no limitarse a calificarla.
+- Leer en voz alta la devolución y el ejemplo antes de ofrecer continuar.
+- No mostrar ni leer la pregunta siguiente hasta que el estudiante confirme **Siguiente pregunta**.
+- Aplicar divulgación progresiva: durante la devolución ocultar transcripciones auxiliares y priorizar explicación, ejemplo y acción siguiente.
 - Elegir entre repreguntar, avanzar a otro tema o finalizar.
-- Reanudar el micrófono después de cada devolución para evitar una sesión aparentemente bloqueada.
+- Después de cada devolución, esperar el inicio explícito de la respuesta siguiente.
 - Rechazar preguntas duplicadas y pedir al modelo una pregunta diferente.
 - Negociar la frecuencia nativa del micrófono y remuestrear para el motor de reconocimiento.
 - Mostrar al cierre fortalezas, aspectos para mejorar y una recomendación concreta.

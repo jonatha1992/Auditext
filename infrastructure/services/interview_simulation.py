@@ -31,6 +31,7 @@ class SimulationTurn:
     feedback: str
     strengths: tuple[str, ...]
     improvements: tuple[str, ...]
+    example_answer: str = ""
 
 
 def _text_list(value: object) -> tuple[str, ...]:
@@ -63,6 +64,7 @@ def parse_simulation_turn(raw: str) -> SimulationTurn:
         feedback=str(payload.get("feedback", "")).strip(),
         strengths=_text_list(payload.get("strengths")),
         improvements=_text_list(payload.get("improvements")),
+        example_answer=str(payload.get("example_answer", "")).strip(),
     )
 
 
@@ -177,6 +179,29 @@ Current question: {current}
 Return only valid JSON: {{"hint":""}}"""
         return parse_hint(self.generate(prompt))
 
+    def skip_mastered_question(self) -> SimulationTurn:
+        """Advance without inventing or grading a candidate answer."""
+        if self.state != "waiting_answer":
+            raise RuntimeError("The simulation is not waiting for an answer")
+        current = next(
+            (text for role, text in reversed(self._history) if role == "INTERVIEWER"),
+            "",
+        )
+        self.state = "evaluating"
+        turn = self._request_turn(answer="", avoid_question=current)
+        if turn.action != "finish" and self._was_asked(turn.question):
+            turn = replace(turn, action="finish", question="")
+        if self.question_count >= self.max_questions:
+            turn = replace(turn, action="finish", question="")
+        if turn.action == "finish":
+            self.state = "completed"
+        else:
+            self.question_count += 1
+            self.state = "waiting_answer"
+            self._history.append(("INTERVIEWER", turn.question))
+        self._turns.append(turn)
+        return turn
+
     @staticmethod
     def _question_key(question: str) -> str:
         return " ".join(re.findall(r"[a-z0-9]+", question.casefold()))
@@ -229,6 +254,18 @@ Return only valid JSON: {{"hint":""}}"""
             "Cover relevant competencies and professional experience."
         )
         participant = "student" if self.simulation_type == "academic" else "candidate"
+        normalized_answer = answer.casefold()
+        needs_teaching = self.simulation_type == "academic" and any(
+            marker in normalized_answer
+            for marker in ("no lo sé", "no lo se", "explicame", "explain")
+        )
+        teaching_instruction = (
+            "The student explicitly does not know. Teach the concept clearly in feedback, "
+            "provide a concrete example_answer, and ask one easier follow-up question to "
+            "check understanding. Do not shame or merely mark the answer incorrect."
+            if needs_teaching
+            else ""
+        )
         prompt = f"""{role}
 Be proactive: cover relevant topics and advance the simulation.
 Be reactive: use the {participant}'s actual answer to decide whether to follow up, change topic, or finish.
@@ -241,10 +278,12 @@ Recent conversation:
 {history or '(no turns yet)'}
 
 Task: {stage}.
+{teaching_instruction}
 {f'The proposed question was already asked: {avoid_question!r}. Generate a different question.' if avoid_question else ''}
 Return only valid JSON with this exact shape:
-{{"action":"follow_up|next_topic|finish","question":"", "feedback":"brief private feedback", "strengths":[""], "improvements":[""]}}
-For the opening turn use next_topic, leave feedback lists empty, and ask a question.
+{{"action":"follow_up|next_topic|finish","question":"", "feedback":"brief private feedback", "strengths":[""], "improvements":[""], "example_answer":""}}
+After evaluating an answer, example_answer must show one concise improved answer grounded in the supplied material and written in {language}.
+For the opening turn use next_topic, leave feedback lists and example_answer empty, and ask a question.
 Use finish only when the interview has enough evidence. A finish response must have an empty question.
 """
         return parse_simulation_turn(self.generate(prompt))

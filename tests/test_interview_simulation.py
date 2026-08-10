@@ -16,12 +16,17 @@ class InterviewSimulationParsingTests(unittest.TestCase):
         turn = parse_simulation_turn(
             '{"action":"follow_up","question":"What did you learn?",'
             '"feedback":"Clear example.","strengths":["specific"],'
-            '"improvements":["quantify the result"]}'
+            '"improvements":["quantify the result"],'
+            '"example_answer":"I reduced processing time by 30 percent."}'
         )
 
         self.assertEqual(turn.action, "follow_up")
         self.assertEqual(turn.question, "What did you learn?")
         self.assertEqual(turn.strengths, ("specific",))
+        self.assertEqual(
+            turn.example_answer,
+            "I reduced processing time by 30 percent.",
+        )
 
     def test_rejects_invalid_action(self):
         with self.assertRaises(SimulationOutputError):
@@ -32,6 +37,53 @@ class InterviewSimulationParsingTests(unittest.TestCase):
 
 
 class InterviewSimulationSessionTests(unittest.TestCase):
+    def test_mastered_question_advances_without_faking_an_answer(self):
+        outputs = iter([
+            '{"action":"next_topic","question":"¿Qué es homeostasis?",'
+            '"feedback":"","strengths":[],"improvements":[]}',
+            '{"action":"next_topic","question":"¿Qué es equifinalidad?",'
+            '"feedback":"","strengths":[],"improvements":[]}',
+        ])
+        session = InterviewSimulationSession(
+            context="TGS", generate=lambda _prompt: next(outputs),
+            simulation_type="academic",
+        )
+        session.start()
+
+        turn = session.skip_mastered_question()
+
+        self.assertEqual(turn.question, "¿Qué es equifinalidad?")
+        self.assertEqual(session.question_count, 2)
+        self.assertFalse(any(role == "CANDIDATE" for role, _ in session._history))
+
+    def test_academic_unknown_answer_requests_teaching_feedback(self):
+        prompts = []
+        outputs = iter([
+            '{"action":"next_topic","question":"¿Qué es equifinalidad?",'
+            '"feedback":"","strengths":[],"improvements":[],"example_answer":""}',
+            '{"action":"follow_up","question":"¿Podés decirlo con tus palabras?",'
+            '"feedback":"Es la posibilidad de alcanzar un mismo resultado desde condiciones distintas.",'
+            '"strengths":[],"improvements":["Distinguir estado inicial y resultado"],'
+            '"example_answer":"Un sistema equifinal llega al mismo resultado desde estados iniciales diferentes."}',
+        ])
+
+        def generate(prompt):
+            prompts.append(prompt)
+            return next(outputs)
+
+        session = InterviewSimulationSession(
+            context="Teoría general de sistemas",
+            generate=generate,
+            simulation_type="academic",
+        )
+        session.start()
+        session.submit_answer(
+            "No lo sé. Explicame el concepto y mostrame un ejemplo."
+        )
+
+        self.assertIn("teach the concept", prompts[-1].lower())
+        self.assertIn("easier follow-up", prompts[-1].lower())
+
     def test_hint_does_not_advance_the_session_or_reveal_the_answer(self):
         outputs = iter([
             '{"action":"next_topic","question":"What is a class?","feedback":"","strengths":[],"improvements":[]}',

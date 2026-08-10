@@ -9,6 +9,7 @@ from config import idiomas
 from .live_frame import LiveFrame
 from .interview_frame import InterviewFrame
 from .practice_frame import PracticeFrame
+from .microphone_test_frame import MicrophoneTestFrame
 from .spinner import Spinner
 from .ajustes_frame import AjustesFrame
 from .historial_frame import HistorialFrame
@@ -112,6 +113,7 @@ def crear_interfaz(ventana):
         view_entrevista.pack_forget()
         view_resolver.pack_forget()
         view_practica.pack_forget()
+        view_microfono.pack_forget()
         view_historial.pack_forget()
         view_ajustes.pack_forget()
 
@@ -141,6 +143,7 @@ def crear_interfaz(ventana):
             "entrevista": "#48BB78",
             "resolver": "#4DA3FF",
             "practica": "#A78BFA",
+            "microfono": "#4EC98A",
             "historial": "#F6AD55",
             "ajustes": "#8A8F9E",
         }
@@ -163,6 +166,10 @@ def crear_interfaz(ventana):
         btn_practica.configure(
             fg_color="transparent" if view_name != "practica" else COLOR_PANEL,
             text_color=COLOR_TEXT_FG if view_name == "practica" else nav_colors["practica"],
+        )
+        btn_microfono.configure(
+            fg_color="transparent" if view_name != "microfono" else COLOR_PANEL,
+            text_color=COLOR_TEXT_FG if view_name == "microfono" else nav_colors["microfono"],
         )
         btn_historial.configure(
             fg_color="transparent" if view_name != "historial" else COLOR_PANEL,
@@ -189,6 +196,9 @@ def crear_interfaz(ventana):
         elif view_name == "practica":
             view_practica.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             view_practica.refresh_devices()
+        elif view_name == "microfono":
+            view_microfono.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+            view_microfono.refresh_devices()
         elif view_name == "historial":
             view_historial.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
             view_historial.load_history()
@@ -236,6 +246,14 @@ def crear_interfaz(ventana):
     )
     btn_practica.pack(fill=tk.X, padx=12, pady=4)
 
+    btn_microfono = ctk.CTkButton(
+        sidebar_frame, text="🎤   Probar micrófono", font=("Segoe UI Semibold", 13),
+        fg_color="transparent", text_color="#4EC98A", hover_color=COLOR_PANEL_LIGHT,
+        anchor=tk.W, width=176, height=40, corner_radius=8,
+        command=lambda: switch_view("microfono")
+    )
+    btn_microfono.pack(fill=tk.X, padx=12, pady=4)
+
     btn_historial = ctk.CTkButton(
         sidebar_frame, text="📜   Historial", font=("Segoe UI Semibold", 13),
         fg_color="transparent", text_color="#F6AD55", hover_color=COLOR_PANEL_LIGHT,
@@ -254,6 +272,7 @@ def crear_interfaz(ventana):
     Tooltip(btn_envivo, "Transcribí en tiempo real lo que reproduce el sistema o el micrófono.")
     Tooltip(btn_entrevista, "Seguí la conversación y recibí ayuda para responder con fluidez.")
     Tooltip(btn_resolver, "Escuchá una pregunta y obtené una respuesta completa basada en tu material.")
+    Tooltip(btn_microfono, "Probá señal, reproducción y transcripción antes de una sesión oral.")
     Tooltip(btn_historial, "Revisá, buscá y exportá transcripciones guardadas anteriormente.")
     Tooltip(btn_ajustes, "Configuración de la app: base de datos, modelo, carpetas.")
 
@@ -275,6 +294,7 @@ def crear_interfaz(ventana):
             btn_entrevista.configure(text="🎯", anchor=tk.CENTER, width=44)
             btn_resolver.configure(text="🧠", anchor=tk.CENTER, width=44)
             btn_practica.configure(text="🧑‍🏫", anchor=tk.CENTER, width=44)
+            btn_microfono.configure(text="🎤", anchor=tk.CENTER, width=44)
             btn_historial.configure(text="📜", anchor=tk.CENTER, width=44)
             btn_ajustes.configure(text="⚙", anchor=tk.CENTER, width=44)
             
@@ -283,6 +303,7 @@ def crear_interfaz(ventana):
             btn_entrevista.pack_configure(padx=8)
             btn_resolver.pack_configure(padx=8)
             btn_practica.pack_configure(padx=8)
+            btn_microfono.pack_configure(padx=8)
             btn_historial.pack_configure(padx=8)
             btn_ajustes.pack_configure(padx=8)
             
@@ -301,6 +322,7 @@ def crear_interfaz(ventana):
             btn_entrevista.configure(text="🎯   Entrevista", anchor=tk.W, width=176)
             btn_resolver.configure(text="🧠   Resolver", anchor=tk.W, width=176)
             btn_practica.configure(text="🧑‍🏫   Práctica oral", anchor=tk.W, width=176)
+            btn_microfono.configure(text="🎤   Probar micrófono", anchor=tk.W, width=176)
             btn_historial.configure(text="📜   Historial", anchor=tk.W, width=176)
             btn_ajustes.configure(text="⚙   Ajustes", anchor=tk.W, width=176)
             
@@ -309,6 +331,7 @@ def crear_interfaz(ventana):
             btn_entrevista.pack_configure(padx=12)
             btn_resolver.pack_configure(padx=12)
             btn_practica.pack_configure(padx=12)
+            btn_microfono.pack_configure(padx=12)
             btn_historial.pack_configure(padx=12)
             btn_ajustes.pack_configure(padx=12)
             
@@ -934,6 +957,11 @@ def crear_interfaz(ventana):
     view_practica = PracticeFrame(right_content)
 
     # ----------------------------------------------------
+    # MICROPHONE DIAGNOSTICS
+    # ----------------------------------------------------
+    view_microfono = MicrophoneTestFrame(right_content)
+
+    # ----------------------------------------------------
     # VIEW 4: SETTINGS (AJUSTES)
     # ----------------------------------------------------
     view_ajustes = AjustesFrame(right_content)
@@ -1104,6 +1132,7 @@ def crear_interfaz(ventana):
         "label_tiempo": label_tiempo,
         "live_frame": view_envivo,
         "interview_frame": view_entrevista,
+        "microphone_test_frame": view_microfono,
         "historial_frame": view_historial,
         "spinner": spinner,
         "frame_progress": frame_progress,

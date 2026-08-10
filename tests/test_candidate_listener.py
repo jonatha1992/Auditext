@@ -10,7 +10,9 @@ import numpy as np
 
 from presentation.views.interview_frame import (
     CandidateListener,
+    InterviewFrame,
     _candidate_sample_rates,
+    _new_transcript_suffix,
     _resample_mono,
 )
 
@@ -33,6 +35,60 @@ class _ImmediateStream:
 
 
 class CandidateListenerPacingTests(unittest.TestCase):
+    def test_overlapping_transcription_only_emits_new_words(self):
+        self.assertEqual(
+            _new_transcript_suffix(
+                "un modelo de caja blanca",
+                "de caja blanca permite ver el proceso",
+            ),
+            "permite ver el proceso",
+        )
+
+    def test_audio_is_queued_instead_of_transcribed_on_capture_thread(self):
+        listener = CandidateListener(mock.Mock(), mock.Mock())
+        listener._audio_queue = mock.Mock()
+
+        listener._queue_audio(np.ones(48000, dtype=np.float32))
+
+        listener._audio_queue.put_nowait.assert_called_once()
+
+    def test_simulation_submit_drains_pending_transcription_first(self):
+        frame = mock.Mock()
+        frame._simulation_busy = False
+        frame._simulation_session = mock.Mock()
+        frame._simulation_answer_parts = []
+
+        def drain_pending(*_args):
+            frame._simulation_answer_parts.append("Una clase define objetos.")
+
+        frame._append_batch.side_effect = drain_pending
+        frame._submit_drained_simulation_answer.side_effect = lambda: (
+            InterviewFrame._submit_drained_simulation_answer(frame)
+        )
+
+        test_case = self
+
+        class ImmediateThread:
+            def __init__(self, *, target, daemon):
+                test_case.assertTrue(daemon)
+                self.target = target
+
+            def start(self):
+                self.target()
+
+        frame.after.side_effect = lambda _delay, callback: callback()
+        with mock.patch(
+            "presentation.views.interview_frame.threading.Thread",
+            side_effect=ImmediateThread,
+        ):
+            InterviewFrame._submit_simulation_answer(frame)
+
+        frame._append_batch.assert_called_once_with(
+            frame.candidate_box, "candidate", frame.candidate_queue
+        )
+        frame.candidate_listener.pause.assert_called_once_with()
+        frame.candidate_listener.wait_until_idle.assert_called_once_with(timeout=10.0)
+
     def test_pyaudio_fallback_captures_selected_usb_microphone(self):
         listener = CandidateListener(mock.Mock(), mock.Mock())
         consumed = []
@@ -79,6 +135,36 @@ class CandidateListenerPacingTests(unittest.TestCase):
 
         self.assertEqual(converted.dtype, np.float32)
         self.assertEqual(len(converted), 16000)
+
+    def test_sounddevice_prefers_matching_default_input_over_duplicate_endpoint(self):
+        listener = CandidateListener(mock.Mock(), mock.Mock())
+        stream = _ImmediateStream(listener._stop)
+        devices = [
+            {
+                "name": "Micrófono (PD200X Podcast Microphone)",
+                "max_input_channels": 1,
+                "default_samplerate": 48000,
+            },
+            {
+                "name": "Micrófono (PD200X Podcast Micro",
+                "max_input_channels": 1,
+                "default_samplerate": 44100,
+            },
+        ]
+        fake_sd = mock.MagicMock()
+        fake_sd.query_devices.return_value = devices
+        fake_sd.default.device = (1, 0)
+        fake_sd.InputStream.return_value = stream
+
+        with mock.patch.dict("sys.modules", {"sounddevice": fake_sd}):
+            listener._capture_with_sounddevice(
+                "Micrófono (PD200X Podcast Microphone)",
+                16000,
+                8000,
+                mock.Mock(),
+            )
+
+        self.assertEqual(fake_sd.InputStream.call_args.kwargs["device"], 1)
 
     def test_immediate_empty_read_is_paced(self):
         listener = CandidateListener(mock.Mock(), mock.Mock())
