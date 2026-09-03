@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import unittest
 from unittest import mock
 
@@ -69,6 +70,122 @@ class NotebookLMServiceTests(unittest.TestCase):
                 notebooklm_service.NotebookLMError, "Conectar"
             ):
                 notebooklm_service.list_notebooks()
+
+
+class NotebookLMProfileTests(unittest.TestCase):
+    def _completed(self, stdout: str, returncode: int = 0):
+        return mock.Mock(returncode=returncode, stdout=stdout, stderr="")
+
+    def test_profiles_are_read_from_the_cli_listing(self):
+        listing = (
+            "Available profiles:\n"
+            "  default: jonicorrea1992@gmail.com\n"
+            "  personal2: tecnofusion.it@gmail.com\n"
+        )
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed(listing),
+            ) as run,
+        ):
+            profiles = notebooklm_service.list_profiles()
+
+        self.assertEqual(
+            [(p.name, p.email) for p in profiles],
+            [
+                ("default", "jonicorrea1992@gmail.com"),
+                ("personal2", "tecnofusion.it@gmail.com"),
+            ],
+        )
+        self.assertEqual(profiles[0].label, "jonicorrea1992@gmail.com (default)")
+        self.assertEqual(
+            run.call_args.args[0], ["nlm", "login", "profile", "list"]
+        )
+
+    def test_profiles_without_valid_credentials_are_not_offered(self):
+        listing = (
+            "Available profiles:\n"
+            "  default: jonicorrea1992@gmail.com\n"
+            "  rota: (invalid)\n"
+        )
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed(listing),
+            ),
+        ):
+            profiles = notebooklm_service.list_profiles()
+
+        self.assertEqual([p.name for p in profiles], ["default"])
+
+    def test_a_chosen_profile_only_scopes_its_own_subprocess(self):
+        """``nlm login switch`` cambiaría la cuenta de toda la máquina."""
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed("[]"),
+            ) as run,
+        ):
+            notebooklm_service.list_notebooks(profile="personal2")
+
+        env = run.call_args.kwargs["env"]
+        self.assertEqual(env["NLM_PROFILE"], "personal2")
+        # El resto del entorno viaja intacto: sin PATH el CLI no arranca.
+        self.assertEqual(env.get("PATH"), os.environ.get("PATH"))
+        # Y el proceso de la app queda como estaba: nada global se tocó.
+        self.assertNotIn("NLM_PROFILE", os.environ)
+        self.assertNotIn("switch", run.call_args.args[0])
+
+    def test_without_a_profile_the_environment_is_left_alone(self):
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed("[]"),
+            ) as run,
+        ):
+            notebooklm_service.list_notebooks()
+
+        self.assertIsNone(run.call_args.kwargs["env"])
+
+    def test_sync_queries_the_notebook_under_its_own_account(self):
+        with mock.patch.object(
+            notebooklm_service,
+            "_run_json",
+            return_value={"answer": "Unidad 1."},
+        ) as run_json:
+            notebooklm_service.sync_study_context("nb-1", profile="default")
+
+        self.assertEqual(run_json.call_args.kwargs["profile"], "default")
+
+    def test_login_targets_the_selected_account(self):
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(notebooklm_service.subprocess, "Popen") as popen,
+        ):
+            notebooklm_service.launch_login("personal2")
+
+        self.assertEqual(
+            popen.call_args.args[0],
+            ["nlm", "login", "--profile", "personal2"],
+        )
 
 
 if __name__ == "__main__":

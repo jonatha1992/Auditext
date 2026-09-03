@@ -124,6 +124,67 @@ Reglas que no se rompen:
 - **Groq va detrás de Cloudflare**: sin un `User-Agent` propio contesta
   `403 error 1010` al default de `urllib`.
 
+## NotebookLM: cuentas múltiples (verificado 2026-09-02)
+
+El CLI `nlm` guarda una cuenta por **perfil** y tiene un `default_profile`
+**global de la máquina**. `notebooklm_service` lo invocaba sin decirle cuál usar,
+así que heredaba ese default. Con dos perfiles conectados eso significaba que la
+app veía el catálogo de la cuenta equivocada:
+
+```
+default    jonicorrea1992@gmail.com    42 notebooks (las materias)
+personal2  tecnofusion.it@gmail.com     2 notebooks
+```
+
+El default estaba en `personal2`, y las 42 materias eran invisibles desde la app.
+
+**Nunca usar `nlm login switch` desde el código.** Reescribe el default de toda
+la máquina, y ese mismo CLI lo usan otras herramientas (el MCP de NotebookLM,
+por ejemplo): elegir una materia acá les cambiaría la cuenta por la espalda.
+
+La cuenta se manda **por proceso** con `NLM_PROFILE` en el env del subprocess
+(`_profile_env`). Alcance: esa llamada y nada más.
+
+- `list_profiles()` parsea `nlm login profile list` — ese comando **no** acepta
+  `--json` (0.9.4). Las cuentas que el CLI marca `(invalid)` se descartan: no
+  sirven para consultar y solo producen un error más tarde.
+- La materia elegida se guarda **por cuenta** (`notebook_id_setting_key`). Con
+  una sola clave global, cambiar de cuenta restauraba una materia que la otra
+  no tiene.
+- Cambiar de cuenta limpia catálogo y contexto activo. Arrancar una sesión con
+  el temario de la otra cuenta es peor que arrancar sin temario: nada en
+  pantalla avisa que el material no corresponde.
+- Un `list_notebooks` que llega tarde se descarta si la cuenta ya cambió
+  (`if profile != self._active_profile`).
+
+## Historial de preguntas de la sesión (`_qa_history`)
+
+El panel muestra **un turno a la vez**. Antes se pisaba sin dejar rastro: la
+pregunta anterior se perdía en pantalla y también en lo que se guardaba en
+Historial, porque `_combined_transcript` leía el texto actual de los widgets.
+
+`self._qa_history` es la lista de turnos y el panel es una **vista** sobre ella.
+Cada entrada: `pregunta`, `respuestas[2]`, `ideas`, `respuesta_usuario`, `hora`.
+
+- **`_history_index is None` = modo vivo.** Con un `int`, el usuario está mirando
+  un turno anterior: los que llegan se **graban** pero no le tocan la pantalla.
+  Esa guarda va en los **dos** caminos de escritura (`_apply_assist` y
+  `_apply_simulation_turn`/`_apply_simulation_hint`) y también en
+  `_set_answer_loading`, que blanquea las cajas.
+- **`_history_open` existe por el streaming.** `_apply_assist` se llama diez
+  veces por pregunta con `partial=True`. Sin ese flag, un turno generaba diez
+  entradas. Se abre al arrancar una generación y se cierra con `partial=False`.
+- **En simulacro la devolución llega junto con la pregunta siguiente, pero
+  pertenece a la anterior.** Por eso `_apply_simulation_turn` completa el turno
+  ya abierto y recién después `_present_simulation_question` abre el próximo.
+  Grabarla donde llega dejaba cada turno con la devolución equivocada.
+- **`candidate_box` se vacía en cada turno del simulacro.** La respuesta del
+  alumno se graba en el turno abierto *antes* de limpiar la caja; si no, lo
+  guardado quedaba con todas las preguntas y una sola respuesta.
+
+Los tests de Tk de `test_resolver_ui.py` comparten **un solo root**: uno por test
+agota el intérprete de Tcl alrededor de los 50 casos y la clase se saltea sola.
+
 ## Bitácora de errores
 
 - `logs/bitacora.jsonl` — solo fallas, estructuradas (contexto, tipo, traceback).

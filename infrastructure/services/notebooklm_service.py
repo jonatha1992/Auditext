@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -32,6 +33,18 @@ class NotebookRef:
         return f"{self.title}{suffix}"
 
 
+@dataclass(frozen=True)
+class ProfileRef:
+    """One authenticated NotebookLM account known to the CLI."""
+
+    name: str
+    email: str = ""
+
+    @property
+    def label(self) -> str:
+        return f"{self.email} ({self.name})" if self.email else self.name
+
+
 def _nlm_executable() -> str:
     local_name = "nlm.exe" if os.name == "nt" else "nlm"
     local = Path(sys.executable).resolve().parent / local_name
@@ -45,7 +58,22 @@ def _nlm_executable() -> str:
     )
 
 
-def _run_json(args: list[str], timeout: int = 120):
+def _profile_env(profile: str | None) -> dict[str, str] | None:
+    """Environment that pins one account for a single CLI call.
+
+    ``nlm login switch`` would rewrite the CLI's default profile for the whole
+    machine, and that same CLI backs other tools on this box. ``NLM_PROFILE``
+    scopes the account to the subprocess, so choosing a subject here never
+    changes which account anything else is talking to.
+    """
+    if not profile:
+        return None
+    env = dict(os.environ)
+    env["NLM_PROFILE"] = profile
+    return env
+
+
+def _run_json(args: list[str], timeout: int = 120, profile: str | None = None):
     command = [_nlm_executable(), *args, "--json"]
     try:
         completed = subprocess.run(
@@ -55,6 +83,7 @@ def _run_json(args: list[str], timeout: int = 120):
             encoding="utf-8",
             errors="replace",
             timeout=timeout,
+            env=_profile_env(profile),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
     except subprocess.TimeoutExpired as exc:
@@ -89,8 +118,8 @@ def _items(payload) -> list[dict]:
     return []
 
 
-def list_notebooks() -> list[NotebookRef]:
-    payload = _run_json(["notebook", "list"], timeout=45)
+def list_notebooks(profile: str | None = None) -> list[NotebookRef]:
+    payload = _run_json(["notebook", "list"], timeout=45, profile=profile)
     notebooks: list[NotebookRef] = []
     for item in _items(payload):
         notebook_id = str(item.get("id") or item.get("notebook_id") or "").strip()
@@ -112,7 +141,7 @@ de las fuentes. Organizala por temas y usá información concreta. Máximo 2200
 caracteres. Respondé solo con la guía en español, sin introducción."""
 
 
-def sync_study_context(notebook_id: str) -> str:
+def sync_study_context(notebook_id: str, profile: str | None = None) -> str:
     payload = _run_json(
         [
             "query",
@@ -123,6 +152,7 @@ def sync_study_context(notebook_id: str) -> str:
             "120",
         ],
         timeout=135,
+        profile=profile,
     )
     if isinstance(payload, str):
         answer = payload
@@ -141,6 +171,47 @@ def sync_study_context(notebook_id: str) -> str:
     return answer[:2500]
 
 
-def launch_login() -> None:
+def launch_login(profile: str | None = None) -> None:
     creationflags = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
-    subprocess.Popen([_nlm_executable(), "login"], creationflags=creationflags)
+    args = [_nlm_executable(), "login"]
+    if profile:
+        args += ["--profile", profile]
+    subprocess.Popen(args, creationflags=creationflags)
+
+
+# ``  <nombre>: <email>`` en la salida de ``nlm login profile list``. Ese
+# comando no acepta ``--json`` (verificado en la 0.9.4), así que la lista se lee
+# del texto plano; sin TTY el CLI no emite códigos de color.
+_PROFILE_LINE = re.compile(r"^\s{2}(\S+):\s*(.*)$")
+
+
+def list_profiles() -> list[ProfileRef]:
+    """Accounts the CLI has credentials for, in the order it reports them."""
+    command = [_nlm_executable(), "login", "profile", "list"]
+    try:
+        completed = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise NotebookLMError("NotebookLM tardó demasiado en responder.") from exc
+    if completed.returncode:
+        detail = (completed.stderr or completed.stdout or "").strip()
+        raise NotebookLMError(detail or "No se pudieron leer las cuentas de NotebookLM.")
+    profiles: list[ProfileRef] = []
+    for line in (completed.stdout or "").splitlines():
+        match = _PROFILE_LINE.match(line.rstrip())
+        if not match:
+            continue
+        name, email = match.group(1), match.group(2).strip()
+        # Una cuenta sin credenciales válidas se lista como "(invalid)": no
+        # sirve para consultar, y ofrecerla solo produce un error más tarde.
+        if not email or email.startswith("("):
+            continue
+        profiles.append(ProfileRef(name, email))
+    return profiles

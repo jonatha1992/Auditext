@@ -15,25 +15,43 @@ from presentation.views.practice_frame import PracticeFrame
 
 
 class ResolverFrameTests(unittest.TestCase):
-    def setUp(self):
+    # Un root de Tk por test agota el intérprete de Tcl alrededor de los 50
+    # casos: a partir de ahí ``ctk.CTk()`` falla y la clase entera se saltea
+    # sola. El root se comparte y lo que se rehace por test es el frame, que es
+    # donde vive el estado que cada caso necesita limpio.
+    @classmethod
+    def setUpClass(cls):
         try:
-            self.root = ctk.CTk()
+            cls.root = ctk.CTk()
         except tk.TclError as exc:
-            self.skipTest(f"Tk is not available: {exc}")
-        self.root.withdraw()
+            raise unittest.SkipTest(f"Tk is not available: {exc}")
+        cls.root.withdraw()
+
+    @classmethod
+    def tearDownClass(cls):
+        if getattr(cls, "root", None) is not None:
+            cls.root.destroy()
+            cls.root = None
+
+    def setUp(self):
         self.frame = InterviewFrame(self.root, fixed_mode="resolver")
         self.frame.pack(fill="both", expand=True)
+        # Solo idle tasks: ``update()`` dispararía el auto-refresh diferido, que
+        # ejecuta el CLI de NotebookLM real.
         self.root.update_idletasks()
 
     def tearDown(self):
         if hasattr(self, "frame"):
             self.frame.destroy()
-        if hasattr(self, "root"):
-            self.root.destroy()
 
     def test_notebook_refresh_ignores_ui_shutdown_from_worker(self):
         frame = mock.Mock()
         frame.after.side_effect = RuntimeError("main thread is not in main loop")
+        # El guarda real vive en _schedule_ui: sobre un Mock puro devolvería otro
+        # Mock y el test pasaría sin ejercitar nada.
+        frame._schedule_ui = lambda callback: InterviewFrame._schedule_ui(
+            frame, callback
+        )
 
         def run_immediately(*, target, daemon):
             self.assertTrue(daemon)
@@ -52,6 +70,138 @@ class ResolverFrameTests(unittest.TestCase):
             ),
         ):
             InterviewFrame._refresh_notebooks(frame)
+
+        frame.after.assert_called()
+
+    def test_profile_refresh_ignores_ui_shutdown_from_worker(self):
+        frame = mock.Mock()
+        frame.after.side_effect = RuntimeError("main thread is not in main loop")
+        frame._schedule_ui = lambda callback: InterviewFrame._schedule_ui(
+            frame, callback
+        )
+
+        def run_immediately(*, target, daemon):
+            target()
+            return mock.Mock()
+
+        with (
+            mock.patch.object(
+                notebooklm_service,
+                "list_profiles",
+                side_effect=notebooklm_service.NotebookLMError("offline"),
+            ),
+            mock.patch(
+                "presentation.views.interview_frame.threading.Thread",
+                side_effect=run_immediately,
+            ),
+        ):
+            InterviewFrame._refresh_profiles(frame)
+
+        frame.after.assert_called()
+
+    def _load_two_profiles(self):
+        """Deja el frame con las dos cuentas cargadas y 'default' activa."""
+        profiles = [
+            notebooklm_service.ProfileRef("default", "joni@gmail.com"),
+            notebooklm_service.ProfileRef("personal2", "tecno@gmail.com"),
+        ]
+        self.frame._profile_map = {p.label: p for p in profiles}
+        self.frame.profile_combo.configure(values=[p.label for p in profiles])
+        self.frame.profile_var.set(profiles[0].label)
+        self.frame._active_profile = "default"
+        return profiles
+
+    def test_notebooks_are_listed_under_the_chosen_account(self):
+        profiles = self._load_two_profiles()
+        calls = []
+
+        def fake_list(profile=None):
+            calls.append(profile)
+            return [notebooklm_service.NotebookRef("nb-2", "CIBERDELITO", 42)]
+
+        def run_immediately(*, target, daemon):
+            target()
+            return mock.Mock()
+
+        # El catálogo se aplica vía ``after``. Correrlo inline en vez de bombear
+        # el loop mantiene el test hermético: ``root.update()`` también dispara
+        # el auto-refresh del arranque, que ejecuta el CLI de NotebookLM real.
+        with (
+            mock.patch.object(notebooklm_service, "list_notebooks", fake_list),
+            mock.patch(
+                "presentation.views.interview_frame.threading.Thread",
+                side_effect=run_immediately,
+            ),
+            mock.patch.object(
+                self.frame, "after", lambda _delay, callback: callback()
+            ),
+        ):
+            self.frame._on_profile_change(profiles[1].label)
+
+        self.assertEqual(self.frame._active_profile, "personal2")
+        self.assertEqual(calls, ["personal2"])
+        self.assertIn(
+            "CIBERDELITO · 42 fuentes", self.frame.notebook_combo.cget("values")
+        )
+
+    def test_switching_account_drops_the_previous_subject_material(self):
+        profiles = self._load_two_profiles()
+        self.frame._notebook_map = {
+            "FISICA I · 10 fuentes": notebooklm_service.NotebookRef(
+                "nb-1", "FISICA I", 10
+            )
+        }
+        self.frame.notebook_var.set("FISICA I · 10 fuentes")
+        self.frame._active_notebook_id = "nb-1"
+        self.frame._active_notebook_title = "FISICA I"
+        self.frame._active_notebook_context = "[NotebookLM · FISICA I]\nmaterial"
+
+        with mock.patch.object(self.frame, "_refresh_notebooks"):
+            self.frame._on_profile_change(profiles[1].label)
+
+        # Arrancar la sesión con material de la cuenta anterior sería peor que
+        # no tener material: nada avisa que el temario no es el que se ve.
+        self.assertIsNone(self.frame._active_notebook_context)
+        self.assertIsNone(self.frame._active_notebook_id)
+        self.assertEqual(self.frame._notebook_map, {})
+        self.assertEqual(self.frame.notebook_var.get(), "Seleccioná una materia…")
+
+    def test_a_late_catalog_from_the_old_account_is_discarded(self):
+        self._load_two_profiles()
+        captured = {}
+
+        def run_immediately(*, target, daemon):
+            target()
+            return mock.Mock()
+
+        def fake_list(profile=None):
+            # El usuario cambia de cuenta mientras la consulta está en vuelo.
+            self.frame._active_profile = "personal2"
+            return [notebooklm_service.NotebookRef("nb-1", "FISICA I", 10)]
+
+        with (
+            mock.patch.object(notebooklm_service, "list_notebooks", fake_list),
+            mock.patch(
+                "presentation.views.interview_frame.threading.Thread",
+                side_effect=run_immediately,
+            ),
+            mock.patch.object(
+                self.frame, "after", lambda _delay, callback: callback()
+            ),
+        ):
+            self.frame._refresh_notebooks()
+
+        captured["values"] = self.frame.notebook_combo.cget("values")
+        self.assertNotIn("FISICA I · 10 fuentes", captured["values"])
+        self.assertEqual(self.frame._notebook_map, {})
+
+    def test_each_account_remembers_its_own_subject(self):
+        from presentation.views.interview_frame import notebook_id_setting_key
+
+        self.assertNotEqual(
+            notebook_id_setting_key("default"),
+            notebook_id_setting_key("personal2"),
+        )
 
     def test_resolver_interface_is_spanish_and_question_focused(self):
         self.assertEqual(self.frame.mode_var.get(), "Resolver preguntas")
@@ -612,6 +762,279 @@ class ResolverFrameTests(unittest.TestCase):
         self.assertIn("RESPUESTA CORTA\nLa fotosíntesis", combined)
         self.assertIn("RESPUESTA AMPLIADA\nLa planta usa", combined)
         self.assertIn("TU RESPUESTA\nEs el proceso", combined)
+
+    def _ask(self, question: str, short: str, detail: str = "", *, partial=False, loading=None):
+        """Feed one coach answer through the same path the Live session uses.
+
+        ``loading`` reproduces the status that opens a generation. It fires once
+        per question, not once per delta: the sealing delta of a stream that
+        already started closes that same turn.
+        """
+        if loading is None:
+            loading = not partial
+        if loading:
+            self.frame._set_answer_loading(True)
+        self.frame._apply_assist(
+            mock.Mock(
+                pregunta_es=question,
+                respuestas=[short, detail],
+                ideas_clave=[],
+                partial=partial,
+            )
+        )
+
+    def test_every_answer_is_kept_in_the_session_history(self):
+        self._ask("¿Qué es una clase?", "Un molde para crear objetos.")
+        self._ask("¿Y un objeto?", "Una instancia concreta de una clase.")
+        self._ask("¿Qué es la herencia?", "Reusar el comportamiento de otra clase.")
+
+        self.assertEqual(len(self.frame._qa_history), 3)
+        self.assertEqual(
+            [entry["pregunta"] for entry in self.frame._qa_history],
+            ["¿Qué es una clase?", "¿Y un objeto?", "¿Qué es la herencia?"],
+        )
+        # En modo vivo se sigue viendo la última, como antes.
+        self.assertEqual(
+            self.frame.reply_boxes[0]._reply_text,
+            "Reusar el comportamiento de otra clase.",
+        )
+
+    def test_going_back_shows_the_previous_question_and_answer(self):
+        self._ask("¿Qué es una clase?", "Un molde para crear objetos.")
+        self._ask("¿Y un objeto?", "Una instancia concreta de una clase.")
+        self._ask("¿Qué es la herencia?", "Reusar el comportamiento de otra clase.")
+
+        self.frame._history_go(-1)
+
+        self.assertEqual(self.frame._history_index, 1)
+        self.assertEqual(self.frame.question_label.cget("text"), "¿Y un objeto?")
+        self.assertEqual(
+            self.frame.reply_boxes[0]._reply_text,
+            "Una instancia concreta de una clase.",
+        )
+        self.assertEqual(self.frame.history_counter.cget("text"), "2 / 3")
+
+    def test_a_new_answer_does_not_steal_the_screen_while_browsing(self):
+        self._ask("Uno", "Respuesta uno.")
+        self._ask("Dos", "Respuesta dos.")
+        self._ask("Tres", "Respuesta tres.")
+        self.frame._history_go(-1)
+
+        self._ask("Cuatro", "Respuesta cuatro.")
+
+        # Se graba, pero la pantalla sigue en el turno que estaba leyendo.
+        self.assertEqual(len(self.frame._qa_history), 4)
+        self.assertEqual(self.frame.question_label.cget("text"), "Dos")
+        self.assertEqual(self.frame.reply_boxes[0]._reply_text, "Respuesta dos.")
+        self.assertEqual(self.frame.history_counter.cget("text"), "2 / 4")
+        self.assertIn("2 respuestas nuevas", self.frame.history_hint.cget("text"))
+
+        self.frame._history_latest()
+
+        self.assertIsNone(self.frame._history_index)
+        self.assertEqual(self.frame.question_label.cget("text"), "Cuatro")
+        self.assertEqual(self.frame.reply_boxes[0]._reply_text, "Respuesta cuatro.")
+        self.assertEqual(self.frame.history_hint.cget("text"), "")
+
+    def test_streaming_partials_fill_one_turn_instead_of_many(self):
+        self.frame._set_answer_loading(True)
+        self._ask("", "La fotosíntesis convier", partial=True)
+        self._ask("¿Qué es la fotosíntesis?", "La fotosíntesis convierte luz.", partial=True)
+        self._ask(
+            "¿Qué es la fotosíntesis?",
+            "La fotosíntesis convierte luz.",
+            "La planta fabrica su alimento.",
+            loading=False,
+        )
+
+        self.assertEqual(len(self.frame._qa_history), 1)
+        entry = self.frame._qa_history[0]
+        self.assertEqual(entry["pregunta"], "¿Qué es la fotosíntesis?")
+        self.assertEqual(entry["respuestas"][0], "La fotosíntesis convierte luz.")
+        self.assertEqual(entry["respuestas"][1], "La planta fabrica su alimento.")
+
+    def test_saved_session_keeps_every_question_not_just_the_last(self):
+        self._ask("¿Qué es una clase?", "Un molde.", "Define atributos y métodos.")
+        self._ask("¿Y un objeto?", "Una instancia.", "Ocupa memoria en tiempo de ejecución.")
+        self.frame.candidate_box.insert("1.0", "Creo que es un molde.")
+        self.frame.interviewer_box.insert("1.0", "que es una clase\ny un objeto")
+
+        combined = self.frame._combined_transcript()
+
+        self.assertIn("PREGUNTA 1\n¿Qué es una clase?", combined)
+        self.assertIn("RESPUESTA CORTA\nUn molde.", combined)
+        self.assertIn("PREGUNTA 2\n¿Y un objeto?", combined)
+        self.assertIn("RESPUESTA AMPLIADA\nOcupa memoria", combined)
+        self.assertIn("TU RESPUESTA\nCreo que es un molde.", combined)
+        # El crudo del micrófono se guarda además de la glosa limpia.
+        self.assertIn("TRANSCRIPCIÓN ESCUCHADA\nque es una clase", combined)
+
+    def test_navigation_bar_stays_hidden_until_there_is_something_to_go_back_to(self):
+        self._ask("Única pregunta", "Única respuesta.")
+
+        self.assertEqual(self.frame.history_bar.winfo_manager(), "")
+
+        self._ask("Segunda pregunta", "Segunda respuesta.")
+
+        self.assertEqual(self.frame.history_bar.winfo_manager(), "pack")
+
+    def test_copy_uses_the_turn_on_screen_not_the_latest_one(self):
+        self._ask("Uno", "Respuesta uno.")
+        self._ask("Dos", "Respuesta dos.")
+        self.frame._history_go(-1)
+        self.frame._set_status = mock.Mock()
+
+        self.frame._copy_reply(0)
+
+        self.assertEqual(self.frame.clipboard_get(), "Respuesta uno.")
+
+    def _simulation_turn(self, question, feedback="", strengths=()):
+        return mock.Mock(
+            action="follow_up",
+            question=question,
+            feedback=feedback,
+            improvements=(),
+            strengths=strengths,
+            example_answer="",
+        )
+
+    def test_simulation_pairs_each_question_with_its_own_feedback(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+
+        self.frame._apply_simulation_turn(self._simulation_turn("¿Qué es un sistema?"))
+        self.frame._apply_simulation_turn(
+            self._simulation_turn(
+                "¿Y la equifinalidad?",
+                feedback="Bien la primera.",
+                strengths=("Definiste el límite.",),
+            )
+        )
+
+        # La devolución llega junto con la pregunta siguiente, pero pertenece a
+        # la anterior: tiene que quedar en ese turno, no en el nuevo.
+        self.assertEqual(len(self.frame._qa_history), 2)
+        first, second = self.frame._qa_history
+        self.assertEqual(first["pregunta"], "¿Qué es un sistema?")
+        self.assertEqual(first["respuestas"][0], "Bien la primera.")
+        self.assertEqual(first["ideas"], ["Definiste el límite."])
+        self.assertEqual(second["pregunta"], "¿Y la equifinalidad?")
+        self.assertEqual(second["respuestas"][0], "")
+
+    def test_simulation_feedback_does_not_steal_the_screen_while_browsing(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        self.frame._apply_simulation_turn(self._simulation_turn("Primera"))
+        self.frame._apply_simulation_turn(
+            self._simulation_turn("Segunda", feedback="Devolución de la primera.")
+        )
+        self.frame._history_go(-1)
+
+        self.frame._apply_simulation_turn(
+            self._simulation_turn("Tercera", feedback="Devolución de la segunda.")
+        )
+
+        self.assertEqual(self.frame.question_label.cget("text"), "Primera")
+        self.assertEqual(
+            self.frame.reply_boxes[0]._reply_text, "Devolución de la primera."
+        )
+        self.assertEqual(self.frame.history_counter.cget("text"), "1 / 3")
+
+    def test_simulation_hint_is_kept_in_the_turn_it_belongs_to(self):
+        self.frame._simulation_session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        self.frame._apply_simulation_turn(self._simulation_turn("¿Qué es un sistema?"))
+
+        self.frame._apply_simulation_hint("Pensá en las partes y sus relaciones.")
+
+        entry = self.frame._qa_history[-1]
+        self.assertEqual(entry["pregunta"], "¿Qué es un sistema?")
+        self.assertIn("Pensá en las partes", entry["respuestas"][0])
+
+    def test_simulation_keeps_every_student_answer_not_just_the_last(self):
+        session = mock.Mock(answer_lang="es", state="waiting_answer")
+        session.report.return_value = "Buen desempeño general."
+        self.frame._simulation_session = session
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        self.frame.candidate_listener.pause = mock.Mock()
+        self.frame.candidate_listener.wait_until_idle = mock.Mock()
+
+        def answer(text):
+            """Recorre el mismo camino que el botón «Completé mi respuesta»."""
+            self.frame._simulation_answer_parts = [text]
+            self.frame._simulation_busy = False
+            with mock.patch(
+                "presentation.views.interview_frame.threading.Thread"
+            ):
+                self.frame._submit_drained_simulation_answer()
+
+        self.frame._apply_simulation_turn(
+            self._simulation_turn("¿Qué es un sistema?")
+        )
+        answer("Un conjunto de partes relacionadas.")
+        self.frame._apply_simulation_turn(
+            self._simulation_turn("¿Y la equifinalidad?", feedback="Correcto.")
+        )
+        answer("Llegar al mismo fin desde distintos inicios.")
+
+        # La caja del estudiante se vacía en cada turno: si la respuesta no
+        # queda en el historial, no queda en ningún lado.
+        self.assertEqual(self.frame.candidate_box.get("1.0", "end").strip(), "")
+        answers = [e["respuesta_usuario"] for e in self.frame._qa_history]
+        self.assertEqual(
+            answers,
+            [
+                "Un conjunto de partes relacionadas.",
+                "Llegar al mismo fin desde distintos inicios.",
+            ],
+        )
+
+        combined = self.frame._combined_transcript()
+
+        self.assertIn("PREGUNTA 1\n¿Qué es un sistema?", combined)
+        self.assertIn("Un conjunto de partes relacionadas.", combined)
+        self.assertIn("PREGUNTA 2\n¿Y la equifinalidad?", combined)
+        self.assertIn("Llegar al mismo fin desde distintos inicios.", combined)
+        self.assertIn("DEVOLUCIÓN\nCorrecto.", combined)
+        self.assertIn("Buen desempeño general.", combined)
+
+    def test_the_student_answer_stays_in_the_question_it_answered(self):
+        session = mock.Mock(answer_lang="es", state="waiting_answer")
+        self.frame._simulation_session = session
+        self.frame.candidate_listener.is_running = mock.Mock(return_value=True)
+        self.frame.candidate_listener.resume = mock.Mock()
+        self.frame.candidate_listener.pause = mock.Mock()
+        self.frame._apply_simulation_turn(self._simulation_turn("Primera"))
+        self.frame._simulation_answer_parts = ["Respuesta a la primera."]
+        self.frame._simulation_busy = False
+
+        with mock.patch("presentation.views.interview_frame.threading.Thread"):
+            self.frame._submit_drained_simulation_answer()
+        self.frame._apply_simulation_turn(
+            self._simulation_turn("Segunda", feedback="Devolución de la primera.")
+        )
+
+        # Pregunta, respuesta y devolución del mismo turno viajan juntas.
+        first = self.frame._qa_history[0]
+        self.assertEqual(first["pregunta"], "Primera")
+        self.assertEqual(first["respuesta_usuario"], "Respuesta a la primera.")
+        self.assertEqual(first["respuestas"][0], "Devolución de la primera.")
+        self.assertEqual(self.frame._qa_history[1]["respuesta_usuario"], "")
+
+    def test_reset_clears_the_history_and_hides_the_navigator(self):
+        self._ask("Uno", "Respuesta uno.")
+        self._ask("Dos", "Respuesta dos.")
+        self.frame._history_go(-1)
+
+        self.frame.reset_session()
+
+        self.assertEqual(self.frame._qa_history, [])
+        self.assertIsNone(self.frame._history_index)
+        self.assertEqual(self.frame.history_bar.winfo_manager(), "")
 
     def test_answer_loading_indicator_marks_a_new_response(self):
         self.frame._set_answer_loading(True)
