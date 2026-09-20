@@ -69,11 +69,58 @@ compartido se satura, y Groq corre en LPU con cuota aparte.
 
 ```
 GROQ_API_KEY=<key de https://console.groq.com/keys>
-GROQ_MODEL=llama-3.3-70b-versatile      # opcional
+GROQ_MODEL=openai/gpt-oss-120b          # opcional
 NVIDIA_API_KEY=<key de https://build.nvidia.com>
 GROQ_TOTAL_BUDGET_SECONDS=40            # opcional, techo por llamada
 NVIDIA_TOTAL_BUDGET_SECONDS=45          # opcional
 ```
+
+### Modelos de respaldo (verificado 2026-09-20)
+
+Groq también retira modelos sin aviso, y el síntoma no se parece a una caída:
+el simulacro contestaba la primera pregunta y después quedaba mudo. El default
+`llama-3.3-70b-versatile` ya no existe — **toda la familia Llama salió del
+catálogo de Groq** — y responde `404 ... "code":"model_not_found"` con
+cualquier key. Ese 404 clasifica `PERMANENT`, así que abortaba la cadena en el
+primer intento: Groq figuraba "configurado" y no servía para nada.
+
+Catálogo real medido ese día, con el prompt JSON del simulacro y
+`max_tokens=700`:
+
+| Modelo | Latencia | Veredicto |
+|---|---|---|
+| `openai/gpt-oss-120b` | 1114 ms | **default**: JSON válido, español correcto |
+| `openai/gpt-oss-20b` | 595 ms | sirve; alternativa si prioriza latencia |
+| `qwen/qwen3.8-27b` | 427 ms | descartado: devuelve prosa, rompe `parse_simulation_turn` |
+
+**`max_tokens` bajo en un modelo de razonamiento devuelve `content` vacío.** Los
+`openai/gpt-oss-*` cobran el reasoning del **mismo** `max_tokens` que la
+respuesta: con 16 contestan **HTTP 200 sin contenido**. `_request` lo traduce a
+"respuesta vacía" y `provider_chain` lo cuenta como falla, así que el proveedor
+parece caído estando sano — sin error que leer. Es el mismo patrón que el
+`thinking_budget` de los Gemini 3.x de más abajo. El coach pide 270 tokens en
+los modos cortos, así que `groq_provider.effective_max_tokens` sube el techo a
+700 para los modelos de razonamiento. Es un techo, no un objetivo: no alarga la
+respuesta, sólo compra lugar para pensar.
+
+**Figurar en `GET /v1/models` no prueba que el modelo sirva** — misma lección
+que ya estaba escrita para NVIDIA. Cualquier reemplazo se valida con una
+llamada real, con el prompt real, antes de tocar el default.
+
+### NVIDIA: latencia, no muerte (medido 2026-09-20)
+
+`nvidia/nemotron-3.5-lightning-30b-a3b` está **sano**. Seis llamadas reales con
+el prompt del simulacro: 724 ms, 3,5 s, 7,6 s, 16,8 s, 29,9 s y un timeout a los
+40 s. El endpoint es compartido y su latencia varía en dos órdenes de magnitud,
+así que `The read operation timed out` es saturación transitoria, no un defecto
+del modelo ni del default.
+
+Lo que sí importa: **la cadena le da 12 s** (`provider_chain`), cuando
+`request_timeout_for(700)` pide 28. Con esa distribución, un techo de 12 s falla
+aproximadamente un tercio de las veces, y NVIDIA es el último eslabón. Por eso
+el arreglo real no es tocar NVIDIA sino **no desperdiciar el presupuesto antes
+de llegar**: un Groq con modelo vivo no quema un intento, y un Gemini acotado
+por request no se come los 40 s.
 
 ### Modelos Gemini (verificado 2026-08-06)
 
@@ -117,7 +164,14 @@ Reglas que no se rompen:
 
 - **Todo proveedor va acotado dos veces**: timeout de socket por request (escala
   con `max_tokens`) y presupuesto total por llamada. Sin el segundo, una rotación
-  de claves con timeouts encadenados congela la app.
+  de claves con timeouts encadenados congela la app. **Gemini también**, y era el
+  que no lo cumplía: el simulacro sólo miraba el reloj *entre* intentos, así que
+  un request colgado corría sin techo, devolvía el control a los 15,9 s con los
+  40 s ya gastados y la cadena de respaldo arrancaba muerta (`Groq: sin tiempo
+  restante` en pantalla). Se acota con `HttpOptions(timeout=...)`, que va en
+  **milisegundos**, y el valor sale de `interview_simulation.gemini_request_timeout`:
+  derivado del presupuesto restante, nunca una constante — una constante vuelve a
+  romper la regla apenas alguien toca `SIMULATION_GEMINI_BUDGET_SECONDS`.
 - **El cooldown depende de la clase de error.** Saturación (503) se libera en
   segundos; cuota y auth no. Un cooldown plano de 30 s convertía un 503
   transitorio en medio minuto sin respuesta.

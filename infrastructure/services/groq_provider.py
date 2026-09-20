@@ -40,9 +40,49 @@ load_dotenv()
 GROQ_BASE_URL = os.getenv(
     "GROQ_BASE_URL", "https://api.groq.com/openai/v1"
 ).rstrip("/")
-# 70B instruct model: the long Spanish answers this app needs are beyond what a
-# small model writes well, and on Groq it still returns in a couple of seconds.
-GROQ_MODEL = os.getenv("GROQ_MODEL", "").strip() or "llama-3.3-70b-versatile"
+# Default verificado con llamada real (1114 ms, JSON válido con el prompt del
+# simulacro y max_tokens=700) el 2026-09-20.
+#
+# El anterior, `llama-3.3-70b-versatile`, ya no existe: toda la familia Llama
+# salió del catálogo de Groq y cualquier key contesta
+# `HTTP 404 ... "code":"model_not_found"`. Ese 404 cae en PERMANENT para
+# `classify_error`, así que abortaba la cadena en el primer intento sin
+# reintentar ni rotar: apenas Gemini se saturaba, el profesor IA quedaba mudo
+# con Groq "configurado".
+#
+# Se elige el 120B y no el 20B (595 ms) por el mismo motivo del comentario
+# original: las respuestas largas en español que pide esta app le quedan
+# grandes a un modelo chico. `qwen/qwen3.8-27b` queda descartado aunque sea el
+# más rápido (427 ms): devolvió prosa, no JSON, y rompe `parse_simulation_turn`.
+#
+# Aparecer en `GET /v1/models` NO prueba que el modelo sirva — misma lección
+# que `nvidia_provider.NVIDIA_MODEL`. Cualquier reemplazo se valida con una
+# llamada real, con el prompt real, antes de entrar acá.
+GROQ_MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
+
+# TRAMPA de los modelos de razonamiento (medida el 2026-09-20 sobre
+# `openai/gpt-oss-120b`): el reasoning se cobra del MISMO `max_tokens` que la
+# respuesta. Con un techo bajo (medido con 16) la API contesta **HTTP 200 con
+# `content` vacío** — se gastó el presupuesto pensando y no quedó nada para
+# escribir. `_request` lo convierte en "Groq devolvió una respuesta vacía" y
+# `provider_chain` lo cuenta como falla, así que el proveedor parece caído
+# estando sano: el peor modo de falla posible, porque no hay error que leer.
+#
+# Es el mismo patrón que el `thinking_budget` de los Gemini 3.x ya documentado
+# en CLAUDE.md, y acá pega de verdad: el coach pide 270 tokens en los modos
+# cortos (`interview_live._nvidia_token_budget`). Por eso el techo se sube a un
+# piso, no se confía en el que manda quien llama. Subir el techo no alarga la
+# respuesta — es un límite, no un objetivo; solo compra lugar para el reasoning.
+_REASONING_MODEL_MARKERS = ("gpt-oss",)
+_MIN_REASONING_TOKENS = 700
+
+
+def effective_max_tokens(max_tokens: int, model: str | None = None) -> int:
+    """Token ceiling a reasoning model needs to answer at all."""
+    name = (model if model is not None else GROQ_MODEL).casefold()
+    if any(marker in name for marker in _REASONING_MODEL_MARKERS):
+        return max(max_tokens, _MIN_REASONING_TOKENS)
+    return max_tokens
 
 GROQ_REQUEST_TIMEOUT_SECONDS = 20
 GROQ_MAX_REQUEST_TIMEOUT_SECONDS = 40
@@ -58,6 +98,7 @@ __all__ = [
     "GROQ_MODEL",
     "GroqError",
     "GroqKeyPool",
+    "effective_max_tokens",
     "generate",
     "is_configured",
     "pool",
@@ -269,6 +310,10 @@ def generate(
 
     budget = budget_seconds if budget_seconds is not None else GROQ_TOTAL_BUDGET_SECONDS
     deadline = time.monotonic() + budget
+    # Antes de medir el timeout, no después: un modelo de razonamiento con el
+    # techo subido necesita proporcionalmente más socket, y el timeout se
+    # escala con los tokens que realmente se piden.
+    max_tokens = effective_max_tokens(max_tokens)
     base_timeout = request_timeout_for(max_tokens)
 
     last_exc: BaseException | None = None

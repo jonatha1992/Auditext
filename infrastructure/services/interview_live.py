@@ -476,15 +476,14 @@ def _fallback_providers() -> list[tuple[str, object]]:
     Groq leads because it fails for reasons unrelated to NVIDIA's: NVIDIA's
     shared endpoint returns 503 when its worker pool saturates, and that is
     precisely when a second, independent provider earns its place.
-    """
-    from infrastructure.services import groq_provider
 
-    chain: list[tuple[str, object]] = []
-    if groq_provider.is_configured():
-        chain.append(("Groq", groq_provider))
-    if nvidia_provider.is_configured():
-        chain.append(("NVIDIA", nvidia_provider))
-    return chain
+    The order itself lives in ``provider_chain`` so the oral exam simulator
+    walks the exact same chain; the second hand-written copy is how the
+    simulator ended up skipping Groq altogether.
+    """
+    from infrastructure.services import provider_chain
+
+    return provider_chain.fallback_providers()
 
 
 def has_fallback_provider() -> bool:
