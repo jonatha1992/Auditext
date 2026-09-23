@@ -76,11 +76,24 @@ GROQ_MODEL = os.getenv("GROQ_MODEL", "").strip() or "openai/gpt-oss-120b"
 _REASONING_MODEL_MARKERS = ("gpt-oss",)
 _MIN_REASONING_TOKENS = 700
 
+# El piso de 700 NO alcanza con el prompt real del coach (medido 2026-09-23,
+# prompt de 3867 caracteres, `openai/gpt-oss-120b`): con el esfuerzo por
+# defecto gastó 698 de 700 tokens pensando, `finish_reason=length` y `content`
+# vacío — el mismo "Groq devolvió una respuesta vacía" de arriba, en cada turno.
+# Con `reasoning_effort=low` y el mismo techo usó 191-295 tokens de reasoning y
+# contestó en 1,2-1,3 s. Subir el techo también andaba (1500 -> 872 de
+# reasoning, 2,6 s), pero paga el doble de latencia por pensar lo mismo.
+_REASONING_EFFORT = "low"
+
+
+def _is_reasoning_model(model: str | None = None) -> bool:
+    name = (model if model is not None else GROQ_MODEL).casefold()
+    return any(marker in name for marker in _REASONING_MODEL_MARKERS)
+
 
 def effective_max_tokens(max_tokens: int, model: str | None = None) -> int:
     """Token ceiling a reasoning model needs to answer at all."""
-    name = (model if model is not None else GROQ_MODEL).casefold()
-    if any(marker in name for marker in _REASONING_MODEL_MARKERS):
+    if _is_reasoning_model(model):
         return max(max_tokens, _MIN_REASONING_TOKENS)
     return max_tokens
 
@@ -243,15 +256,16 @@ def _request(
     messages.extend(history or [])
     messages.append({"role": "user", "content": prompt})
 
-    body = json.dumps(
-        {
-            "model": GROQ_MODEL,
-            "messages": messages,
-            "temperature": 0.2,
-            "max_tokens": max_tokens,
-            "stream": False,
-        }
-    ).encode("utf-8")
+    payload_body: dict = {
+        "model": GROQ_MODEL,
+        "messages": messages,
+        "temperature": 0.2,
+        "max_tokens": max_tokens,
+        "stream": False,
+    }
+    if _is_reasoning_model():
+        payload_body["reasoning_effort"] = _REASONING_EFFORT
+    body = json.dumps(payload_body).encode("utf-8")
     request = urllib.request.Request(
         f"{GROQ_BASE_URL}/chat/completions",
         data=body,

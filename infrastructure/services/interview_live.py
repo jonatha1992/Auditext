@@ -41,15 +41,26 @@ LIVE_MODELS = [
 # accepts thinking_budget=0. Measured end to end on the resolver prompt:
 # 3.1-flash-lite 5.3 s vs 3.5-flash-lite 6.7 s — the newer model has to think
 # before answering, and that thinking lands entirely in the wait the user feels.
-COACH_MODELS = gemini_keys.usable_models(
-    [
-        os.getenv("GEMINI_COACH_MODEL", "").strip() or "gemini-3.1-flash-lite",
-        "gemini-3.5-flash-lite",
-        "gemini-flash-lite-latest",
-        os.getenv("GEMINI_MODEL", "").strip() or "gemini-3.6-flash",
-        "gemini-2.0-flash-lite",
-    ]
+def _coach_model_candidates() -> list[str]:
+    """Keep the healthy default available alongside environment overrides."""
+    return gemini_keys.usable_models(
+        [
+            os.getenv("GEMINI_COACH_MODEL", "").strip() or "gemini-3.1-flash-lite",
+            "gemini-3.5-flash-lite",
+            "gemini-flash-lite-latest",
+            os.getenv("GEMINI_MODEL", "").strip(),
+            "gemini-3.6-flash",
+            "gemini-2.0-flash-lite",
+        ]
+    )
+
+
+COACH_MODELS = _coach_model_candidates()
+COACH_GEMINI_BUDGET_SECONDS = float(
+    os.getenv("COACH_GEMINI_BUDGET_SECONDS", "").strip() or 20.0
 )
+_COACH_MIN_REQUEST_SECONDS = 10.0
+_COACH_REQUEST_TIMEOUT_SECONDS = 20.0
 
 _LIVE_SYSTEM = """You are listening to a speaker via system audio.
 Transcribe the speaker faithfully in the language they use; never translate their words.
@@ -391,6 +402,8 @@ def _generate_nvidia_assist(prompt: str, mode: str, provider=None) -> InterviewA
     contract, so the repair logic is shared instead of duplicated.
     """
     provider = provider or nvidia_provider
+    # Each fallback provider starts with its full budget, independently of any
+    # Gemini deadline overshoot (or time spent on an earlier fallback provider).
     deadline = time.monotonic() + _NVIDIA_TURN_BUDGET_SECONDS
     max_tokens = _nvidia_token_budget(mode)
     assist = parse_assist(
@@ -1149,7 +1162,12 @@ def _get_client(genai, api_key: str):
 _no_thinking_models: set[str] = set()
 
 
-def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE, thinking: bool = True):
+def _coach_config(
+    model: str,
+    mode: str = DEFAULT_ASSIST_MODE,
+    thinking: bool = True,
+    timeout_seconds: float = _COACH_REQUEST_TIMEOUT_SECONDS,
+):
     """Low-latency generation config. thinking_budget=0 skips the multi-second
     default 'thinking' phase; 2.0 models and the 3.x family reject the field."""
     from google.genai import types
@@ -1162,16 +1180,28 @@ def _coach_config(model: str, mode: str = DEFAULT_ASSIST_MODE, thinking: bool = 
     kwargs = dict(
         temperature=0.2 if mode in ORAL_ASSIST_MODES else 0.4,
         max_output_tokens=700 if mode in _LONG_FORM_MODES else 240,
+        http_options=types.HttpOptions(
+            timeout=int(
+                max(
+                    _COACH_MIN_REQUEST_SECONDS,
+                    min(timeout_seconds, _COACH_REQUEST_TIMEOUT_SECONDS),
+                ) * 1000
+            )
+        ),
     )
     if thinking and "2.0" not in model and model not in _no_thinking_models:
         kwargs["thinking_config"] = types.ThinkingConfig(thinking_budget=0)
     return types.GenerateContentConfig(**kwargs)
 
 
-def _stream_coach(client, model: str, prompt: str, config, on_partial) -> str:
+def _stream_coach(
+    client, model: str, prompt: str, config, on_partial, deadline: float | None = None,
+    on_text: Callable[[str], None] | None = None,
+) -> str:
     """Consume a streaming coach response, emitting partial answers as they grow.
 
-    Returns the full text.
+    Returns the full text. `on_text` retains accumulated text for recovery if
+    iteration fails before the stream can return it.
 
     The answer occupies a single line, so waiting for that line to close would
     mean waiting for the whole generation — measured at 1221 ms to first token
@@ -1188,6 +1218,11 @@ def _stream_coach(client, model: str, prompt: str, config, on_partial) -> str:
     for chunk in client.models.generate_content_stream(
         model=model, contents=prompt, config=config
     ):
+        # The deadline stops new attempts and is checked between chunks. One
+        # in-flight read can overshoot it by up to the per-request timeout;
+        # fallback providers therefore receive independent, full budgets.
+        if deadline is not None and time.monotonic() >= deadline:
+            raise TimeoutError("Gemini coach turn timed out")
         piece = getattr(chunk, "text", None) or ""
         if not piece:
             continue
@@ -1200,6 +1235,8 @@ def _stream_coach(client, model: str, prompt: str, config, on_partial) -> str:
                 model=model,
             )
         buffer += piece
+        if on_text is not None:
+            on_text(buffer)
         if on_partial is None:
             continue
         if "\n" in buffer:
@@ -1216,6 +1253,8 @@ def _stream_coach(client, model: str, prompt: str, config, on_partial) -> str:
         if assist is not None:
             on_partial(assist)
 
+    if deadline is not None and time.monotonic() >= deadline:
+        raise TimeoutError("Gemini coach turn timed out")
     return buffer
 
 
@@ -1301,17 +1340,62 @@ def coach_assist(
 
     last_exc = None
     incomplete_assist: InterviewAssist | None = None
+    emitted_assist: InterviewAssist | None = None
+    streamed_text = ""
+
+    def remember_text(text: str) -> None:
+        nonlocal incomplete_assist, streamed_text
+        streamed_text = text
+        assist = parse_assist(text, partial=True)
+        if assist is not None:
+            incomplete_assist = assist
+
+    def remember_partial(assist: InterviewAssist) -> None:
+        nonlocal emitted_assist
+        if on_partial is not None:
+            on_partial(assist)
+        # A word-boundary preview is not a completed answer. Only closed lines
+        # that satisfy this mode can replace a later fallback response.
+        if "\n" in streamed_text and _has_required_answers(assist, mode):
+            emitted_assist = assist
+
+    skipped_models: set[str] = set()
+    deadline: float | None = None
+    budget_exhausted = False
     for key in keys:
+        if budget_exhausted:
+            break
         client = _get_client(genai, key)
+        attempted_models: set[str] = set()
+        quota_models: set[str] = set()
         for model in models:
-            if model in _broken_models:
+            if model in _broken_models or model in skipped_models:
                 continue
+            now = time.monotonic()
+            if deadline is None:
+                deadline = now + COACH_GEMINI_BUDGET_SECONDS
+            remaining = deadline - now
+            # Gemini rejects deadlines below 10 seconds instead of attempting
+            # the request. Fallback providers start with their own full budget.
+            if remaining < _COACH_MIN_REQUEST_SECONDS:
+                last_exc = TimeoutError("Gemini coach budget below minimum request timeout")
+                budget_exhausted = True
+                break
+            attempted_models.add(model)
             try:
                 try:
                     text = _stream_coach(
-                        client, model, prompt, _coach_config(model, mode), on_partial
+                        client,
+                        model,
+                        prompt,
+                        _coach_config(model, mode, timeout_seconds=remaining),
+                        remember_partial if on_partial is not None else None,
+                        deadline=deadline,
+                        on_text=remember_text,
                     )
                 except Exception as exc:
+                    if emitted_assist is not None:
+                        raise
                     # A 400 usually means the config, not the model. Retry once
                     # without thinking_budget before writing the model off: the
                     # 3.x family rejects that field and was being blacklisted
@@ -1326,12 +1410,17 @@ def coach_assist(
                         "Coach model %s no acepta thinking_budget; reintentando sin él",
                         model,
                     )
+                    remaining = deadline - time.monotonic()
+                    if remaining < _COACH_MIN_REQUEST_SECONDS:
+                        raise TimeoutError("Gemini coach budget below minimum request timeout")
                     text = _stream_coach(
                         client,
                         model,
                         prompt,
-                        _coach_config(model, mode, thinking=False),
-                        on_partial,
+                        _coach_config(model, mode, thinking=False, timeout_seconds=remaining),
+                        remember_partial if on_partial is not None else None,
+                        deadline=deadline,
+                        on_text=remember_text,
                     )
                 assist = parse_assist(text)
                 if assist is not None and _has_required_answers(assist, mode):
@@ -1350,12 +1439,20 @@ def coach_assist(
                 continue
             except Exception as exc:
                 last_exc = exc
+                if emitted_assist is not None:
+                    # Do not replace an adequate answer already on screen.
+                    return emitted_assist
                 if gemini_keys.pool.is_quota_error(exc):
-                    logger.warning("Coach quota on model=%s key=%s", model, gemini_keys.pool.current_label())
-                    if model == models[-1]:
-                        gemini_keys.pool.mark_exhausted(key)
+                    logger.warning("Coach quota on model=%s; trying remaining models and keys", model)
+                    quota_models.add(model)
                     continue
                 logger.warning("Coach model %s failed: %s", model, exc)
+                kind = nvidia_provider.classify_error(exc)
+                if kind == nvidia_provider.AUTH:
+                    break
+                if kind in (nvidia_provider.SATURATION, nvidia_provider.NETWORK):
+                    skipped_models.add(model)
+                    continue
                 if _is_permanent_model_error(exc):
                     _broken_models.add(model)
                     logger.warning(
@@ -1363,10 +1460,24 @@ def coach_assist(
                         model,
                     )
                 continue
-    if last_exc and gemini_keys.pool.is_quota_error(last_exc):
-        logger.warning("Gemini coach sin cuota; usando respaldo NVIDIA")
+        if (
+            attempted_models
+            and attempted_models == quota_models
+            and not skipped_models
+            and not budget_exhausted
+        ):
+            # A transiently skipped model may recover next turn; its absence
+            # is not evidence that this key has exhausted every model's quota.
+            gemini_keys.pool.mark_exhausted(key)
+    if has_fallback_provider():
+        logger.warning("Gemini coach unavailable; trying fallback providers")
         try:
-            assist = _fallback_assist(prompt, mode, "respaldo_cuota")
+            reason = (
+                "respaldo_cuota"
+                if last_exc and gemini_keys.pool.is_quota_error(last_exc)
+                else "respaldo_error"
+            )
+            assist = _fallback_assist(prompt, mode, reason)
             if assist is not None:
                 return assist
         except CoachUnavailable:
@@ -1374,9 +1485,6 @@ def coach_assist(
             if incomplete_assist is not None:
                 return incomplete_assist
             raise
-        if incomplete_assist is not None:
-            return incomplete_assist
-        raise last_exc
     if incomplete_assist is not None:
         return incomplete_assist
     if last_exc:

@@ -331,5 +331,52 @@ class GroqReasoningTokenFloorTests(unittest.TestCase):
         )
 
 
+class GroqReasoningEffortTests(unittest.TestCase):
+    """The 700-token floor alone is not enough on the real coach prompt.
+
+    Measured 2026-09-23 with the 3867-char coach prompt on `openai/gpt-oss-120b`:
+    max_tokens=700 with the default effort spent 698 tokens reasoning and
+    returned `finish_reason=length` with empty content. The same ceiling with
+    `reasoning_effort=low` used 191-295 reasoning tokens and answered in
+    1.2-1.3 s. Without it Groq looks dead on every coach turn while healthy.
+    """
+
+    @staticmethod
+    def _sent_body(model: str) -> dict:
+        import io
+        import json
+
+        captured: dict = {}
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            payload = {"choices": [{"message": {"content": "respuesta"}}]}
+            return _Response(json.dumps(payload).encode("utf-8"))
+
+        with (
+            mock.patch.object(groq_provider, "GROQ_MODEL", model),
+            mock.patch.object(
+                groq_provider.urllib.request, "urlopen", side_effect=fake_urlopen
+            ),
+        ):
+            groq_provider._request("gsk-one", "pregunta", 700)
+        return captured
+
+    def test_a_reasoning_model_is_asked_to_reason_briefly(self):
+        body = self._sent_body("openai/gpt-oss-120b")
+        self.assertEqual(body.get("reasoning_effort"), "low")
+
+    def test_a_plain_model_gets_no_reasoning_field(self):
+        body = self._sent_body("allam-2-7b")
+        self.assertNotIn("reasoning_effort", body)
+
+
 if __name__ == "__main__":
     unittest.main()
