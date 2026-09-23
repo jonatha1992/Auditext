@@ -9,7 +9,9 @@ import winsound
 import customtkinter as ctk
 
 import config
+from core.errors import record
 from infrastructure.services.microphone_test import (
+    AUDIBLE_LEVEL,
     MicrophoneTestService,
     load_preferred_microphone,
     save_preferred_microphone,
@@ -27,6 +29,12 @@ ACCENT_HOVER = "#5900CC"
 SUCCESS = "#4EC98A"
 ERROR = "#E0506A"
 
+# Techo de pantalla para una prueba entera. El servicio ya acota cada endpoint,
+# así que esto solo cubre lo que queda afuera: la carga del modelo de Whisper y
+# la transcripción. Sin este segundo cerrojo, cualquier bloqueo nuevo vuelve a
+# dejar el botón deshabilitado y la app aparenta estar colgada.
+_TEST_TIMEOUT_MS = 90_000
+
 
 class MicrophoneTestFrame(ctk.CTkFrame):
     def __init__(self, parent):
@@ -34,6 +42,10 @@ class MicrophoneTestFrame(ctk.CTkFrame):
         self.service = MicrophoneTestService()
         self.result = None
         self._testing = False
+        # Una prueba que venció ya devolvió el control al usuario: lo que llegue
+        # tarde de ese intento no puede volver a pisar la pantalla.
+        self._test_token = 0
+        self._watchdog = None
 
         header = ctk.CTkFrame(self, fg_color="transparent")
         header.pack(fill=tk.X, padx=24, pady=(20, 10))
@@ -154,6 +166,8 @@ class MicrophoneTestFrame(ctk.CTkFrame):
             return
         self._testing = True
         self.result = None
+        self._test_token += 1
+        token = self._test_token
         self.test_button.configure(state="disabled", text="●  Grabando… hablá ahora")
         self.refresh_button.configure(state="disabled")
         self.play_button.configure(state="disabled")
@@ -169,35 +183,120 @@ class MicrophoneTestFrame(ctk.CTkFrame):
             try:
                 result = self.service.probe(selected, duration_seconds=5)
             except Exception as exc:
-                self.after(0, lambda message=str(exc): self._show_error(message))
+                self.after(
+                    0,
+                    lambda error=exc: self._show_error(
+                        # Sin user_msg, record() devuelve el texto genérico de
+                        # la bitácora y el diagnóstico del servicio — qué
+                        # endpoint falló y por qué — no llega nunca a pantalla.
+                        record(
+                            "microfono.prueba",
+                            error,
+                            microfono=selected,
+                            user_msg=str(error),
+                        ),
+                        token,
+                    ),
+                )
                 return
-            self.after(0, lambda: self._show_result(result))
+            self.after(0, lambda: self._show_result(result, token))
 
+        self._watchdog = self.after(
+            _TEST_TIMEOUT_MS, lambda: self._on_timeout(token, selected)
+        )
         threading.Thread(target=work, daemon=True).start()
 
-    def _show_result(self, result) -> None:
+    def _cancel_watchdog(self) -> None:
+        if self._watchdog is not None:
+            self.after_cancel(self._watchdog)
+            self._watchdog = None
+
+    def _on_timeout(self, token: int, microphone_name: str) -> None:
+        if token != self._test_token or not self._testing:
+            return
+        self._watchdog = None
+        # El intento vencido queda invalidado acá mismo: si el hilo revive más
+        # tarde, su resultado ya no puede pisar la pantalla del usuario.
+        self._test_token += 1
+        # Un endpoint que se cuelga no levanta excepción, así que sin esto la
+        # bitácora no registra nada y la falla queda invisible en Ajustes.
+        self._show_error(
+            record(
+                "microfono.prueba",
+                TimeoutError(
+                    f"{microphone_name} no respondió en "
+                    f"{_TEST_TIMEOUT_MS // 1000} segundos"
+                ),
+                microfono=microphone_name,
+                user_msg=(
+                    f"{microphone_name} no respondió. Probá con otro micrófono "
+                    "o revisá Ajustes → Bitácora de errores."
+                ),
+            )
+        )
+
+    def _show_result(self, result, token: int | None = None) -> None:
+        if token is not None and token != self._test_token:
+            return
+        self._cancel_watchdog()
         self._testing = False
         self.result = result
         self.test_button.configure(state="normal", text="●  Repetir prueba")
         self.refresh_button.configure(state="normal")
         self.play_button.configure(state="normal")
-        self.use_button.configure(state="normal")
         self.level_bar.set(min(1.0, result.peak_level * 4.0))
-        understood = result.transcription or "No se reconocieron palabras."
+        # Una toma muda no es lo mismo que una que no se entendió: el micrófono
+        # captó bien y casi siempre significa que nadie habló. Decirlo como
+        # "no se reconocieron palabras" manda a revisar el equipo equivocado.
+        silent = result.mean_level < AUDIBLE_LEVEL
+        # Una toma cortada engaña al control de nivel: un chasquido de 0,2 s
+        # promedia muy por encima del umbral y el micrófono igual está roto.
+        partial = result.is_partial
+        if silent:
+            understood = "No se captó audio: hablá más fuerte o subí el volumen de entrada."
+        elif partial:
+            understood = (
+                "El micrófono cortó la grabación antes de tiempo. "
+                "Revisá el cable o el puerto USB y probá de nuevo."
+            )
+        else:
+            understood = result.transcription or "No se reconocieron palabras."
         self.transcription_box.configure(state="normal")
         self.transcription_box.delete("1.0", tk.END)
         self.transcription_box.insert("1.0", understood)
         self.transcription_box.configure(state="disabled")
-        color = SUCCESS if result.transcription else ERROR
+        # Aprobar un micrófono que no captó nada es exactamente lo que esta
+        # pestaña existe para evitar: quedaría de preferido en Resolver y
+        # Práctica oral, y la falla reaparecería en medio de un examen.
+        usable = not silent and not partial
+        self.use_button.configure(state="normal" if usable else "disabled")
+        if silent:
+            headline = "Micrófono abierto, pero no entró señal"
+            color = "#F6AD55"
+        elif partial:
+            headline = (
+                f"Grabación incompleta · {result.captured_seconds:.1f} s de "
+                f"{result.requested_seconds:.0f} s"
+            )
+            color = ERROR
+        else:
+            headline = "Señal recibida"
+            color = SUCCESS if result.transcription else ERROR
         self.status_label.configure(
             text=(
-                f"Señal recibida · nivel {result.mean_level:.4f} · "
+                f"{headline} · nivel {result.mean_level:.4f} · "
                 f"endpoint {result.endpoint_name}"
             ),
             text_color=color,
         )
 
-    def _show_error(self, message: str) -> None:
+    def _show_error(self, message: str, token: int | None = None) -> None:
+        # Un intento viejo que falla tarde no puede tocar nada: cancelaría el
+        # watchdog del intento en curso, lo marcaría como terminado y dejaría
+        # que el usuario largue una tercera prueba sobre el mismo micrófono.
+        if token is not None and token != self._test_token:
+            return
+        self._cancel_watchdog()
         self._testing = False
         self.test_button.configure(state="normal", text="●  Reintentar prueba")
         self.refresh_button.configure(state="normal")

@@ -230,5 +230,153 @@ class FallbackChainTests(unittest.TestCase):
         self.assertIn("saturado", str(ctx.exception))
 
 
+class GroqDefaultModelTests(unittest.TestCase):
+    """El default de GROQ_MODEL, que es lo que rompio el simulacro.
+
+    `llama-3.3-70b-versatile` fue el default hasta el 2026-09-20 y para
+    entonces ya no existia: Groq retiro toda la familia Llama y contesta
+    `HTTP 404 model_not_found` con cualquier key. Ese 404 clasifica PERMANENT,
+    asi que abortaba la cadena en el primer intento y el profesor IA quedaba
+    mudo apenas Gemini se saturaba, con Groq "configurado".
+    """
+
+    # Ninguno de estos esta en el catalogo de Groq desde el 2026-09-20. El test
+    # es un tope: si alguien vuelve a poner un Llama de default, falla aca y no
+    # en la cara del usuario a mitad de un examen.
+    _RETIRED_MARKERS = ("llama-3", "llama3", "llama-2", "llama-4", "mixtral", "gemma")
+
+    def test_the_default_model_is_not_from_a_retired_family(self):
+        model = groq_provider.GROQ_MODEL.casefold()
+        for marker in self._RETIRED_MARKERS:
+            with self.subTest(marker=marker):
+                self.assertNotIn(
+                    marker,
+                    model,
+                    f"{groq_provider.GROQ_MODEL!r} es de una familia retirada de "
+                    "Groq: devuelve HTTP 404 model_not_found con cualquier key. "
+                    "Validar el reemplazo con una llamada real antes de ponerlo.",
+                )
+
+    def test_the_default_model_is_one_verified_against_the_live_catalog(self):
+        # Catalogo real de Groq leido el 2026-09-20 (13 modelos). Los de
+        # transcripcion y los guard/prompt-guard no generan texto, asi que no
+        # son candidatos a default de este proveedor.
+        verified_chat_models = {
+            "openai/gpt-oss-120b",
+            "openai/gpt-oss-20b",
+            "openai/gpt-oss-safeguard-20b",
+            "groq/compound",
+            "groq/compound-mini",
+            "qwen/qwen3.8-27b",
+            "allam-2-7b",
+        }
+        self.assertIn(groq_provider.GROQ_MODEL, verified_chat_models)
+
+
+class GroqReasoningTokenFloorTests(unittest.TestCase):
+    """La trampa del `content` vacio en los modelos de razonamiento.
+
+    Medido el 2026-09-20 contra `openai/gpt-oss-120b`: el reasoning se cobra
+    del MISMO `max_tokens` que la respuesta, asi que con un techo bajo la API
+    devuelve HTTP 200 con `content` vacio. `_request` lo convierte en "respuesta
+    vacia" y `provider_chain` lo cuenta como falla: el proveedor parece caido
+    estando sano. El coach pide 270 tokens en los modos cortos
+    (`interview_live._nvidia_token_budget`), justo en la zona de riesgo.
+    """
+
+    def test_a_reasoning_model_gets_room_for_the_reasoning(self):
+        self.assertEqual(
+            groq_provider.effective_max_tokens(270, "openai/gpt-oss-120b"),
+            groq_provider._MIN_REASONING_TOKENS,
+        )
+
+    def test_a_ceiling_already_above_the_floor_is_left_alone(self):
+        # Es un techo, no un objetivo: no se recorta lo que pide quien llama.
+        self.assertEqual(
+            groq_provider.effective_max_tokens(1800, "openai/gpt-oss-120b"), 1800
+        )
+
+    def test_a_plain_model_is_not_inflated(self):
+        self.assertEqual(groq_provider.effective_max_tokens(270, "allam-2-7b"), 270)
+
+    def test_generate_applies_the_floor_to_the_real_request(self):
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider, "GROQ_MODEL", "openai/gpt-oss-120b"),
+            mock.patch.object(
+                groq_provider, "_request", return_value="respuesta"
+            ) as request,
+        ):
+            groq_provider.generate("pregunta", max_tokens=270)
+
+        # Tercer posicional de _request(key, prompt, max_tokens, ...).
+        self.assertEqual(request.call_args.args[2], groq_provider._MIN_REASONING_TOKENS)
+
+    def test_the_socket_timeout_follows_the_inflated_ceiling(self):
+        """Mas tokens es mas tiempo de escritura: el timeout tiene que seguirlo."""
+        pool = groq_provider.GroqKeyPool(_keys=["gsk-one"])
+        with (
+            mock.patch.object(groq_provider, "pool", pool),
+            mock.patch.object(groq_provider, "GROQ_MODEL", "openai/gpt-oss-120b"),
+            mock.patch.object(
+                groq_provider, "_request", return_value="respuesta"
+            ) as request,
+        ):
+            groq_provider.generate("pregunta", max_tokens=270, budget_seconds=120.0)
+
+        self.assertAlmostEqual(
+            request.call_args.kwargs["timeout"],
+            groq_provider.request_timeout_for(groq_provider._MIN_REASONING_TOKENS),
+        )
+
+
+class GroqReasoningEffortTests(unittest.TestCase):
+    """The 700-token floor alone is not enough on the real coach prompt.
+
+    Measured 2026-09-23 with the 3867-char coach prompt on `openai/gpt-oss-120b`:
+    max_tokens=700 with the default effort spent 698 tokens reasoning and
+    returned `finish_reason=length` with empty content. The same ceiling with
+    `reasoning_effort=low` used 191-295 reasoning tokens and answered in
+    1.2-1.3 s. Without it Groq looks dead on every coach turn while healthy.
+    """
+
+    @staticmethod
+    def _sent_body(model: str) -> dict:
+        import io
+        import json
+
+        captured: dict = {}
+
+        class _Response(io.BytesIO):
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *exc):
+                return False
+
+        def fake_urlopen(request, timeout=None):
+            captured.update(json.loads(request.data.decode("utf-8")))
+            payload = {"choices": [{"message": {"content": "respuesta"}}]}
+            return _Response(json.dumps(payload).encode("utf-8"))
+
+        with (
+            mock.patch.object(groq_provider, "GROQ_MODEL", model),
+            mock.patch.object(
+                groq_provider.urllib.request, "urlopen", side_effect=fake_urlopen
+            ),
+        ):
+            groq_provider._request("gsk-one", "pregunta", 700)
+        return captured
+
+    def test_a_reasoning_model_is_asked_to_reason_briefly(self):
+        body = self._sent_body("openai/gpt-oss-120b")
+        self.assertEqual(body.get("reasoning_effort"), "low")
+
+    def test_a_plain_model_gets_no_reasoning_field(self):
+        body = self._sent_body("allam-2-7b")
+        self.assertNotIn("reasoning_effort", body)
+
+
 if __name__ == "__main__":
     unittest.main()

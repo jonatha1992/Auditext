@@ -279,6 +279,87 @@ class RecvLoopTests(unittest.TestCase):
 
         self.assertEqual(calls, 1)
 
+    def test_recv_loop_keeps_reading_after_a_model_turn_completes(self):
+        """`session.receive()` stops at every `turn_complete`, socket still open.
+
+        google-genai 2.15 `AsyncSession.receive` breaks its generator after a
+        message with `server_content.turn_complete`. Treating that as "server
+        closed" is what froze the interview on 2026-09-23 16:05: the first
+        question was transcribed and answered, Gemini closed its turn, and every
+        later interviewer question was sent over a live socket nobody read. The
+        saved WAV had sound for 220 s; the transcript stopped at 8 s.
+        """
+        seen: list[str] = []
+
+        def transcript(text: str) -> mock.Mock:
+            return mock.Mock(
+                session_resumption_update=None,
+                go_away=None,
+                server_content=mock.Mock(
+                    input_transcription=mock.Mock(text=text),
+                    turn_complete=False,
+                ),
+            )
+
+        turn_done = mock.Mock(
+            session_resumption_update=None,
+            go_away=None,
+            server_content=mock.Mock(input_transcription=None, turn_complete=True),
+        )
+        passes = [
+            [transcript("first question?"), turn_done],
+            [transcript("second question?"), turn_done],
+            [],  # server really closed: receive() yields nothing
+        ]
+        calls = 0
+
+        class FakeSession:
+            def receive(self):
+                nonlocal calls
+                batch = passes[calls]
+                calls += 1
+
+                async def gen():
+                    for msg in batch:
+                        yield msg
+
+                return gen()
+
+        live = InterviewLiveSession(
+            context="temario",
+            on_transcript=seen.append,
+            on_assist=lambda _a: None,
+            on_status=lambda _s: None,
+            mode="examen_oral",
+        )
+        asyncio.run(live._recv_loop(FakeSession()))
+
+        self.assertIn("second question?", "".join(seen))
+        self.assertEqual(calls, 3)
+
+    def test_recv_loop_stops_reading_once_stop_is_requested(self):
+        calls = 0
+        live = _session()
+
+        class FakeSession:
+            def receive(self):
+                nonlocal calls
+                calls += 1
+                live._stop.set()
+
+                async def gen():
+                    yield mock.Mock(
+                        session_resumption_update=None,
+                        go_away=None,
+                        server_content=None,
+                    )
+
+                return gen()
+
+        asyncio.run(live._recv_loop(FakeSession()))
+
+        self.assertEqual(calls, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -25,6 +25,7 @@ from infrastructure.services.microphone_test import (
     load_preferred_microphone,
 )
 from .app_dialog import ask_input, show_error, show_info, show_warning
+from .loading import LoadingText
 from infrastructure.services.live_transcriber import (
     DEFAULT_DIR,
     Transcriber,
@@ -47,6 +48,14 @@ INTERVIEWER = "#4DA3FF"
 CANDIDATE = "#4EC98A"
 REC = "#E0506A"
 
+# Texto de la tarjeta de ideas clave cuando el turno no trae ninguna.
+_NO_IDEAS = "Enfocate en una experiencia concreta y su resultado."
+
+# Cuánto se espera con la devolución en pantalla antes de pasar sola a la
+# próxima pregunta del práctico oral académico. En None el avance queda
+# 100% manual: el estudiante decide cuándo apretar "Siguiente pregunta".
+_NEXT_QUESTION_GRACE_MS: int | None = 4000
+
 CONTEXT_SETTING_KEY = "interview_context"
 CONTEXT_PLACEHOLDER = "Pegá tu CV o el contexto de la sesión (puesto, empresa, tema a practicar...)."
 
@@ -56,6 +65,17 @@ NOTEBOOK_ID_SETTING_KEY = "notebooklm_selected_id"
 NOTEBOOK_TITLE_SETTING_KEY = "notebooklm_selected_title"
 NOTEBOOK_PLACEHOLDER = "Seleccioná una materia…"
 NOTEBOOK_CONTEXT_SETTING_PREFIX = "notebooklm_context_"
+NOTEBOOK_PROFILE_SETTING_KEY = "notebooklm_profile"
+PROFILE_PLACEHOLDER = "Conectá una cuenta…"
+
+
+def notebook_id_setting_key(profile: str | None) -> str:
+    """Clave de la materia elegida, separada por cuenta.
+
+    Cada cuenta ve su propio catálogo, así que una sola clave global hacía que
+    al cambiar de cuenta se restaurara una materia que esa cuenta no tiene.
+    """
+    return f"{NOTEBOOK_ID_SETTING_KEY}_{profile}" if profile else NOTEBOOK_ID_SETTING_KEY
 MODE_LABELS = {
     "Entrevista laboral": "entrevista",
     "Práctica de idioma": "practica",
@@ -606,6 +626,11 @@ class InterviewFrame(ctk.CTkFrame):
         self._source_map: dict[str, tuple[str, object]] = {}
         self._microphone_map: dict[str, str | None] = {}
         self._notebook_map: dict[str, notebooklm_service.NotebookRef] = {}
+        self._profile_map: dict[str, notebooklm_service.ProfileRef] = {}
+        # Cuenta de NotebookLM que usan todas las llamadas del CLI. Se manda
+        # explícita en cada una: el default del CLI es global de la máquina y
+        # apuntaba a la cuenta equivocada.
+        self._active_profile: str | None = None
         self._active_notebook_id: str | None = None
         self._active_notebook_title: str | None = None
         self._active_notebook_context: str | None = None
@@ -616,6 +641,10 @@ class InterviewFrame(ctk.CTkFrame):
         self._session_paused = False
         self._mic_error_shown = False
         self._simulation_session = None
+        # Modo vigente del simulacro. Vive en el frame y no sólo en la sesión
+        # porque un fallo puede llegar antes de que la sesión exista, y de ese
+        # modo depende qué botones hay que devolverle al usuario.
+        self._simulation_type = "interview"
         self._simulation_answer_parts: list[str] = []
         self._simulation_answering = False
         self._simulation_busy = False
@@ -624,6 +653,20 @@ class InterviewFrame(ctk.CTkFrame):
         self._knowledge_check_after_id = None
         self._knowledge_dialog = None
         self._next_question_dialog = None
+        self._next_question_after_id = None
+        # Historial de turnos de la sesión. El panel muestra uno solo a la vez,
+        # así que sin esta lista la pregunta anterior se perdía al llegar la
+        # siguiente: en pantalla y también en lo que se guarda en Historial.
+        self._qa_history: list[dict] = []
+        # None = modo vivo (se muestra el último turno y los nuevos entran
+        # solos). Un int = el usuario está mirando un turno anterior, y los que
+        # llegan se graban sin pisarle la pantalla.
+        self._history_index: int | None = None
+        # El último turno todavía recibe deltas del stream. Sin esto cada
+        # parcial de Gemini abriría una entrada nueva.
+        self._history_open = False
+        self._history_window = None
+        self._build_loaders()
         self._build_header()
         self._build_preparation()
         self._build_active()
@@ -632,6 +675,90 @@ class InterviewFrame(ctk.CTkFrame):
         self.refresh_devices()
         self.after(3000, self._auto_refresh_audio_sources)
         self.after(100, self._drain_queues)
+
+    # ------------------------------------------------------------------
+    # Indicador de carga
+    # ------------------------------------------------------------------
+    def _build_loaders(self) -> None:
+        """Un único mecanismo de carga para las cuatro etiquetas que esperan.
+
+        Se arman antes que los widgets: ``_apply_context_source_state`` y el
+        ``after(250, self._refresh_profiles)`` del armado pueden escribir estado
+        mientras la pantalla todavía se construye, y sin loader eso sería un
+        ``AttributeError`` en pleno arranque.
+        """
+        self._status_loader = LoadingText(
+            self._label_writer("status_label"),
+            self._after_safe,
+            self._cancel_after,
+            idle_prefix="●",
+        )
+        self._notebook_loader = LoadingText(
+            self._label_writer("notebook_status"),
+            self._after_safe,
+            self._cancel_after,
+        )
+        self._question_loader = LoadingText(
+            self._label_writer("question_label"),
+            self._after_safe,
+            self._cancel_after,
+        )
+        self._answer_loader = LoadingText(
+            self._label_writer("answer_loading_label"),
+            self._after_safe,
+            self._cancel_after,
+        )
+
+    def _label_writer(self, attribute: str):
+        """Devuelve el ``apply`` de un loader, inerte si la etiqueta no está.
+
+        ``notebook_status``, ``question_label`` y ``answer_loading_label`` sólo
+        existen en algunos modos, así que escribir en ellas tiene que ser un
+        no-op y no una excepción.
+        """
+
+        def write(text: str, color=None) -> None:
+            label = getattr(self, attribute, None)
+            if label is None:
+                return
+            try:
+                if color is None:
+                    label.configure(text=text)
+                else:
+                    label.configure(text=text, text_color=color)
+            except (RuntimeError, tk.TclError):
+                pass
+
+        return write
+
+    def _after_safe(self, ms: int, callback):
+        """``after`` que devuelve ``None`` si la UI ya se fue, en vez de explotar."""
+        try:
+            return self.after(ms, callback)
+        except (RuntimeError, tk.TclError):
+            return None
+
+    def _cancel_after(self, token) -> None:
+        try:
+            self.after_cancel(token)
+        except (RuntimeError, tk.TclError, ValueError):
+            pass
+
+    def _loaders(self):
+        return (
+            getattr(self, "_status_loader", None),
+            getattr(self, "_notebook_loader", None),
+            getattr(self, "_question_loader", None),
+            getattr(self, "_answer_loader", None),
+        )
+
+    def destroy(self) -> None:
+        # Sin esto queda un ``after`` por loader apuntando a un widget muerto:
+        # el mismo bug que tiene el spinner de canvas y por el que no se usó.
+        for loader in self._loaders():
+            if loader is not None:
+                loader.stop()
+        super().destroy()
 
     def _build_header(self) -> None:
         resolver = self._fixed_mode == "resolver"
@@ -808,6 +935,32 @@ class InterviewFrame(ctk.CTkFrame):
                 text_color=TEXT,
             )
             self.use_notebook_check.pack(side=tk.RIGHT)
+            ctk.CTkLabel(
+                notebook_card,
+                text="CUENTA",
+                font=("Segoe UI Semibold", 8),
+                text_color=MUTED,
+            ).pack(anchor=tk.W, padx=12, pady=(4, 0))
+            self.profile_var = tk.StringVar(value=PROFILE_PLACEHOLDER)
+            self.profile_combo = ctk.CTkComboBox(
+                notebook_card,
+                variable=self.profile_var,
+                state="readonly",
+                values=[self.profile_var.get()],
+                fg_color=PANEL,
+                border_color=BORDER,
+                button_color=BORDER,
+                dropdown_fg_color=PANEL,
+                dropdown_hover_color=ACCENT,
+                command=self._on_profile_change,
+            )
+            self.profile_combo.pack(fill=tk.X, padx=12, pady=(2, 6))
+            ctk.CTkLabel(
+                notebook_card,
+                text="MATERIA",
+                font=("Segoe UI Semibold", 8),
+                text_color=MUTED,
+            ).pack(anchor=tk.W, padx=12, pady=(0, 0))
             self.notebook_var = tk.StringVar(
                 value=NOTEBOOK_PLACEHOLDER
             )
@@ -843,7 +996,9 @@ class InterviewFrame(ctk.CTkFrame):
                 text="🔄  Actualizar materias",
                 width=150,
                 height=28,
-                command=self._refresh_notebooks,
+                # Recarga también las cuentas: después de «Conectar» una nueva,
+                # este botón es el único camino de vuelta a la lista.
+                command=self._refresh_profiles,
                 fg_color=PANEL,
                 hover_color=ACCENT,
             )
@@ -875,7 +1030,7 @@ class InterviewFrame(ctk.CTkFrame):
             # The CLI keeps its authenticated browser session. On subsequent
             # launches, restore the catalog and last selected subject silently.
             self._apply_context_source_state()
-            self.after(250, self._refresh_notebooks)
+            self.after(250, self._refresh_profiles)
 
         sources = ctk.CTkFrame(self.prep, fg_color="transparent")
         sources.pack(fill=tk.X, padx=18)
@@ -1062,6 +1217,15 @@ class InterviewFrame(ctk.CTkFrame):
         )
         self.read_question_button.pack(side=tk.RIGHT, padx=(0, 8))
         self.read_question_button.pack_forget()
+        # Reemplaza el modal "¿Listo para continuar?": queda en pantalla ni
+        # bien arranca la devolución hablada, así que interrumpirla y avanzar
+        # es un solo click en vez de esperar a que termine de leer.
+        self.next_question_button = ctk.CTkButton(
+            top, text="➡  Siguiente pregunta", width=170,
+            command=self._continue_to_next_question, **secondary_button,
+        )
+        self.next_question_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.next_question_button.pack_forget()
         self.stop_button = ctk.CTkButton(
             top, text="⏹  Detener", width=110,
             fg_color="#C83D57", hover_color="#A92F47",
@@ -1089,16 +1253,17 @@ class InterviewFrame(ctk.CTkFrame):
             19 if practice else 17,
             title_color="#F6AD55",
         )
-        ctk.CTkLabel(
+        usage_hint = ctk.CTkLabel(
             self.active,
             text="💡  Click derecho en una palabra (o seleccioná una frase) = escuchar · 📋 copiar · 🔊 escuchar toda la respuesta",
             font=("Segoe UI", 10), text_color=MUTED,
-        ).pack(anchor=tk.W, padx=24, pady=(0, 2))
+        )
+        usage_hint.pack(anchor=tk.W, padx=24, pady=(0, 2))
+        self._build_history_bar(anchor=usage_hint)
         replies = ctk.CTkFrame(self.active, fg_color="transparent")
         replies.pack(fill=tk.X, padx=24, pady=6)
         replies.grid_columnconfigure(0, weight=1)
         self._answer_loading = False
-        self._spinner_index = 0
         self.answer_loading_label = ctk.CTkLabel(
             replies,
             text="◌  Generando respuesta nueva…",
@@ -1251,6 +1416,52 @@ class InterviewFrame(ctk.CTkFrame):
             fg_color="transparent", border_width=1, border_color=BORDER,
         ).pack(side=tk.LEFT, padx=6)
 
+    # Pack options of the history bar. ``pack_forget`` drops the slot, so the
+    # anchor is what puts the bar back between the question card and the answer
+    # cards instead of at the bottom of the panel.
+    _HISTORY_BAR_PACK = {"fill": tk.X, "padx": 24, "pady": (0, 4)}
+
+    def _build_history_bar(self, *, anchor) -> None:
+        """Turn navigator shown above the answer cards."""
+        self._history_bar_anchor = anchor
+        bar = self.history_bar = ctk.CTkFrame(self.active, fg_color="transparent")
+        nav_button = {
+            "width": 34,
+            "height": 24,
+            "fg_color": PANEL_DARK,
+            "hover_color": "#20212D",
+        }
+        self.history_prev_button = ctk.CTkButton(
+            bar, text="◀", command=lambda: self._history_go(-1), **nav_button
+        )
+        self.history_prev_button.pack(side=tk.LEFT)
+        self.history_counter = ctk.CTkLabel(
+            bar, text="1 / 1", font=("Segoe UI Semibold", 11), text_color=MUTED
+        )
+        self.history_counter.pack(side=tk.LEFT, padx=8)
+        self.history_next_button = ctk.CTkButton(
+            bar, text="▶", command=lambda: self._history_go(1), **nav_button
+        )
+        self.history_next_button.pack(side=tk.LEFT)
+        self.history_latest_button = ctk.CTkButton(
+            bar, text="⏭  Ir a la última", width=125, height=24,
+            fg_color=PANEL_DARK, hover_color="#20212D",
+            command=self._history_latest,
+        )
+        self.history_latest_button.pack(side=tk.LEFT, padx=(12, 0))
+        ctk.CTkButton(
+            bar, text="📚  Ver todas", width=110, height=24,
+            fg_color=PANEL_DARK, hover_color="#20212D",
+            command=self._show_history_window,
+        ).pack(side=tk.RIGHT)
+        self.history_hint = ctk.CTkLabel(
+            bar, text="", font=("Segoe UI Semibold", 11), text_color="#F6E05E"
+        )
+        self.history_hint.pack(side=tk.LEFT, padx=(12, 0))
+        # Con un solo turno no hay nada que navegar: la pantalla queda igual a
+        # como era antes de que existiera el historial.
+        bar.pack_forget()
+
     def _section(self, parent, title, text, size, title_color: str = MUTED):
         card = ctk.CTkFrame(parent, fg_color=PANEL, corner_radius=12, border_color=BORDER, border_width=1)
         card.pack(fill=tk.X, padx=24, pady=6)
@@ -1314,19 +1525,36 @@ class InterviewFrame(ctk.CTkFrame):
         interviewer = self.interviewer_box.get("1.0", tk.END).strip()
         candidate = self.candidate_box.get("1.0", tk.END).strip()
         if self._simulation_session is not None:
-            if not interviewer and not candidate:
+            if not interviewer and not candidate and not self._qa_history:
                 return ""
             academic = self._fixed_mode == "resolver"
             interviewer_role = "PROFESOR IA" if academic else "ENTREVISTADOR IA"
             candidate_role = "ESTUDIANTE" if academic else "CANDIDATO"
             report = self._simulation_session.report()
             report_text = f"\n\nDEVOLUCIÓN\n{report}" if report else ""
+            if self._qa_history:
+                # ``candidate_box`` se vacía en cada turno, así que leerla
+                # guardaba todas las preguntas y una sola respuesta: la última.
+                turns = self._simulation_history_text(
+                    interviewer_role, candidate_role
+                )
+                return f"{turns}{report_text}\n"
             return (
                 f"{interviewer_role}\n{interviewer}\n\n"
                 f"{candidate_role}\n{candidate}{report_text}\n"
             )
         if self._fixed_mode == "resolver":
             labels = ("RESPUESTA CORTA", "RESPUESTA AMPLIADA")
+            # Los widgets muestran un turno solo. Leerlos era guardar la última
+            # pregunta y tirar el resto de la sesión.
+            if self._qa_history:
+                turns = self._history_as_text(labels)
+                user_answer = f"\n\nTU RESPUESTA\n{candidate}" if candidate else ""
+                # La glosa en español no reemplaza a lo que el micrófono oyó:
+                # cuando la transcripción sale mal, el crudo es lo único que
+                # después explica por qué la respuesta no venía a cuento.
+                heard = f"\n\nTRANSCRIPCIÓN ESCUCHADA\n{interviewer}" if interviewer else ""
+                return f"{turns}{user_answer}{heard}\n"
             answers = [
                 (labels[i] if i < len(labels) else f"RESPUESTA {i + 1}", text)
                 for i, box in enumerate(self.reply_boxes)
@@ -1345,7 +1573,54 @@ class InterviewFrame(ctk.CTkFrame):
             return f"PREGUNTA\n{interviewer}\n\n{answer_text}{user_answer}\n"
         if not interviewer and not candidate:
             return ""
-        return f"ENTREVISTADOR\n{interviewer}\n\nCANDIDATO\n{candidate}\n"
+        base = f"ENTREVISTADOR\n{interviewer}\n\nCANDIDATO\n{candidate}\n"
+        # Las cajas de transcripción ya acumulan solas, pero las sugerencias del
+        # coach vivían únicamente en el turno visible.
+        if self._qa_history:
+            turns = self._history_as_text(("RESPUESTA", "DETALLES Y EJEMPLOS"))
+            return f"{base}\nSUGERENCIAS DEL COACH\n\n{turns}\n"
+        return base
+
+    def _simulation_history_text(
+        self, interviewer_role: str, candidate_role: str
+    ) -> str:
+        """Cada turno del simulacro con su pregunta, tu respuesta y la devolución."""
+        blocks = []
+        for number, entry in enumerate(self._qa_history, start=1):
+            question = entry["pregunta"].strip()
+            answer = entry.get("respuesta_usuario", "").strip()
+            feedback = "\n\n".join(
+                text for raw in entry["respuestas"] if (text := raw.strip())
+            )
+            if not (question or answer or feedback):
+                continue
+            block = f"{interviewer_role} · PREGUNTA {number}\n{question}"
+            if answer:
+                block += f"\n\n{candidate_role}\n{answer}"
+            if feedback:
+                block += f"\n\nDEVOLUCIÓN\n{feedback}"
+            if entry["ideas"]:
+                block += "\n\nFORTALEZAS\n" + " • ".join(entry["ideas"])
+            blocks.append(block)
+        return "\n\n".join(blocks)
+
+    def _history_as_text(self, labels: tuple[str, ...]) -> str:
+        """Todos los turnos de la sesión, numerados, para guardar en Historial."""
+        blocks = []
+        for number, entry in enumerate(self._qa_history, start=1):
+            answers = "\n\n".join(
+                f"{labels[i] if i < len(labels) else f'RESPUESTA {i + 1}'}\n{text}"
+                for i, raw in enumerate(entry["respuestas"])
+                if (text := raw.strip())
+            )
+            question = entry["pregunta"].strip()
+            if not question and not answers:
+                continue
+            block = f"PREGUNTA {number}\n{question}"
+            if answers:
+                block += f"\n\n{answers}"
+            blocks.append(block)
+        return "\n\n".join(blocks)
 
     def _audio_ready(self) -> tuple[bool, object | None]:
         import os
@@ -1511,14 +1786,13 @@ class InterviewFrame(ctk.CTkFrame):
         self.after(3000, self._auto_refresh_audio_sources)
 
     def _set_notebook_status(
-        self, text: str, color: str = MUTED
+        self, text: str, color: str = MUTED, *, busy: bool = False
     ) -> None:
-        if hasattr(self, "notebook_status"):
-            self.notebook_status.configure(text=text, text_color=color)
+        self._notebook_loader.show(text, color, busy=busy)
 
     def _login_notebooklm(self) -> None:
         try:
-            notebooklm_service.launch_login()
+            notebooklm_service.launch_login(self._active_profile)
         except Exception as exc:
             self._set_notebook_status(str(exc), ERROR)
             return
@@ -1527,19 +1801,92 @@ class InterviewFrame(ctk.CTkFrame):
             ACCENT,
         )
 
-    def _refresh_notebooks(self) -> None:
-        self._set_notebook_status("Consultando materias de NotebookLM…", ACCENT)
+    def _schedule_ui(self, callback) -> bool:
+        """Corre ``callback`` en el hilo de Tk, salvo que la UI ya se haya ido."""
+        try:
+            self.after(0, callback)
+        except (RuntimeError, tk.TclError):
+            return False
+        return True
 
-        def schedule_ui(callback) -> bool:
-            try:
-                self.after(0, callback)
-            except (RuntimeError, tk.TclError):
-                return False
-            return True
+    def _refresh_profiles(self) -> None:
+        """Carga las cuentas de NotebookLM y encadena el catálogo de la elegida."""
+        self._set_notebook_status("Buscando cuentas de NotebookLM…", ACCENT, busy=True)
 
         def work():
             try:
-                notebooks = notebooklm_service.list_notebooks()
+                profiles = notebooklm_service.list_profiles()
+            except Exception as exc:
+                self._schedule_ui(
+                    lambda message=str(exc): self._set_notebook_status(message, ERROR)
+                )
+                return
+            self._schedule_ui(lambda: apply(profiles))
+
+        def apply(profiles):
+            self._profile_map = {profile.label: profile for profile in profiles}
+            labels = list(self._profile_map)
+            if not labels:
+                self.profile_combo.configure(values=[PROFILE_PLACEHOLDER])
+                self.profile_var.set(PROFILE_PLACEHOLDER)
+                self._set_notebook_status(
+                    "No hay cuentas conectadas. Tocá «Conectar».", ERROR
+                )
+                return
+            self.profile_combo.configure(values=labels)
+            saved = self._load_setting(NOTEBOOK_PROFILE_SETTING_KEY)
+            chosen = next(
+                (label for label, p in self._profile_map.items() if p.name == saved),
+                labels[0],
+            )
+            self.profile_var.set(chosen)
+            resolved = self._profile_map[chosen].name
+            if resolved != self._active_profile:
+                # Este camino NO pasa por `_on_profile_change` — pasa cuando el
+                # nombre guardado ya no existe, o cuando no hay ninguno y se
+                # toma la primera cuenta listada — así que tiene que limpiar
+                # por su cuenta lo que pertenece a la cuenta anterior. Si no,
+                # la guía cacheada de la otra cuenta queda armada para el Start
+                # y nada en pantalla avisa que el material no corresponde.
+                self._active_profile = resolved
+                self._notebook_map = {}
+                self._deactivate_notebook_context()
+                self.notebook_combo.configure(values=[NOTEBOOK_PLACEHOLDER])
+                self.notebook_var.set(NOTEBOOK_PLACEHOLDER)
+                self._apply_context_source_state()
+            self._refresh_notebooks()
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _on_profile_change(self, choice: str) -> None:
+        profile = self._profile_map.get(choice)
+        if profile is None or profile.name == self._active_profile:
+            return
+        self._active_profile = profile.name
+        if config.repository is not None:
+            try:
+                config.repository.set_setting(
+                    NOTEBOOK_PROFILE_SETTING_KEY, profile.name
+                )
+            except Exception as exc:
+                logger.exception("Failed saving NotebookLM profile: %s", exc)
+        # El catálogo y la materia activa pertenecen a la cuenta anterior: si no
+        # se limpian, la sesión arranca con material de la cuenta que no es.
+        self._notebook_map = {}
+        self._deactivate_notebook_context()
+        self.notebook_combo.configure(values=[NOTEBOOK_PLACEHOLDER])
+        self.notebook_var.set(NOTEBOOK_PLACEHOLDER)
+        self._apply_context_source_state()
+        self._refresh_notebooks()
+
+    def _refresh_notebooks(self) -> None:
+        self._set_notebook_status("Consultando materias de NotebookLM…", ACCENT, busy=True)
+        profile = self._active_profile
+        schedule_ui = self._schedule_ui
+
+        def work():
+            try:
+                notebooks = notebooklm_service.list_notebooks(profile=profile)
             except Exception as exc:
                 schedule_ui(
                     lambda message=str(exc): self._set_notebook_status(
@@ -1549,13 +1896,23 @@ class InterviewFrame(ctk.CTkFrame):
                 return
 
             def apply():
+                # Cambiar de cuenta con un refresh en vuelo dejaba el catálogo
+                # de la anterior pisando al nuevo: el que llega tarde se tira.
+                if profile != self._active_profile:
+                    # Acá NO se frena el loader: cambiar de cuenta reentra en
+                    # `_refresh_notebooks`, que ya lo rearmó para el pedido
+                    # nuevo. Pararlo sería matarle el spinner al que sí sigue
+                    # en vuelo. Si el nuevo ya terminó, su propio estado final
+                    # lo apagó y este descarte no tiene nada que hacer.
+                    return
                 self._notebook_map = {
                     notebook.label: notebook for notebook in notebooks
                 }
                 labels = list(self._notebook_map)
+                account = self._profile_email(profile)
                 if not labels:
                     self._set_notebook_status(
-                        "No se encontraron materias con fuentes.", ERROR
+                        f"{account} no tiene materias con fuentes.", ERROR
                     )
                     return
                 self.notebook_combo.configure(values=labels)
@@ -1569,10 +1926,10 @@ class InterviewFrame(ctk.CTkFrame):
                     return
                 self._set_notebook_status(
                     (
-                        f"{len(labels)} materias disponibles · seleccionada: "
+                        f"{len(labels)} materias en {account} · seleccionada: "
                         f"{self._notebook_map[selected].title}"
                         if selected
-                        else f"{len(labels)} materias disponibles · elegí una."
+                        else f"{len(labels)} materias en {account} · elegí una."
                     ),
                     SUCCESS,
                 )
@@ -1591,6 +1948,13 @@ class InterviewFrame(ctk.CTkFrame):
             logger.exception("Failed loading setting %s: %s", key, exc)
             return None
 
+    def _profile_email(self, name: str | None) -> str:
+        """Email de una cuenta, para nombrarla en los mensajes de estado."""
+        for profile in self._profile_map.values():
+            if profile.name == name:
+                return profile.email or profile.name
+        return name or "la cuenta"
+
     def _restore_saved_notebook(self) -> str | None:
         """Re-select the last used subject and reuse its cached material.
 
@@ -1598,7 +1962,7 @@ class InterviewFrame(ctk.CTkFrame):
         started with no subject. Restoring from the local cache keeps the flow
         offline: syncing again is the user's call via «Sincronizar materia».
         """
-        saved_id = self._load_setting(NOTEBOOK_ID_SETTING_KEY)
+        saved_id = self._load_setting(notebook_id_setting_key(self._active_profile))
         if not saved_id:
             return None
         for label, notebook in self._notebook_map.items():
@@ -1620,7 +1984,9 @@ class InterviewFrame(ctk.CTkFrame):
         if config.repository is None:
             return
         try:
-            config.repository.set_setting(NOTEBOOK_ID_SETTING_KEY, notebook.id)
+            config.repository.set_setting(
+                notebook_id_setting_key(self._active_profile), notebook.id
+            )
             config.repository.set_setting(
                 NOTEBOOK_TITLE_SETTING_KEY, notebook.title
             )
@@ -1649,6 +2015,7 @@ class InterviewFrame(ctk.CTkFrame):
                 else f"Sincronizando {notebook.title} automáticamente…"
             ),
             ACCENT,
+            busy=True,
         )
         self._sync_notebook()
 
@@ -1685,6 +2052,9 @@ class InterviewFrame(ctk.CTkFrame):
             return
         control_state = "normal" if notebook_active else "disabled"
         self.notebook_combo.configure(
+            state="readonly" if notebook_active else "disabled"
+        )
+        self.profile_combo.configure(
             state="readonly" if notebook_active else "disabled"
         )
         self.notebook_login_button.configure(state=control_state)
@@ -1752,18 +2122,39 @@ class InterviewFrame(ctk.CTkFrame):
         self.notebook_sync_button.configure(state="disabled")
         self._notebook_syncing = True
         self._set_notebook_status(
-            f"Preparando material de {notebook.title}…", ACCENT
+            f"Preparando material de {notebook.title}…", ACCENT, busy=True
         )
+
+        profile = self._active_profile
 
         def work():
             try:
-                context = notebooklm_service.sync_study_context(notebook.id)
+                context = notebooklm_service.sync_study_context(
+                    notebook.id, profile=profile
+                )
             except Exception as exc:
                 self.after(0, lambda message=str(exc): finish_error(message))
                 return
             self.after(0, lambda: finish_success(context))
 
+        def belongs_to_another_account() -> bool:
+            """El resultado llegó después de que el usuario cambió de cuenta.
+
+            Misma guarda que ``_refresh_notebooks``: el sync tarda hasta 135 s,
+            así que entra de sobra un cambio de cuenta en el medio. Sin esto,
+            ``finish_success`` escribía el temario de la cuenta vieja y encima
+            guardaba la materia bajo la clave de la cuenta NUEVA, y la sesión
+            arrancaba con material que la UI no está mostrando.
+
+            Como en ``_refresh_notebooks``, acá no se toca el loader ni el
+            botón: cambiar de cuenta reentra por su propio camino y ya rearmó
+            ese estado para el pedido que sigue en vuelo.
+            """
+            return profile != self._active_profile
+
         def finish_error(message: str):
+            if belongs_to_another_account():
+                return
             self.notebook_sync_button.configure(state="normal")
             self._notebook_syncing = False
             logger.error(
@@ -1782,6 +2173,13 @@ class InterviewFrame(ctk.CTkFrame):
             self._set_notebook_status(message, ERROR)
 
         def finish_success(context: str):
+            if belongs_to_another_account():
+                logger.info(
+                    "NotebookLM sync discarded: id=%s belonged to profile=%s",
+                    notebook.id,
+                    profile,
+                )
+                return
             value = f"[NotebookLM · {notebook.title}]\n{context}"
             self._active_notebook_id = notebook.id
             self._active_notebook_title = notebook.title
@@ -2138,7 +2536,7 @@ class InterviewFrame(ctk.CTkFrame):
         self.pause_button.configure(text="⏸  Pausar")
         self._mic_error_shown = False
         self.show_active()
-        self._set_status("Conectando...", ACCENT)
+        self._set_status("Conectando...", ACCENT, busy=True)
         self.worker.start(
             language=stt_lang, out_dir=self.out_dir, source_type=source_type,
             source_val=source_value, translate=False,
@@ -2159,6 +2557,7 @@ class InterviewFrame(ctk.CTkFrame):
         self._session_paused = False
         self._simulation_answer_parts = []
         self._simulation_busy = True
+        self._simulation_type = simulation_type
         self._simulation_session = interview_simulation.InterviewSimulationSession(
             context=context,
             answer_lang=answer_lang if answer_lang in ("es", "en") else "es",
@@ -2180,12 +2579,13 @@ class InterviewFrame(ctk.CTkFrame):
             self.complete_answer_button.pack(side=tk.RIGHT, padx=(0, 8))
             self.complete_answer_button.configure(state="disabled")
         self.pause_button.pack_forget()
-        self.question_label.configure(text="Preparando la primera pregunta…")
+        self._set_question_text("Preparando la primera pregunta…", busy=True)
         self._set_status(
             "Preparando profesor IA"
             if simulation_type == "academic"
             else "Preparando simulacro",
             ACCENT,
+            busy=True,
         )
 
         def work():
@@ -2200,7 +2600,10 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _apply_simulation_turn(self, turn) -> None:
         self._simulation_busy = False
-        if turn.feedback:
+        # Misma regla que en el coach: si hay un turno viejo en pantalla es
+        # alguien leyéndolo, y la devolución se graba sin pisárselo.
+        live = self._history_index is None
+        if turn.feedback and live:
             self.reply_boxes[0]._reply_text = turn.feedback
             self._set_box_text(self.reply_boxes[0], turn.feedback)
         raw_example_answer = getattr(turn, "example_answer", "")
@@ -2209,6 +2612,7 @@ class InterviewFrame(ctk.CTkFrame):
             if isinstance(raw_example_answer, str)
             else ""
         )
+        improvement_text = None
         if turn.improvements or example_answer:
             sections = []
             if turn.improvements:
@@ -2218,10 +2622,21 @@ class InterviewFrame(ctk.CTkFrame):
                     "Ejemplo de respuesta mejorada:\n" + example_answer
                 )
             improvement_text = "\n\n".join(sections)
-            self.reply_boxes[1]._reply_text = improvement_text
-            self._set_box_text(self.reply_boxes[1], improvement_text)
-        if turn.strengths:
+            if live:
+                self.reply_boxes[1]._reply_text = improvement_text
+                self._set_box_text(self.reply_boxes[1], improvement_text)
+        if turn.strengths and live:
             self.ideas_label.configure(text="Fortalezas: " + " • ".join(turn.strengths))
+        # La devolución llega antes de la pregunta siguiente, así que pertenece
+        # al turno que ``_present_simulation_question`` ya dejó abierto: lo
+        # completa en vez de abrir uno nuevo. En el primer turno no hay nada
+        # abierto y no hay devolución, así que no se graba nada.
+        if turn.feedback or improvement_text or turn.strengths:
+            self._history_record(
+                respuestas=[turn.feedback or None, improvement_text],
+                ideas=list(turn.strengths) if turn.strengths else None,
+                sealed=True,
+            )
         if turn.action == "finish":
             self._finish_simulation()
             return
@@ -2240,7 +2655,7 @@ class InterviewFrame(ctk.CTkFrame):
             self.dont_know_button.configure(state="disabled")
             self.read_question_button.configure(state="disabled")
             self.transcripts_frame.pack_forget()
-            self._set_status("Revisemos tu respuesta", ACCENT)
+            self._set_status("Revisemos tu respuesta", ACCENT, busy=True)
             self._speak_learning_feedback(turn)
             return
         self._present_simulation_question(turn)
@@ -2255,7 +2670,12 @@ class InterviewFrame(ctk.CTkFrame):
                 before=self.question_label.master,
             )
         self._simulation_current_question = turn.question
-        self.question_label.configure(text=turn.question)
+        if self._history_index is None:
+            self._set_question_text(turn.question)
+        # Abre el turno que la devolución del próximo ``_apply_simulation_turn``
+        # va a completar.
+        self._history_open = False
+        self._history_record(pregunta=turn.question)
         self.interviewer_box.insert(tk.END, ("\n" if self.interviewer_box.get("1.0", tk.END).strip() else "") + turn.question)
         self.interviewer_box.see(tk.END)
         self._simulation_answer_parts = []
@@ -2293,6 +2713,10 @@ class InterviewFrame(ctk.CTkFrame):
         if not spoken:
             self._show_next_question_dialog()
             return
+        # El botón queda usable desde que arranca a hablar, no recién cuando
+        # termina: es el barge-in de la devolución, igual que con la pregunta.
+        self.next_question_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.next_question_button.configure(state="normal")
         language = getattr(self._simulation_session, "answer_lang", "es")
         tts.speak_async(
             spoken,
@@ -2313,7 +2737,13 @@ class InterviewFrame(ctk.CTkFrame):
     def _start_simulation_answer(self) -> None:
         if self._simulation_busy or self._simulation_session is None:
             return
+        # Barge-in: el alumno puede arrancar a responder con la pregunta
+        # todavía sonando. tts.stop() la corta ya mismo; gracias al generation
+        # token de tts, el on_done cancelado no va a llegar después a pisar lo
+        # que este método está por dejar armado.
+        tts.stop()
         self._cancel_knowledge_check()
+        self._cancel_next_question_timer()
         self._dismiss_knowledge_dialog()
         self._simulation_answer_parts = []
         self.candidate_box.delete("1.0", tk.END)
@@ -2327,6 +2757,10 @@ class InterviewFrame(ctk.CTkFrame):
         self.start_answer_button.pack_forget()
         self.complete_answer_button.pack(side=tk.RIGHT, padx=(0, 8))
         self.complete_answer_button.configure(state="normal")
+        # Si la interrupción fue durante la lectura, _question_speech_finished
+        # nunca corre (on_done cancelado): sin esto el botón de re-leer
+        # quedaba deshabilitado para el resto de la respuesta.
+        self.read_question_button.configure(state="normal")
         self._resume_simulation_answer_capture()
         self._set_status("Te escucho; terminá cuando completes tu respuesta", SUCCESS)
 
@@ -2336,7 +2770,7 @@ class InterviewFrame(ctk.CTkFrame):
         self._simulation_busy = True
         self.hint_button.configure(state="disabled")
         self.candidate_listener.pause()
-        self._set_status("Preparando una pista", ACCENT)
+        self._set_status("Preparando una pista", ACCENT, busy=True)
 
         def work():
             try:
@@ -2351,7 +2785,9 @@ class InterviewFrame(ctk.CTkFrame):
     def _skip_mastered_question(self) -> None:
         if self._simulation_busy or self._simulation_session is None:
             return
+        tts.stop()
         self._cancel_knowledge_check()
+        self._cancel_next_question_timer()
         self._dismiss_knowledge_dialog()
         self._simulation_busy = True
         self.candidate_listener.pause()
@@ -2364,7 +2800,7 @@ class InterviewFrame(ctk.CTkFrame):
             self.read_question_button,
         ):
             button.configure(state="disabled")
-        self._set_status("Buscando otra pregunta", ACCENT)
+        self._set_status("Buscando otra pregunta", ACCENT, busy=True)
 
         def work():
             try:
@@ -2379,6 +2815,7 @@ class InterviewFrame(ctk.CTkFrame):
     def _submit_dont_know(self) -> None:
         if self._simulation_busy or self._simulation_session is None:
             return
+        tts.stop()
         self._simulation_answer_parts = [
             "No lo sé. Explicame el concepto y mostrame un ejemplo."
         ]
@@ -2388,8 +2825,12 @@ class InterviewFrame(ctk.CTkFrame):
     def _apply_simulation_hint(self, hint: str) -> None:
         self._simulation_busy = False
         text = f"Pista: {hint}"
-        self.reply_boxes[0]._reply_text = text
-        self._set_box_text(self.reply_boxes[0], text)
+        if self._history_index is None:
+            self.reply_boxes[0]._reply_text = text
+            self._set_box_text(self.reply_boxes[0], text)
+        # Entra en el turno abierto igual que en pantalla: la devolución de esa
+        # misma pregunta la reemplaza después, acá y allá.
+        self._history_record(respuestas=[text, None])
         self.hint_button.configure(state="normal")
         if self._simulation_answering:
             self.candidate_listener.resume()
@@ -2402,7 +2843,7 @@ class InterviewFrame(ctk.CTkFrame):
             return
         self.candidate_listener.pause()
         self.read_question_button.configure(state="disabled")
-        self._set_status("Leyendo la pregunta", ACCENT)
+        self._set_status("Leyendo la pregunta", ACCENT, busy=True)
         language = getattr(self._simulation_session, "answer_lang", "es")
         tts.speak_async(
             self._simulation_current_question,
@@ -2493,33 +2934,22 @@ class InterviewFrame(ctk.CTkFrame):
         return dialog
 
     def _show_knowledge_check(self) -> None:
+        # Antes abría un CTkToplevel con grab_set() acá: le robaba el foco al
+        # alumno mientras pensaba, para ofrecerle dos acciones que ya están
+        # siempre visibles como botones (start_answer_button/dont_know_button).
+        # Un texto de estado no bloquea nada y apunta a los mismos dos botones.
         self._knowledge_check_after_id = None
         if (
             self._session_ended
             or self._simulation_busy
             or self._simulation_answer_parts
             or self._knowledge_dialog is not None
+            or self._simulation_answering
         ):
             return
-        self._knowledge_dialog = self._choice_dialog(
-            title="¿La sabés?",
-            message=(
-                "Podés seguir pensando y responder con tu voz, o pedir una "
-                "explicación completa con un ejemplo."
-            ),
-            primary_text="Sí, quiero responder",
-            primary_command=self._knowledge_dialog_answer,
-            secondary_text="No, explicame",
-            secondary_command=self._knowledge_dialog_teach,
+        self._set_status(
+            "¿La sabés? Arrancá tu respuesta o pedí la explicación", ACCENT
         )
-
-    def _knowledge_dialog_answer(self) -> None:
-        self._knowledge_dialog = None
-        self._start_simulation_answer()
-
-    def _knowledge_dialog_teach(self) -> None:
-        self._knowledge_dialog = None
-        self._submit_dont_know()
 
     def _dismiss_knowledge_dialog(self) -> None:
         dialog = self._knowledge_dialog
@@ -2531,24 +2961,47 @@ class InterviewFrame(ctk.CTkFrame):
             except Exception:
                 pass
 
+    def _cancel_next_question_timer(self) -> None:
+        timer_id = self._next_question_after_id
+        self._next_question_after_id = None
+        if timer_id is not None:
+            try:
+                self.after_cancel(timer_id)
+            except Exception:
+                pass
+
     def _show_next_question_dialog(self) -> None:
+        # Ya NO es un modal: se llama cuando termina de leerse (o no hay nada
+        # que leer) la devolución. El botón inline ya está packeado desde que
+        # arrancó a hablar (ver _speak_learning_feedback); acá solo se
+        # confirma el estado y, si corresponde, se arma el avance automático.
         if self._session_ended or self._pending_simulation_turn is None:
             return
-        if self._next_question_dialog is not None:
-            return
-        self._set_status("Devolución lista · continuá cuando estés preparado", SUCCESS)
-        self._next_question_dialog = self._choice_dialog(
-            title="¿Listo para continuar?",
-            message=(
-                "Revisá la explicación y el ejemplo. La siguiente pregunta "
-                "no aparecerá hasta que vos decidas."
-            ),
-            primary_text="Siguiente pregunta",
-            primary_command=self._continue_to_next_question,
-        )
+        self.next_question_button.pack(side=tk.RIGHT, padx=(0, 8))
+        self.next_question_button.configure(state="normal")
+        self._next_question_dialog = True
+        self._set_status("Devolución lista · continuá cuando quieras", SUCCESS)
+        self._cancel_next_question_timer()
+        if _NEXT_QUESTION_GRACE_MS is not None:
+            self._next_question_after_id = self.after(
+                _NEXT_QUESTION_GRACE_MS, self._continue_to_next_question
+            )
 
     def _continue_to_next_question(self) -> None:
+        # El timer y el click llaman a este mismo método. tts.stop() corta la
+        # devolución si todavía se está leyendo (el barge-in del botón) y no
+        # hace nada si ya terminó de hablar sola.
+        tts.stop()
+        self._cancel_next_question_timer()
         self._next_question_dialog = None
+        try:
+            self.next_question_button.configure(state="disabled")
+            self.next_question_button.pack_forget()
+        except Exception:
+            pass
+        # _present_simulation_question vacía _pending_simulation_turn como
+        # primer paso, así que una segunda llamada (timer después del click,
+        # o viceversa) encuentra None acá y no presenta la pregunta dos veces.
         turn = self._pending_simulation_turn
         if turn is not None:
             self._present_simulation_question(turn)
@@ -2557,6 +3010,7 @@ class InterviewFrame(ctk.CTkFrame):
         if self._simulation_busy or self._simulation_session is None:
             return
         self._cancel_knowledge_check()
+        self._cancel_next_question_timer()
         self._simulation_busy = True
         self.candidate_listener.pause()
         self.complete_answer_button.configure(state="disabled")
@@ -2565,7 +3019,7 @@ class InterviewFrame(ctk.CTkFrame):
         self.mastered_button.configure(state="disabled")
         self.dont_know_button.configure(state="disabled")
         self.read_question_button.configure(state="disabled")
-        self._set_status("Completando transcripción", ACCENT)
+        self._set_status("Completando transcripción", ACCENT, busy=True)
 
         def drain_work():
             self.candidate_listener.wait_until_idle(timeout=10.0)
@@ -2588,9 +3042,14 @@ class InterviewFrame(ctk.CTkFrame):
         # La respuesta ya quedó copiada en ``answer`` para evaluación. Limpiar
         # vista y buffer evita que el turno siguiente parezca reutilizarla o
         # agregue la nueva transcripción debajo de la anterior.
+        #
+        # Antes de borrarla queda en el turno abierto: la caja era el único
+        # lugar donde vivía, así que lo guardado en Historial terminaba con
+        # todas las preguntas y una sola respuesta, la última.
+        self._history_record(respuesta_usuario=answer)
         self._simulation_answer_parts = []
         self.candidate_box.delete("1.0", tk.END)
-        self._set_status("Evaluando tu respuesta", ACCENT)
+        self._set_status("Evaluando tu respuesta", ACCENT, busy=True)
 
         def work():
             try:
@@ -2602,15 +3061,72 @@ class InterviewFrame(ctk.CTkFrame):
 
         threading.Thread(target=work, daemon=True).start()
 
+    def _simulation_retry_buttons(self) -> list:
+        """Los botones que el usuario tiene EN PANTALLA en este momento.
+
+        El modo académico empaqueta cinco (start/complete se turnan según si
+        está respondiendo) y la entrevista uno solo. Reactivar
+        ``complete_answer_button`` a ciegas dejaba el práctico oral con los
+        cinco botones visibles deshabilitados para siempre: sin camino de
+        reintento, la pantalla quedaba inerte.
+        """
+        mode = getattr(self._simulation_session, "simulation_type", "") or getattr(
+            self, "_simulation_type", "interview"
+        )
+        names = (
+            (
+                "start_answer_button",
+                "complete_answer_button",
+                "hint_button",
+                "mastered_button",
+                "dont_know_button",
+                "read_question_button",
+            )
+            if mode == "academic"
+            else ("complete_answer_button",)
+        )
+        existing = []
+        for name in names:
+            widget = getattr(self, name, None)
+            if widget is None:
+                continue
+            try:
+                if not widget.winfo_exists():
+                    continue
+            except Exception:
+                continue
+            existing.append(widget)
+        # Lo empaquetado manda: ``_submit_dont_know`` marca ``_simulation_answering``
+        # sin cambiar los botones, así que deducir el botón por ese flag erraba.
+        packed = [w for w in existing if self._widget_is_packed(w)]
+        return packed or existing
+
+    @staticmethod
+    def _widget_is_packed(widget) -> bool:
+        try:
+            return bool(widget.winfo_manager())
+        except Exception:
+            return False
+
     def _simulation_failed(self, message: str) -> None:
         self._simulation_busy = False
-        self.complete_answer_button.configure(state="normal")
+        for button in self._simulation_retry_buttons():
+            try:
+                button.configure(state="normal")
+            except Exception:
+                continue
         self.candidate_listener.resume()
         self._set_status("Error en el simulacro", ERROR)
         show_error(self, "Simulacro", message)
 
     def _finish_simulation(self) -> None:
         self.candidate_listener.stop()
+        # Callar la voz antes de desarmar la pantalla. Una pregunta o una
+        # devolución que todavía suena conserva su generation token válido: si
+        # el alumno arranca otro simulacro, ese `on_done` viejo corre contra la
+        # sesión nueva y vuelve a packear botones de respuesta, reescribe la
+        # línea de estado o agenda un control de conocimiento que no le toca.
+        tts.stop()
         self._session_ended = True
         report = self._simulation_session.report() if self._simulation_session else "Simulacro finalizado."
         self.reply_boxes[0]._reply_text = report
@@ -2621,6 +3137,8 @@ class InterviewFrame(ctk.CTkFrame):
         self.mastered_button.pack_forget()
         self.dont_know_button.pack_forget()
         self.read_question_button.pack_forget()
+        self._cancel_next_question_timer()
+        self.next_question_button.pack_forget()
         self.show_closing()
         self.closing_summary.configure(text=report)
         self.closing_hint.configure(text="La devolución queda incluida en el texto de la sesión.", text_color=SUCCESS)
@@ -2706,51 +3224,302 @@ class InterviewFrame(ctk.CTkFrame):
                     self.worker.add_candidate_turn(text)
             if items:
                 self._cancel_knowledge_check()
+                self._cancel_next_question_timer()
                 self._dismiss_knowledge_dialog()
 
     def _apply_assist(self, assist) -> None:
         # While the coach is still streaming, the answer line lands before the
         # question gloss and the key ideas. Blanking those fields on every
         # partial would make them flash placeholder text, so a partial only ever
-        # fills in what it actually carries.
+        # fills in what it actually carries. ``None`` marks a field the delta
+        # does not carry, so neither the widgets nor the history entry lose what
+        # a previous delta already put there.
         partial = getattr(assist, "partial", False)
         self._set_answer_loading(False)
+        # Un turno viejo en pantalla es alguien leyéndolo: se graba igual, pero
+        # no se le pisa la vista.
+        live = self._history_index is None
 
+        pregunta = None
         if assist.pregunta_es or not partial:
-            self.question_label.configure(text=assist.pregunta_es or "Pregunta detectada")
+            pregunta = assist.pregunta_es or "Pregunta detectada"
+            if live:
+                self._set_question_text(pregunta)
 
+        respuestas: list[str | None] = []
         for i, box in enumerate(self.reply_boxes):
             text = assist.respuestas[i] if i < len(assist.respuestas) else ""
             if partial and not text:
+                respuestas.append(None)
                 continue
-            box._reply_text = text
-            self._set_box_text(box, text or "Sin sugerencia")
+            respuestas.append(text)
+            if live:
+                box._reply_text = text
+                self._set_box_text(box, text or "Sin sugerencia")
 
         ideas = assist.ideas_clave or []
         if ideas or not partial:
-            self.ideas_label.configure(text=" • ".join(ideas) if ideas else "Enfocate en una experiencia concreta y su resultado.")
+            if live:
+                self.ideas_label.configure(text=" • ".join(ideas) if ideas else _NO_IDEAS)
+        else:
+            ideas = None
+
+        self._history_record(
+            pregunta=pregunta,
+            respuestas=respuestas,
+            ideas=ideas,
+            sealed=not partial,
+        )
+
+    # ------------------------------------------------------------------ historial
+
+    def _history_record(
+        self,
+        *,
+        pregunta: str | None = None,
+        respuestas: list[str | None] | None = None,
+        ideas: list[str] | None = None,
+        respuesta_usuario: str | None = None,
+        sealed: bool = False,
+    ) -> None:
+        """Graba el turno actual. ``None`` en un campo = el delta no lo trae.
+
+        Abre entrada nueva salvo que la última siga recibiendo deltas del
+        stream (``_history_open``): sin eso una sola pregunta generaría una
+        decena de turnos, uno por parcial de Gemini.
+        """
+        if not self._history_open or not self._qa_history:
+            self._qa_history.append(
+                {
+                    "pregunta": "",
+                    "respuestas": ["" for _ in self.reply_boxes],
+                    "ideas": [],
+                    # Lo que dijo el usuario en ese turno. Solo lo llena el
+                    # simulacro: en el coach la respuesta la da el modelo.
+                    "respuesta_usuario": "",
+                    "hora": time.strftime("%H:%M"),
+                }
+            )
+            self._history_open = True
+        entry = self._qa_history[-1]
+        if pregunta is not None:
+            entry["pregunta"] = pregunta
+        if respuesta_usuario is not None:
+            entry["respuesta_usuario"] = respuesta_usuario
+        for i, text in enumerate(respuestas or []):
+            if text is None:
+                continue
+            while len(entry["respuestas"]) <= i:
+                entry["respuestas"].append("")
+            entry["respuestas"][i] = text
+        if ideas is not None:
+            entry["ideas"] = list(ideas)
+        if sealed:
+            self._history_open = False
+        self._history_update_nav()
+        # Reconstruir las tarjetas en cada delta del stream sería tirar trabajo:
+        # la ventana se refresca cuando el turno cierra.
+        if sealed and self._history_window is not None:
+            self._fill_history_window()
+
+    def _history_render(self, index: int) -> None:
+        """Vuelca un turno guardado en las mismas cajas de la sesión viva."""
+        if not 0 <= index < len(self._qa_history):
+            return
+        entry = self._qa_history[index]
+        self._set_question_text(entry["pregunta"] or "Pregunta detectada")
+        for i, box in enumerate(self.reply_boxes):
+            text = entry["respuestas"][i] if i < len(entry["respuestas"]) else ""
+            # ``_reply_text`` es lo que copian y leen en voz alta los botones de
+            # cada tarjeta: se actualiza acá para que operen sobre el turno que
+            # se está viendo, no sobre el último que llegó.
+            box._reply_text = text
+            self._set_box_text(box, text or "Sin sugerencia")
+        ideas = entry["ideas"]
+        self.ideas_label.configure(text=" • ".join(ideas) if ideas else _NO_IDEAS)
+
+    def _history_go(self, delta: int) -> None:
+        if not self._qa_history:
+            return
+        last = len(self._qa_history) - 1
+        current = last if self._history_index is None else self._history_index
+        target = max(0, min(last, current + delta))
+        if target == last:
+            self._history_latest()
+            return
+        self._history_index = target
+        self._history_render(target)
+        self._history_update_nav()
+
+    def _history_latest(self) -> None:
+        self._history_index = None
+        if self._qa_history:
+            self._history_render(len(self._qa_history) - 1)
+        self._history_update_nav()
+
+    def _history_update_nav(self) -> None:
+        total = len(self._qa_history)
+        if total <= 1:
+            self.history_bar.pack_forget()
+            return
+        if not self.history_bar.winfo_manager():
+            self.history_bar.pack(
+                **self._HISTORY_BAR_PACK, after=self._history_bar_anchor
+            )
+        browsing = self._history_index is not None
+        shown = self._history_index if browsing else total - 1
+        self.history_counter.configure(text=f"{shown + 1} / {total}")
+        self.history_prev_button.configure(state="normal" if shown > 0 else "disabled")
+        self.history_next_button.configure(
+            state="normal" if shown < total - 1 else "disabled"
+        )
+        self.history_latest_button.configure(state="normal" if browsing else "disabled")
+        pending = total - 1 - shown
+        if browsing and pending > 0:
+            plural = "s" if pending > 1 else ""
+            self.history_hint.configure(text=f"⏭  {pending} respuesta{plural} nueva{plural}")
+        else:
+            self.history_hint.configure(text="")
+
+    def _show_history_window(self) -> None:
+        """Toda la sesión en una lista scrolleable, para repasar de un saque."""
+        if self._history_window is not None:
+            try:
+                self._history_window.deiconify()
+                self._history_window.lift()
+                return
+            except tk.TclError:
+                self._history_window = None
+        window = self._history_window = ctk.CTkToplevel(self)
+        window.title("Preguntas y respuestas de la sesión")
+        window.geometry("760x620")
+        window.configure(fg_color=BG)
+        window.transient(self.winfo_toplevel())
+        # A diferencia de los diálogos de la sesión, esta ventana no toma el
+        # foco con ``grab_set``: la sesión sigue grabando y transcribiendo
+        # mientras se repasa.
+        window.protocol("WM_DELETE_WINDOW", self._close_history_window)
+        ctk.CTkLabel(
+            window, text="📚  Preguntas y respuestas de la sesión",
+            font=("Segoe UI Semibold", 18), text_color=TEXT,
+        ).pack(anchor=tk.W, padx=20, pady=(18, 10))
+        self._history_window_body = ctk.CTkScrollableFrame(
+            window, fg_color="transparent"
+        )
+        self._history_window_body.pack(fill=tk.BOTH, expand=True, padx=20, pady=(0, 18))
+        self._fill_history_window()
+
+    def _close_history_window(self) -> None:
+        window, self._history_window = self._history_window, None
+        if window is not None:
+            try:
+                window.destroy()
+            except tk.TclError:
+                pass
+
+    def _fill_history_window(self) -> None:
+        body = getattr(self, "_history_window_body", None)
+        if body is None:
+            return
+        try:
+            for child in body.winfo_children():
+                child.destroy()
+        except tk.TclError:
+            return
+        if not self._qa_history:
+            ctk.CTkLabel(
+                body, text="Todavía no hay preguntas en esta sesión.",
+                font=("Segoe UI", 12), text_color=MUTED,
+            ).pack(anchor=tk.W, pady=8)
+            return
+        titles = [label.cget("text") for label in self.reply_titles]
+        for number, entry in enumerate(self._qa_history, start=1):
+            card = ctk.CTkFrame(
+                body, fg_color=PANEL, corner_radius=12,
+                border_color=BORDER, border_width=1,
+            )
+            card.pack(fill=tk.X, pady=(0, 10))
+            ctk.CTkLabel(
+                card, text=f"#{number}  ·  {entry['hora']}",
+                font=("Segoe UI Semibold", 9), text_color=MUTED,
+            ).pack(anchor=tk.W, padx=14, pady=(10, 2))
+            ctk.CTkLabel(
+                card, text=entry["pregunta"] or "Pregunta detectada",
+                font=("Segoe UI Semibold", 14), text_color=WARNING,
+                wraplength=660, justify=tk.LEFT, anchor="w",
+            ).pack(fill=tk.X, padx=14, pady=(0, 8))
+            if answer := entry.get("respuesta_usuario", "").strip():
+                ctk.CTkLabel(
+                    card, text="🎤  TU RESPUESTA",
+                    font=("Segoe UI Semibold", 9), text_color=CANDIDATE,
+                ).pack(anchor=tk.W, padx=14)
+                ctk.CTkLabel(
+                    card, text=answer, font=("Segoe UI", 12), text_color=TEXT,
+                    wraplength=660, justify=tk.LEFT, anchor="w",
+                ).pack(fill=tk.X, padx=14, pady=(2, 8))
+            for i, text in enumerate(entry["respuestas"]):
+                if not text.strip():
+                    continue
+                head = ctk.CTkFrame(card, fg_color="transparent")
+                head.pack(fill=tk.X, padx=14)
+                ctk.CTkLabel(
+                    head,
+                    text=titles[i] if i < len(titles) else f"RESPUESTA {i + 1}",
+                    font=("Segoe UI Semibold", 9),
+                    text_color=ACCENT if i == 0 else "#F6E05E",
+                ).pack(side=tk.LEFT)
+                ctk.CTkButton(
+                    head, text="🔊", width=30, height=24, fg_color=PANEL_DARK,
+                    hover_color="#20212D",
+                    command=lambda t=text: tts.speak_async(t),
+                ).pack(side=tk.RIGHT, padx=(4, 0))
+                ctk.CTkButton(
+                    head, text="📋", width=30, height=24, fg_color=PANEL_DARK,
+                    hover_color="#20212D",
+                    command=lambda t=text: self._copy_text(t),
+                ).pack(side=tk.RIGHT)
+                ctk.CTkLabel(
+                    card, text=text, font=("Segoe UI", 12), text_color=TEXT,
+                    wraplength=660, justify=tk.LEFT, anchor="w",
+                ).pack(fill=tk.X, padx=14, pady=(2, 8))
+            if entry["ideas"]:
+                ctk.CTkLabel(
+                    card, text="💡  " + " • ".join(entry["ideas"]),
+                    font=("Segoe UI", 11), text_color=MUTED,
+                    wraplength=660, justify=tk.LEFT, anchor="w",
+                ).pack(fill=tk.X, padx=14, pady=(0, 10))
+            else:
+                ctk.CTkFrame(card, fg_color="transparent", height=4).pack()
+
+    def _copy_text(self, text: str) -> None:
+        self.clipboard_clear()
+        self.clipboard_append(text)
+        self._set_status("Respuesta copiada", SUCCESS)
 
     def _set_answer_loading(self, loading: bool) -> None:
-        """Show that a new answer is replacing the previous one."""
+        """Show that a new answer is replacing the previous one.
+
+        La animación es la misma ``LoadingText`` que usan el estado de sesión,
+        la pregunta y NotebookLM. Antes esto tenía su propio contador avanzado
+        desde ``_drain_queues``: dos sistemas de spinner conviviendo, con dos
+        velocidades y dos formas distintas de olvidarse de frenar.
+        """
         self._answer_loading = loading
         if loading:
-            self._spinner_index = 0
-            self.answer_loading_label.configure(text="◌  Generando respuesta nueva…")
+            # Empieza una generación nueva: el próximo assist abre un turno
+            # propio en vez de seguir escribiendo sobre el anterior.
+            self._history_open = False
             self.answer_loading_label.grid()
-            for box in self.reply_boxes:
-                box._reply_text = ""
-                self._set_box_text(box, "Esperando respuesta…")
+            self._answer_loader.show("Generando respuesta nueva…", busy=True)
+            # Blanquear las cajas mientras alguien lee un turno anterior le
+            # borraría de la pantalla justo lo que fue a buscar.
+            if self._history_index is None:
+                for box in self.reply_boxes:
+                    box._reply_text = ""
+                    self._set_box_text(box, "Esperando respuesta…")
         else:
+            self._answer_loader.stop()
             self.answer_loading_label.grid_remove()
-
-    def _advance_answer_spinner(self) -> None:
-        if not self._answer_loading:
-            return
-        frames = ("◌", "◔", "◑", "◕")
-        self._spinner_index = (self._spinner_index + 1) % len(frames)
-        self.answer_loading_label.configure(
-            text=f"{frames[self._spinner_index]}  Generando respuesta nueva…"
-        )
 
     def _set_box_text(self, box, text: str) -> None:
         """Escribe en una caja de solo-lectura (habilita, reemplaza, deshabilita)."""
@@ -2783,9 +3552,7 @@ class InterviewFrame(ctk.CTkFrame):
     def _copy_reply(self, index: int) -> None:
         text = self.reply_boxes[index]._reply_text
         if text:
-            self.clipboard_clear()
-            self.clipboard_append(text)
-            self._set_status("Respuesta copiada", SUCCESS)
+            self._copy_text(text)
 
     def _speak_reply(self, index: int) -> None:
         text = self.reply_boxes[index]._reply_text
@@ -2803,8 +3570,18 @@ class InterviewFrame(ctk.CTkFrame):
         self.reset_session()
 
     def reset_session(self) -> None:
+        # The voice still playing keeps a valid generation token: its on_done
+        # would run against the NEXT session (re-packing answer buttons,
+        # rewriting the status line). Silence it before tearing anything down.
+        tts.stop()
         self.stop_session()
         self._cancel_knowledge_check()
+        self._cancel_next_question_timer()
+        try:
+            self.next_question_button.configure(state="disabled")
+            self.next_question_button.pack_forget()
+        except Exception:
+            pass
         for dialog_name in ("_knowledge_dialog", "_next_question_dialog"):
             dialog = getattr(self, dialog_name, None)
             if dialog is not None:
@@ -2813,7 +3590,14 @@ class InterviewFrame(ctk.CTkFrame):
                 except Exception:
                     pass
                 setattr(self, dialog_name, None)
+        self._close_history_window()
+        self._history_window_body = None
+        self._qa_history = []
+        self._history_index = None
+        self._history_open = False
+        self.history_bar.pack_forget()
         self._simulation_session = None
+        self._simulation_type = "interview"
         self._simulation_answer_parts = []
         self._simulation_answering = False
         self._simulation_busy = False
@@ -2824,8 +3608,8 @@ class InterviewFrame(ctk.CTkFrame):
         self.pause_button.pack(side=tk.RIGHT, padx=(0, 8))
         for box in (self.interviewer_box, self.candidate_box):
             box.delete("1.0", tk.END)
-        self.question_label.configure(
-            text=(
+        self._set_question_text(
+            (
                 "Esperando una pregunta..."
                 if self._fixed_mode == "resolver"
                 else "Esperando al entrevistador..."
@@ -2841,10 +3625,22 @@ class InterviewFrame(ctk.CTkFrame):
             )
         self.show_preparation()
 
-    def _set_status(self, text: str, color: str | None = None) -> None:
+    def _set_status(
+        self, text: str, color: str | None = None, *, busy: bool = False
+    ) -> None:
         if color is None:
             color = ERROR if "error" in text.lower() else SUCCESS if "activ" in text.lower() else MUTED
-        self.status_label.configure(text=f"●  {text}", text_color=color)
+        # El "●" de siempre es el prefijo en reposo del loader: con ``busy`` lo
+        # reemplaza el frame que gira, y cualquier estado posterior lo apaga.
+        self._status_loader.show(text, color, busy=busy)
+
+    def _set_question_text(self, text: str, *, busy: bool = False) -> None:
+        """Escribe la pregunta en pantalla; ``busy`` la deja animada.
+
+        En reposo el texto sale crudo, sin prefijo: hay tests que comparan el
+        contenido de esta etiqueta por igualdad exacta.
+        """
+        self._question_loader.show(text, busy=busy)
 
     def _drain_queues(self) -> None:
         while not self.status_queue.empty():
@@ -2860,5 +3656,4 @@ class InterviewFrame(ctk.CTkFrame):
         self._append_batch(self.candidate_box, "candidate", self.candidate_queue)
         while not self.assist_queue.empty():
             self._apply_assist(self.assist_queue.get_nowait())
-        self._advance_answer_spinner()
         self.after(100, self._drain_queues)
