@@ -25,7 +25,17 @@ load_dotenv()
 NVIDIA_BASE_URL = os.getenv(
     "NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1"
 ).rstrip("/")
-NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3-nano-30b-a3b"
+# Default verificado contra el endpoint real (763 ms, devolvió "OK") el
+# 2026-09-20. El anterior, `nvidia/nemotron-3-nano-30b-a3b`, llegó a su end of
+# life el 2026-09-01 y responde HTTP 410 con cualquier key.
+#
+# Aparecer en el catálogo de /v1/models NO prueba que el modelo sirva:
+# `nvidia/nemotron-nano-3-30b-a3b` está listado y contesta HTTP 404
+# "Function not found for account". Cualquier reemplazo se prueba con una
+# llamada real antes de entrar acá.
+NVIDIA_MODEL = (
+    os.getenv("NVIDIA_MODEL", "").strip() or "nvidia/nemotron-3.5-lightning-30b-a3b"
+)
 
 # Socket timeout for a small request. Non-streaming responses arrive in one go,
 # so a long answer needs proportionally more room than a short one.
@@ -257,6 +267,37 @@ def cooldown_for(kind: str) -> float:
 def is_retryable_error(exc: BaseException) -> bool:
     """True when another key (or another try) can still succeed."""
     return classify_error(exc) != PERMANENT
+
+
+# Un 400 de argumento no dice nada de la clave ni del endpoint: dice que el
+# request estaba mal armado. Rotar claves contra eso es tiempo tirado, porque
+# las diez fallan igual.
+#
+# Esto es una función aparte y NO una clase nueva de `classify_error` a
+# propósito. `nvidia_provider.generate` y `groq_provider.generate` hacen
+# `if kind == PERMANENT: raise` como atajo de aborto total; meter un bucket
+# nuevo los haría caer en `pool.mark_unavailable` y barrer todas las claves
+# justo en el caso donde barrerlas no sirve para nada. La clasificación queda
+# como está —la comparten coach, Groq y NVIDIA— y quien necesite el matiz lo
+# pregunta acá.
+#
+# Sin "400" pelado en la lista: matchearía cosas como "4000 tokens".
+_CLIENT_REQUEST_MARKERS = (
+    "invalid_argument",
+    "invalid argument",
+    "400 bad request",
+    "http 400",
+    "minimum allowed deadline",
+)
+
+
+def is_client_request_error(exc: BaseException) -> bool:
+    """True when OUR request was malformed — not the key, not the endpoint."""
+    # Cuota y auth mandan: ahí la clave sí es el problema y hay que marcarla.
+    if classify_error(exc) in (RATE_LIMIT, AUTH):
+        return False
+    detail = str(exc).lower()
+    return any(marker in detail for marker in _CLIENT_REQUEST_MARKERS)
 
 
 def request_timeout_for(max_tokens: int) -> float:

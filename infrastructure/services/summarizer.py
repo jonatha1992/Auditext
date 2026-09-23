@@ -248,23 +248,48 @@ def summarize(text: str, progress_cb=None) -> str:
                         gemini_keys.pool.mark_exhausted(key)
                         key_quota_hit = True
                     continue
-                logger.exception("Fallo el resumen con Gemini (%s): %s", model, exc)
                 if "api key" in detail or "permission" in detail or "401" in detail or "403" in detail:
+                    logger.warning("Clave Gemini rechazada para resumen (%s)", model)
                     gemini_keys.pool.mark_exhausted(key)
                     key_quota_hit = True
                     last_exc = exc
                     break
-                if "deadline" in detail or "connection" in detail or "timeout" in detail or "network" in detail:
-                    raise SummaryError("Sin conexion con la API. Revisa tu red.") from exc
-                raise SummaryError("Error al contactar la API. Revisa la bitacora (logs/error_log.txt).") from exc
+                # A saturated (503) or slow model is model-wide and transient:
+                # it says nothing about the next model. Raising here killed the
+                # summary on the FIRST 503 while other models and Groq were up
+                # (2026-09-23 16:32). Same bug class as the coach, AUD-2.
+                logger.warning("Resumen: %s no disponible (%s); probando el siguiente", model, exc)
+                last_exc = exc
+                continue
         if not key_quota_hit:
             break
 
-    logger.warning("Gemini no pudo resumir; usando respaldo NVIDIA: %s", last_exc)
-    try:
-        return nvidia_provider.generate(contents, max_tokens=700)
-    except Exception as nvidia_exc:
-        logger.exception("También falló el respaldo NVIDIA: %s", nvidia_exc)
-        raise SummaryError(
-            "No quedan proveedores disponibles: Gemini y NVIDIA fallaron."
-        ) from nvidia_exc
+    return _summary_fallback(contents, last_exc)
+
+
+def _summary_fallback(contents: str, last_exc: BaseException | None) -> str:
+    """Last resort once NVIDIA and every Gemini model failed: the shared chain.
+
+    Groq leads `provider_chain` and answers in well under a second, so a Gemini
+    outage no longer ends the summary. NVIDIA was already tried first by
+    `summarize`, so it is skipped here instead of paying its timeout twice.
+    """
+    from infrastructure.services import provider_chain
+
+    logger.warning("Gemini no pudo resumir; usando la cadena de respaldo: %s", last_exc)
+    for name, provider in provider_chain.fallback_providers():
+        if provider is nvidia_provider:
+            continue
+        try:
+            summary = (provider.generate(contents, max_tokens=700) or "").strip()
+        except Exception as exc:
+            logger.warning("Resumen con %s falló: %s", name, exc)
+            continue
+        if summary:
+            logger.info("Resumen generado con respaldo %s", name)
+            return summary
+    raise SummaryError(
+        "No se pudo generar el resumen: Gemini, NVIDIA y el respaldo fallaron. "
+        "Reintentá en unos minutos."
+    ) from last_exc
+

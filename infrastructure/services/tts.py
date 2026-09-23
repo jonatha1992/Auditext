@@ -10,6 +10,23 @@ import time
 
 from config import logger
 
+_state_lock = threading.Lock()
+_generation = 0  # se incrementa en cada speak_async() y en cada stop()
+_active_generation = None  # generación que tiene permiso de sonar ahora mismo
+_active_engine = None  # motor pyttsx3 vivo, para poder cortarlo desde stop()
+_speaking_count = 0
+
+# Centinela: tests/test_tts.py (y cualquier otro caller que invoque _speak()
+# directo, sin pasar por speak_async) no queda atado a ningún generation
+# token. Esa llamada se considera "siempre vigente" para no romper la firma
+# ni el comportamiento que esos callers ya esperan.
+_ALWAYS_CURRENT = object()
+
+# Generation token of the utterance running on the current thread. Each
+# speak_async() starts its own thread, so this is per-utterance state that
+# _speak_neural can read without changing its (text, language) call shape.
+_thread_state = threading.local()
+
 
 def neural_profile(language: str) -> tuple[str, str, str]:
     """Return a calm, conversational voice profile for teaching."""
@@ -38,12 +55,26 @@ def _pick_voice(engine, language: str) -> None:
         pass
 
 
-def _speak_neural(text: str, language: str) -> None:
+def _is_current(generation) -> bool:
+    """True si `generation` sigue siendo la locución vigente (no cancelada)."""
+    if generation is _ALWAYS_CURRENT or generation is None:
+        return True
+    with _state_lock:
+        return generation == _generation
+
+
+def _speak_neural(text: str, language: str, generation=None) -> None:
     import edge_tts
     import pygame
 
+    if generation is None:
+        # Called from _speak without an explicit token (keeps the historical
+        # two-argument call that callers and tests rely on): use the token this
+        # thread was started with.
+        generation = getattr(_thread_state, "generation", _ALWAYS_CURRENT)
     voice, rate, pitch = neural_profile(language)
     path = ""
+    cancelled = False
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio:
             path = audio.name
@@ -51,13 +82,26 @@ def _speak_neural(text: str, language: str) -> None:
             text, voice=voice, rate=rate, pitch=pitch
         )
         asyncio.run(communicate.save(path))
+        # Synthesis takes ~1 s over the network. A stop() during that window
+        # must not be answered by starting to play anyway.
+        if not _is_current(generation):
+            return
         if not pygame.mixer.get_init():
             pygame.mixer.init()
         pygame.mixer.music.load(path)
         pygame.mixer.music.play()
+        # stop() cuts playback with pygame.mixer.music.stop() and also bumps the
+        # generation, in case get_busy() takes a tick to reflect the cut.
         while pygame.mixer.music.get_busy():
+            if not _is_current(generation):
+                cancelled = True
+                break
             time.sleep(0.04)
-        pygame.mixer.music.unload()
+        # A cancelled utterance must NOT unload: by now the mixer may already
+        # hold the NEXT utterance's mp3, and unloading it would silence that
+        # one and fire its on_done as if it had been read in full.
+        if not cancelled:
+            pygame.mixer.music.unload()
     finally:
         if path:
             try:
@@ -67,17 +111,31 @@ def _speak_neural(text: str, language: str) -> None:
 
 
 def _speak_sapi(text: str, language: str) -> None:
+    global _active_engine
     import pyttsx3
 
     engine = pyttsx3.init()
-    _pick_voice(engine, language)
-    engine.setProperty("rate", 165 if language == "es" else 175)
-    engine.say(text)
-    engine.runAndWait()
-    engine.stop()
+    _active_engine = engine
+    try:
+        _pick_voice(engine, language)
+        engine.setProperty("rate", 165 if language == "es" else 175)
+        engine.say(text)
+        engine.runAndWait()
+        engine.stop()
+    finally:
+        _active_engine = None
 
 
-def _speak(text: str, language: str, on_done=None) -> None:
+def _speak(text: str, language: str, on_done=None, _generation=_ALWAYS_CURRENT) -> None:
+    global _active_generation, _speaking_count
+    with _state_lock:
+        # A thread that was already superseded before it got to run must not
+        # claim the token: it would take ownership of the audio and play its
+        # stale text under the newer utterance's generation.
+        if _generation is _ALWAYS_CURRENT or _generation == globals()["_generation"]:
+            _active_generation = _generation
+        _speaking_count += 1
+    _thread_state.generation = _generation
     try:
         try:
             _speak_neural(text, language)
@@ -87,7 +145,12 @@ def _speak(text: str, language: str, on_done=None) -> None:
     except Exception as exc:
         logger.exception("TTS failed for text=%r: %s", text, exc)
     finally:
-        if on_done:
+        with _state_lock:
+            _speaking_count -= 1
+        # Una locución cancelada no dispara on_done: quien llamó a stop() ya
+        # avanzó el estado de la UI (por ejemplo, el alumno arrancó a
+        # responder) y un on_done tardío se lo pisaría por atrás.
+        if on_done and _is_current(_generation):
             on_done()
 
 
@@ -96,8 +159,45 @@ def speak_async(text: str, language: str = "en", on_done=None) -> None:
     clean = (text or "").strip()
     if not clean:
         return
+    global _generation
+    with _state_lock:
+        _generation += 1
+        generation = _generation
     threading.Thread(
         target=_speak,
-        args=(clean, language, on_done),
+        args=(clean, language, on_done, generation),
         daemon=True,
     ).start()
+
+
+def stop() -> None:
+    """Corta la locución en curso, si la hay, sin disparar su on_done.
+
+    Es el mecanismo de "barge-in": el alumno interrumpe la lectura de la
+    pregunta o de la devolución apretando un botón. Si no invalidáramos la
+    generación acá, el on_done de la locución cortada llegaría igual unos
+    milisegundos después (el hilo de fondo ya está corriendo) y pisaría por
+    atrás el estado que el botón recién dejó. Debe ser inofensivo cuando no
+    hay nada sonando: se llama también antes de arrancar una lectura nueva.
+    """
+    global _generation
+    with _state_lock:
+        _generation += 1
+    try:
+        import pygame
+
+        if pygame.mixer.get_init():
+            pygame.mixer.music.stop()
+    except Exception:
+        pass
+    try:
+        if _active_engine is not None:
+            _active_engine.stop()
+    except Exception:
+        pass
+
+
+def is_speaking() -> bool:
+    """True si hay una locución activa en este momento."""
+    with _state_lock:
+        return _speaking_count > 0
