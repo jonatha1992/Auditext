@@ -235,33 +235,70 @@ def _make_format(samplerate: int, channels: int) -> WAVEFORMATEX:
     return fmt
 
 
-def list_audio_apps():
-    """Return ``[(label, pid), ...]`` for processes with an active audio session.
+def _render_devices():
+    """Every ACTIVE output device, not just the default one.
 
-    Uses pycaw's session enumeration. Sessions without a backing process (system
-    sounds) are skipped. Returns an empty list on any failure so the UI can fall
-    back to whole-system capture.
+    pycaw's ``GetAllSessions`` only walks the DEFAULT render device's session
+    manager. An app playing through any other output (Bluetooth headphones, a
+    second speaker, a USB headset) never showed up, however many times the user
+    pressed Actualizar. Measured 2026-09-23: Spotify, Telegram and msedgewebview2
+    were on "Auriculares (JBL Go 3)" while the default was "Altavoces (JBL
+    Quantum910)", and none of them was listed.
+    """
+    from pycaw.constants import DEVICE_STATE, EDataFlow
+    from pycaw.pycaw import AudioUtilities
+
+    return AudioUtilities.GetAllDevices(
+        data_flow=EDataFlow.eRender.value,
+        device_state=DEVICE_STATE.ACTIVE.value,
+    )
+
+
+def _process_name(pid: int) -> str | None:
+    """Executable name, or None if the process is gone or inaccessible."""
+    try:
+        import psutil
+
+        return psutil.Process(pid).name()
+    except Exception:
+        return None
+
+
+def list_audio_apps():
+    """Return ``[(label, pid), ...]`` for processes with an audio session.
+
+    Walks every active output device (see ``_render_devices``). Sessions without
+    a backing process (system sounds, pid 0) and processes that already exited
+    are skipped. One broken device does not hide the others. Returns an empty
+    list on a global failure so the UI can fall back to whole-system capture.
     """
     try:
-        from pycaw.pycaw import AudioUtilities
+        from pycaw.pycaw import IAudioSessionControl2
     except Exception:
         return []
 
-    apps = {}
     try:
-        for session in AudioUtilities.GetAllSessions():
-            proc = session.Process
-            if proc is None:
-                continue
-            try:
-                pid = proc.pid
-                name = proc.name()
-            except Exception:
-                continue
-            # Collapse multiple sessions of the same process into one entry.
-            apps.setdefault(pid, name)
+        devices = _render_devices()
     except Exception:
         return []
+
+    apps: dict[int, str] = {}
+    for device in devices:
+        try:
+            enumerator = device.AudioSessionManager.GetSessionEnumerator()
+            for i in range(enumerator.GetCount()):
+                ctl = enumerator.GetSession(i)
+                if ctl is None:
+                    continue
+                pid = ctl.QueryInterface(IAudioSessionControl2).GetProcessId()
+                if not pid or pid in apps:
+                    continue
+                name = _process_name(pid)
+                if name:
+                    # Collapse sessions of the same process across devices.
+                    apps[pid] = name
+        except Exception:
+            continue
 
     return [(name, pid) for pid, name in sorted(apps.items(), key=lambda kv: kv[1].lower())]
 
