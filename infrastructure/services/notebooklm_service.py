@@ -61,10 +61,18 @@ def _nlm_executable() -> str:
 def _profile_env(profile: str | None) -> dict[str, str] | None:
     """Environment that pins one account for a single CLI call.
 
-    ``nlm login switch`` would rewrite the CLI's default profile for the whole
-    machine, and that same CLI backs other tools on this box. ``NLM_PROFILE``
-    scopes the account to the subprocess, so choosing a subject here never
-    changes which account anything else is talking to.
+    Segundo cinturón detrás de ``--profile``. ``NLM_PROFILE`` funciona en la
+    0.9.4 — ``load_config()`` lo vuelca sobre ``auth.default_profile``, que es
+    exactamente el fallback de ``get_client(None)`` — pero el CLI no lo
+    documenta en ningún lado (no aparece en ``nlm --ai``), así que no es
+    comportamiento contractual: si lo renombran, la app vuelve a leer la cuenta
+    equivocada y en silencio. El flag es el que manda; esto solo cubre algún
+    subcomando futuro que no lo exponga.
+
+    Lo que NO se hace acá, ni se debe: ``nlm login switch``. Ese comando
+    reescribe el default de toda la máquina, y ese mismo CLI lo usan otras
+    herramientas (el MCP de NotebookLM, por ejemplo): elegir una materia acá
+    les cambiaría la cuenta por la espalda. Todo va por proceso.
     """
     if not profile:
         return None
@@ -75,6 +83,11 @@ def _profile_env(profile: str | None) -> dict[str, str] | None:
 
 def _run_json(args: list[str], timeout: int = 120, profile: str | None = None):
     command = [_nlm_executable(), *args, "--json"]
+    if profile:
+        # Mecanismo documentado y verificado en ``nlm notebook list --help`` y
+        # ``nlm query notebook --help`` (0.9.4), que son los dos únicos
+        # comandos que pasan por acá.
+        command += ["--profile", profile]
     try:
         completed = subprocess.run(
             command,

@@ -1840,7 +1840,20 @@ class InterviewFrame(ctk.CTkFrame):
                 labels[0],
             )
             self.profile_var.set(chosen)
-            self._active_profile = self._profile_map[chosen].name
+            resolved = self._profile_map[chosen].name
+            if resolved != self._active_profile:
+                # Este camino NO pasa por `_on_profile_change` — pasa cuando el
+                # nombre guardado ya no existe, o cuando no hay ninguno y se
+                # toma la primera cuenta listada — así que tiene que limpiar
+                # por su cuenta lo que pertenece a la cuenta anterior. Si no,
+                # la guía cacheada de la otra cuenta queda armada para el Start
+                # y nada en pantalla avisa que el material no corresponde.
+                self._active_profile = resolved
+                self._notebook_map = {}
+                self._deactivate_notebook_context()
+                self.notebook_combo.configure(values=[NOTEBOOK_PLACEHOLDER])
+                self.notebook_var.set(NOTEBOOK_PLACEHOLDER)
+                self._apply_context_source_state()
             self._refresh_notebooks()
 
         threading.Thread(target=work, daemon=True).start()
@@ -2124,7 +2137,24 @@ class InterviewFrame(ctk.CTkFrame):
                 return
             self.after(0, lambda: finish_success(context))
 
+        def belongs_to_another_account() -> bool:
+            """El resultado llegó después de que el usuario cambió de cuenta.
+
+            Misma guarda que ``_refresh_notebooks``: el sync tarda hasta 135 s,
+            así que entra de sobra un cambio de cuenta en el medio. Sin esto,
+            ``finish_success`` escribía el temario de la cuenta vieja y encima
+            guardaba la materia bajo la clave de la cuenta NUEVA, y la sesión
+            arrancaba con material que la UI no está mostrando.
+
+            Como en ``_refresh_notebooks``, acá no se toca el loader ni el
+            botón: cambiar de cuenta reentra por su propio camino y ya rearmó
+            ese estado para el pedido que sigue en vuelo.
+            """
+            return profile != self._active_profile
+
         def finish_error(message: str):
+            if belongs_to_another_account():
+                return
             self.notebook_sync_button.configure(state="normal")
             self._notebook_syncing = False
             logger.error(
@@ -2143,6 +2173,13 @@ class InterviewFrame(ctk.CTkFrame):
             self._set_notebook_status(message, ERROR)
 
         def finish_success(context: str):
+            if belongs_to_another_account():
+                logger.info(
+                    "NotebookLM sync discarded: id=%s belonged to profile=%s",
+                    notebook.id,
+                    profile,
+                )
+                return
             value = f"[NotebookLM · {notebook.title}]\n{context}"
             self._active_notebook_id = notebook.id
             self._active_notebook_title = notebook.title
@@ -3084,6 +3121,12 @@ class InterviewFrame(ctk.CTkFrame):
 
     def _finish_simulation(self) -> None:
         self.candidate_listener.stop()
+        # Callar la voz antes de desarmar la pantalla. Una pregunta o una
+        # devolución que todavía suena conserva su generation token válido: si
+        # el alumno arranca otro simulacro, ese `on_done` viejo corre contra la
+        # sesión nueva y vuelve a packear botones de respuesta, reescribe la
+        # línea de estado o agenda un control de conocimiento que no le toca.
+        tts.stop()
         self._session_ended = True
         report = self._simulation_session.report() if self._simulation_session else "Simulacro finalizado."
         self.reply_boxes[0]._reply_text = report

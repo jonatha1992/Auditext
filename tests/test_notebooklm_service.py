@@ -173,6 +173,66 @@ class NotebookLMProfileTests(unittest.TestCase):
 
         self.assertEqual(run_json.call_args.kwargs["profile"], "default")
 
+    def test_catalog_pins_the_account_with_the_documented_flag(self):
+        """``--profile`` es el mecanismo que el CLI documenta y garantiza.
+
+        ``NLM_PROFILE`` funciona hoy (0.9.4) porque ``load_config()`` lo vuelca
+        sobre ``auth.default_profile``, que es justo el fallback de
+        ``get_client(None)``. Pero el CLI no lo documenta en ninguna parte
+        (``nlm --ai`` no lo menciona), así que es comportamiento no contractual:
+        alcanza con que renombren esa variable para que la app vuelva a leer el
+        catálogo de la cuenta equivocada, y en silencio. El flag sí está en
+        ``nlm notebook list --help``.
+        """
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed("[]"),
+            ) as run,
+        ):
+            notebooklm_service.list_notebooks(profile="personal2")
+
+        command = run.call_args.args[0]
+        self.assertIn("--profile", command)
+        self.assertEqual(command[command.index("--profile") + 1], "personal2")
+
+    def test_sync_pins_the_account_with_the_documented_flag(self):
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed('{"answer": "Unidad 1."}'),
+            ) as run,
+        ):
+            notebooklm_service.sync_study_context("nb-1", profile="personal2")
+
+        command = run.call_args.args[0]
+        self.assertIn("--profile", command)
+        self.assertEqual(command[command.index("--profile") + 1], "personal2")
+
+    def test_without_a_profile_no_flag_is_invented(self):
+        """Sin cuenta elegida el CLI tiene que quedarse con su propio default."""
+        with (
+            mock.patch.object(
+                notebooklm_service, "_nlm_executable", return_value="nlm"
+            ),
+            mock.patch.object(
+                notebooklm_service.subprocess,
+                "run",
+                return_value=self._completed("[]"),
+            ) as run,
+        ):
+            notebooklm_service.list_notebooks()
+
+        self.assertNotIn("--profile", run.call_args.args[0])
+
     def test_login_targets_the_selected_account(self):
         with (
             mock.patch.object(

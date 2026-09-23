@@ -626,6 +626,50 @@ class TruncatedOutputSessionSurvivalTests(unittest.TestCase):
 
         self.assertEqual(len(calls), 1 + sim._TURN_ATTEMPTS)
 
+    def test_the_retry_spends_what_is_left_not_a_brand_new_budget(self):
+        """El reintento va acotado por lo que queda, no por 40 s nuevos.
+
+        ``self.generate`` es ``generate_simulation_text``, que sin
+        ``budget_seconds`` abre una ventana NUEVA de Gemini+respaldo. Una
+        respuesta inválida lenta encadenaba dos ventanas completas y congelaba
+        el simulacro bastante más allá del techo documentado. Es la misma regla
+        de CLAUDE.md: todo proveedor va acotado dos veces.
+        """
+        budgets: list[float | None] = []
+        calls: list[str] = []
+
+        def generate(prompt: str, *, budget_seconds: float | None = None) -> str:
+            calls.append(prompt)
+            budgets.append(budget_seconds)
+            return _OPENING_TURN if len(calls) == 1 else "basura"
+
+        session = InterviewSimulationSession("Bases de datos", generate=generate)
+        # start() consume un monotonic(); submit_answer consume el suyo y uno
+        # por cada intento fallido.
+        with mock.patch.object(
+            sim.time, "monotonic", side_effect=[0.0, 0.0, 12.0, 13.0]
+        ):
+            session.start()
+            with self.assertRaises(SimulationOutputError):
+                session.submit_answer("Mi respuesta.")
+
+        self.assertEqual(budgets[-1], sim.TOTAL_BUDGET_SECONDS - 12.0)
+
+    def test_a_generate_that_cannot_take_a_budget_is_still_called(self):
+        """Los callables inyectados de un solo argumento siguen funcionando."""
+        calls: list[str] = []
+
+        def generate(prompt: str) -> str:
+            calls.append(prompt)
+            return _OPENING_TURN if len(calls) == 1 else "basura"
+
+        session = InterviewSimulationSession("Bases de datos", generate=generate)
+        session.start()
+        with self.assertRaises(SimulationOutputError):
+            session.submit_answer("Mi respuesta.")
+
+        self.assertEqual(len(calls), 1 + sim._TURN_ATTEMPTS)
+
     def test_an_exhausted_budget_skips_the_retry_instead_of_freezing(self):
         session = InterviewSimulationSession(
             "Bases de datos", generate=lambda prompt: "basura"
