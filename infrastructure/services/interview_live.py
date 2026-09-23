@@ -1919,13 +1919,30 @@ class InterviewLiveSession:
                 raise
 
     async def _recv_loop(self, session) -> None:
-        # One pass only. The generator ending means the server closed the
-        # socket; looping back would call receive() on a dead session and hide
-        # the close behind an exception with no useful shape.
-        async for msg in session.receive():
-            if self._stop.is_set():
+        # `session.receive()` is NOT one generator per socket. google-genai
+        # (2.15, live.py `AsyncSession.receive`) breaks it after every message
+        # carrying `server_content.turn_complete`, with the websocket still
+        # open. Reading it once froze the interview after the first answer
+        # (2026-09-23 16:05): Gemini closed its turn, this loop returned, and
+        # every later question went up a live socket nobody read. The WAV had
+        # sound for 220 s; the transcript stopped at 8 s.
+        #
+        # So keep asking for the next turn. A real close does not end the
+        # generator quietly: `_receive` raises APIError on ConnectionClosed,
+        # which propagates as before. The empty-pass guard only protects
+        # against a transport that ends without raising, so this can never
+        # spin on a dead session.
+        while not self._stop.is_set():
+            received = False
+            async for msg in session.receive():
+                received = True
+                if self._stop.is_set():
+                    return
+                await self._handle_message(msg)
+                if self._reconnect_requested:
+                    return
+            if not received:
                 return
-            await self._handle_message(msg)
 
     async def _handle_message(self, msg) -> None:
         # Read these BEFORE the server_content early-return: they arrive on
