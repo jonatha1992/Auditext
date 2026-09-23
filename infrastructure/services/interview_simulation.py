@@ -616,12 +616,23 @@ Use finish only when the interview has enough evidence. A finish response must h
         """
         started = time.monotonic()
         last_exc: SimulationOutputError | None = None
+        remaining = TOTAL_BUDGET_SECONDS
         for attempt in range(_TURN_ATTEMPTS):
             text = prompt
             if attempt:
                 text = prompt + "\n" + _RETRY_INSTRUCTION
             try:
-                return parse_simulation_turn(self.generate(text))
+                if attempt:
+                    # self.generate is generate_simulation_text: called without
+                    # budget_seconds it opens a BRAND NEW 40 s Gemini+fallback
+                    # window. A slow invalid answer then chained two full windows
+                    # and froze the simulator well past the documented ceiling.
+                    # The retry spends only what is left (CLAUDE.md: every
+                    # provider is bounded twice).
+                    raw = self._generate_bounded(text, remaining)
+                else:
+                    raw = self.generate(text)
+                return parse_simulation_turn(raw)
             except SimulationOutputError as exc:
                 last_exc = exc
                 logger.warning(
@@ -630,9 +641,29 @@ Use finish only when the interview has enough evidence. A finish response must h
                     _TURN_ATTEMPTS,
                     exc,
                 )
-                if time.monotonic() - started >= TOTAL_BUDGET_SECONDS:
+                remaining = TOTAL_BUDGET_SECONDS - (time.monotonic() - started)
+                if remaining <= 0:
                     logger.warning(
                         "Simulacro: sin presupuesto para reintentar el turno"
                     )
                     break
         raise last_exc  # type: ignore[misc]
+
+    def _generate_bounded(self, prompt: str, budget_seconds: float) -> str:
+        """Call ``self.generate`` with a budget when it accepts one.
+
+        Injected single-argument callables (tests, adapters) keep working:
+        they simply get the prompt, as before.
+        """
+        import inspect
+
+        try:
+            params = inspect.signature(self.generate).parameters
+        except (TypeError, ValueError):
+            params = {}
+        accepts_budget = "budget_seconds" in params or any(
+            p.kind is inspect.Parameter.VAR_KEYWORD for p in params.values()
+        )
+        if accepts_budget:
+            return self.generate(prompt, budget_seconds=budget_seconds)
+        return self.generate(prompt)

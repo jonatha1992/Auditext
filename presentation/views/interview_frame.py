@@ -3570,6 +3570,10 @@ class InterviewFrame(ctk.CTkFrame):
         self.reset_session()
 
     def reset_session(self) -> None:
+        # The voice still playing keeps a valid generation token: its on_done
+        # would run against the NEXT session (re-packing answer buttons,
+        # rewriting the status line). Silence it before tearing anything down.
+        tts.stop()
         self.stop_session()
         self._cancel_knowledge_check()
         self._cancel_next_question_timer()

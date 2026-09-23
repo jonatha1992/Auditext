@@ -22,6 +22,11 @@ _speaking_count = 0
 # ni el comportamiento que esos callers ya esperan.
 _ALWAYS_CURRENT = object()
 
+# Generation token of the utterance running on the current thread. Each
+# speak_async() starts its own thread, so this is per-utterance state that
+# _speak_neural can read without changing its (text, language) call shape.
+_thread_state = threading.local()
+
 
 def neural_profile(language: str) -> tuple[str, str, str]:
     """Return a calm, conversational voice profile for teaching."""
@@ -58,12 +63,18 @@ def _is_current(generation) -> bool:
         return generation == _generation
 
 
-def _speak_neural(text: str, language: str) -> None:
+def _speak_neural(text: str, language: str, generation=None) -> None:
     import edge_tts
     import pygame
 
+    if generation is None:
+        # Called from _speak without an explicit token (keeps the historical
+        # two-argument call that callers and tests rely on): use the token this
+        # thread was started with.
+        generation = getattr(_thread_state, "generation", _ALWAYS_CURRENT)
     voice, rate, pitch = neural_profile(language)
     path = ""
+    cancelled = False
     try:
         with tempfile.NamedTemporaryFile(suffix=".mp3", delete=False) as audio:
             path = audio.name
@@ -71,19 +82,26 @@ def _speak_neural(text: str, language: str) -> None:
             text, voice=voice, rate=rate, pitch=pitch
         )
         asyncio.run(communicate.save(path))
+        # Synthesis takes ~1 s over the network. A stop() during that window
+        # must not be answered by starting to play anyway.
+        if not _is_current(generation):
+            return
         if not pygame.mixer.get_init():
             pygame.mixer.init()
         pygame.mixer.music.load(path)
         pygame.mixer.music.play()
-        # Generación vigente al arrancar esta reproducción: stop() la corre
-        # de un empujón (pygame.mixer.music.stop()) pero también la invalida
-        # acá, por si get_busy() tarda un tick en reflejar el corte.
-        generation = _active_generation
+        # stop() cuts playback with pygame.mixer.music.stop() and also bumps the
+        # generation, in case get_busy() takes a tick to reflect the cut.
         while pygame.mixer.music.get_busy():
             if not _is_current(generation):
+                cancelled = True
                 break
             time.sleep(0.04)
-        pygame.mixer.music.unload()
+        # A cancelled utterance must NOT unload: by now the mixer may already
+        # hold the NEXT utterance's mp3, and unloading it would silence that
+        # one and fire its on_done as if it had been read in full.
+        if not cancelled:
+            pygame.mixer.music.unload()
     finally:
         if path:
             try:
@@ -110,9 +128,14 @@ def _speak_sapi(text: str, language: str) -> None:
 
 def _speak(text: str, language: str, on_done=None, _generation=_ALWAYS_CURRENT) -> None:
     global _active_generation, _speaking_count
-    _active_generation = _generation
     with _state_lock:
+        # A thread that was already superseded before it got to run must not
+        # claim the token: it would take ownership of the audio and play its
+        # stale text under the newer utterance's generation.
+        if _generation is _ALWAYS_CURRENT or _generation == globals()["_generation"]:
+            _active_generation = _generation
         _speaking_count += 1
+    _thread_state.generation = _generation
     try:
         try:
             _speak_neural(text, language)
